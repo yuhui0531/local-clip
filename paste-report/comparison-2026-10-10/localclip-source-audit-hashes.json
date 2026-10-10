@@ -1,0 +1,193 @@
+{
+  "recordedUTC": "2026-10-10T12:55:55.282082+00:00",
+  "scope": "read-only source and existing documentation audit; no runtime, tests, clipboard, database access",
+  "version": "0.1.14 (15)",
+  "files": {
+    "macos-app/Sources/CSQLite/module.modulemap": {
+      "sha256": "bbfe59a972a3e8e09e347c04bc22c0eacd2544881af8a4b6068bfc30b38466e8",
+      "bytes": 80,
+      "lines": 5
+    },
+    "macos-app/Sources/CSQLite/shim.h": {
+      "sha256": "7c7ffbbac49d844940d7dac03d976bbcd177a39ce2f69e91a936c3251d049c4f",
+      "bytes": 63,
+      "lines": 2
+    },
+    "macos-app/Sources/LocalClip/App/main.swift": {
+      "sha256": "ec30b3d8870dc22e51b6d164bb1d8229de1fb184311adc8660b49edcdab858b2",
+      "bytes": 2585,
+      "lines": 48
+    },
+    "macos-app/Sources/LocalClipCore/Domain/Domain.swift": {
+      "sha256": "ad477facf80954b6dac05cdbc89037370f45a29ab058419df93c15b8fbc84a53",
+      "bytes": 16619,
+      "lines": 310
+    },
+    "macos-app/Sources/LocalClipCore/Search/SearchNormalizer.swift": {
+      "sha256": "831a6f1f07bbe0da9d90e8324f88a15eb9a2594bcd5d7f9e3e53f074f7f1cbfc",
+      "bytes": 3838,
+      "lines": 57
+    },
+    "macos-app/Sources/LocalClipCore/Storage/CommitStrategy.swift": {
+      "sha256": "eda03ce1aa774ef29ed53e9c6f84a967892864f297cb5475f705c556c54732ee",
+      "bytes": 10539,
+      "lines": 176
+    },
+    "macos-app/Sources/LocalClipCore/Storage/HistoryStore.swift": {
+      "sha256": "e6099ff7c424587dd0489a7adfffca11a2d5a4108872cbccc81b414a782df1dc",
+      "bytes": 37113,
+      "lines": 495
+    },
+    "macos-app/Sources/LocalClipCore/Storage/SQLiteConnection.swift": {
+      "sha256": "e588c15058e3e95e1a4841ef6994b8b9305ac4f71de9da645139accfc0de5998",
+      "bytes": 6034,
+      "lines": 104
+    },
+    "macos-app/Sources/LocalClipCore/Storage/Schema.swift": {
+      "sha256": "61e2ae0c9f10fe0eadced9ffa1ac43edb7547d1135cd46f94be538e24d3476f0",
+      "bytes": 5256,
+      "lines": 74
+    },
+    "macos-app/Sources/LocalClipCore/Storage/StorageProbe.swift": {
+      "sha256": "cac086cb9864ddf59fbc42e5e9a8af68c45e48bb0934627d6eff3d0e729f65e5",
+      "bytes": 2646,
+      "lines": 41
+    },
+    "macos-app/Sources/LocalClipMac/Features/CaptureCoordinator.swift": {
+      "sha256": "67400ef8d2b63813e578c1fc22e899ecc08cbe24be310fb3a2d4ae62d9c1f6de",
+      "bytes": 6760,
+      "lines": 110
+    },
+    "macos-app/Sources/LocalClipMac/Features/ContentDecoder.swift": {
+      "sha256": "7441d7b6e48f9c7143ad7e30a9dbd106a67ef3accbe5852c9d14490fc821fee5",
+      "bytes": 1261,
+      "lines": 24
+    },
+    "macos-app/Sources/LocalClipMac/Features/PasteCoordinator.swift": {
+      "sha256": "dfdb4910413e844529d114c6cc2be74452a876ffc5d684fb2fd116ea23a77a1a",
+      "bytes": 9260,
+      "lines": 124
+    },
+    "macos-app/Sources/LocalClipMac/Features/ThumbnailRenderer.swift": {
+      "sha256": "abcd2827cd79b4f5bf40e926ded7f8ca3f703c0711601ca4b72d9c3fd9ff4177",
+      "bytes": 3665,
+      "lines": 54
+    },
+    "macos-app/Sources/LocalClipMac/System/FinderFileService.swift": {
+      "sha256": "3134ce11889887856c17529fd6bd173f9ad2a34afac03d68d8a44c018eaf24e4",
+      "bytes": 7106,
+      "lines": 131
+    },
+    "macos-app/Sources/LocalClipMac/System/HotKeyService.swift": {
+      "sha256": "c9b90b88eab25f4e5198105829149a53bb06a18dba1f3ef5c1147f6422e4f421",
+      "bytes": 2580,
+      "lines": 44
+    },
+    "macos-app/Sources/LocalClipMac/System/LoginItemService.swift": {
+      "sha256": "82ec8ca1204ac5e860c72d167dacccf49f1c87f8aa020348f698a34de4dd1f8c",
+      "bytes": 1019,
+      "lines": 23
+    },
+    "macos-app/Sources/LocalClipMac/System/MacApplicationClient.swift": {
+      "sha256": "30e9366f84da06883b3df522c1feec4b661117c837f068195e754712e04613d1",
+      "bytes": 7309,
+      "lines": 110
+    },
+    "macos-app/Sources/LocalClipMac/System/MacPasteboardClient.swift": {
+      "sha256": "04337557ebd1080661fb2579a4d06ef0360b62c2fc74b1680ebec67dbbb2b8fc",
+      "bytes": 7164,
+      "lines": 113
+    },
+    "macos-app/Sources/LocalClipMac/System/SingleInstanceService.swift": {
+      "sha256": "f4a859136adf729250d45f1c948f7b2d371239c0b57039e7473a066276e0a019",
+      "bytes": 3969,
+      "lines": 70
+    },
+    "macos-app/Sources/LocalClipMac/System/SourceApplicationObserver.swift": {
+      "sha256": "904851c175498dad705c4ecd29f5a9b533af0765b501cffb8a1e60b3f6ca81d2",
+      "bytes": 3448,
+      "lines": 67
+    },
+    "macos-app/Sources/LocalClipMac/UI/AppDelegate.swift": {
+      "sha256": "092eaf7f3aef50f95fc6787b9085036a45bbf0eb6c5a9ae9b87c267346c884eb",
+      "bytes": 23603,
+      "lines": 368
+    },
+    "macos-app/Sources/LocalClipMac/UI/HistoryBackdrop.swift": {
+      "sha256": "723ece2dd7164c8ff774d0e924e6acc05735a7ca15283acc7c2a777ddad43879",
+      "bytes": 1075,
+      "lines": 24
+    },
+    "macos-app/Sources/LocalClipMac/UI/HistoryScrollWheel.swift": {
+      "sha256": "5fef484e005c23523f3080b7769db9bb0b74e7d4e4643440aa3cefe0ee706542",
+      "bytes": 4652,
+      "lines": 103
+    },
+    "macos-app/Sources/LocalClipMac/UI/HistoryView.swift": {
+      "sha256": "24bb303bb7f64cd5469c94a37513c2b9eb86c2e3294e3a0120595bbcc8c6feb4",
+      "bytes": 29690,
+      "lines": 331
+    },
+    "macos-app/Sources/LocalClipMac/UI/HistoryViewModel.swift": {
+      "sha256": "7e253192ed5b8db82c8ea41c1c90a859d865cd142fbf621cea5f06519f966fe0",
+      "bytes": 23824,
+      "lines": 402
+    },
+    "macos-app/Sources/LocalClipMac/UI/SearchField.swift": {
+      "sha256": "d29f92be271e48086cc78e4d423bfd8e5b136d073d1e15d5a3c6dd0cc74b0d14",
+      "bytes": 2794,
+      "lines": 53
+    },
+    "macos-app/Sources/LocalClipMac/UI/SettingsView.swift": {
+      "sha256": "09df3e0be080d4cc6a496b47ac452aa73f22a7dd7a2c1bf869f01424ba373f19",
+      "bytes": 8885,
+      "lines": 96
+    },
+    "macos-app/Sources/LocalClipMac/UI/VisualProbe.swift": {
+      "sha256": "2a785107ca0b1fafae7fa1799964c33e6fdf5c72c1f79379103601584185e2a0",
+      "bytes": 5092,
+      "lines": 56
+    },
+    "macos-app/Package.swift": {
+      "sha256": "1360f08adc3d0ad282d582d06552b1cb4f495efc29fa4fe39f2087fc2860a1cf",
+      "bytes": 1533,
+      "lines": 16
+    },
+    "macos-app/Resources/Info.plist": {
+      "sha256": "22e18c1396a85075f37d378ddaea70bcee486c805adf2262e98967847b581e77",
+      "bytes": 1142,
+      "lines": 20
+    },
+    "macos-app/scripts/build-app.sh": {
+      "sha256": "00a258ecf19f3f75d4b1f2dea7f7a6a2d219a75faea4093c1480274b69bd5722",
+      "bytes": 1209,
+      "lines": 22
+    },
+    "macos-app/docs/acceptance-results.md": {
+      "sha256": "7c52a0a0a1905fe61926edadb4b712c0cb573629545fa4df8fab1af1986bc8f0",
+      "bytes": 21073,
+      "lines": 132
+    },
+    "macos-app/docs/performance.md": {
+      "sha256": "9c1e1a57781c831ea4da9cf99cc04ea2f3634ecabfa654d1088e8bd2ecbfa997",
+      "bytes": 17283,
+      "lines": 139
+    },
+    "macos-app/docs/compatibility.md": {
+      "sha256": "81b46b8b9b6e1e289d9be06ef2f0e805b24922bfc6af3c7022482f360bc2e77b",
+      "bytes": 10665,
+      "lines": 78
+    },
+    "macos-app/docs/known-limitations.md": {
+      "sha256": "090db47d80d176aa82354fc2f9ebb283cecaa4b6a48fa726f6e867135a37ff9b",
+      "bytes": 9571,
+      "lines": 73
+    },
+    "macos-app/evidence/automated/delivery/delivery-manifest.json": {
+      "sha256": "3066b91a32703a2ab2bf9cdc09cad398869133fbf374f99808edab902725dc1e",
+      "bytes": 5312,
+      "lines": 110
+    }
+  },
+  "reportSHA256": "3f84d2b7ceeb71d708fd592173d7c0ebd25e1c934a5e0693db071d6f311356fe"
+}

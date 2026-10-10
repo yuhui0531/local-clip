@@ -1,0 +1,33 @@
+Static strings only; not an executed-code trace.
+NNSPasteboardType
+CloudKit
+MissingCloudKitRecordError
+CloudKitRecordSerializationError
+CloudKitUnavailableError
+NSPasteboardWriting
+@"NSArray"24@0:8@"NSPasteboard"16
+Q32@0:8@"NSString"16@"NSPasteboard"24
+c56@0:8@"NSWindow"16@"NSEvent"24{CGPoint=dd}32@"NSPasteboard"48
+@"<NSPasteboardWriting>"32@0:8@"NSTableView"16q24
+c40@0:8@"NSTableView"16@"NSIndexSet"24@"NSPasteboard"32
+CloudKit failed to stop sharing 
+CloudKit failed saving share 
+Error deleting V4 CloudKit zone: 
+Network error during CloudKit cleanup
+V4 CloudKit zone already deleted or never existed
+CloudKit zone deletion timed out
+iCloud account not available, skipping V4 CloudKit zone deletion
+c56@0:8@"NSTextView"16@"<NSTextAttachmentCell>"24Q32@"NSPasteboard"40@"NSString"48
+CGEvent
+application:userDidAcceptCloudKitShareWithMetadata:
+changeCount
+eventWithCGEvent:
+setCloudKitRecordData:
+setCloudKitRecordName:
+setCloudKitZoneName:
+setCloudKitZoneOwnerName:
+So19NSPasteboardWriting_p
+So12NSPasteboardC
+B56@0:8@"NSWindow"16@"NSEvent"24{CGPoint=dd}32@"NSPasteboard"48
+B40@0:8@"NSTableView"16@"NSIndexSet"24@"NSPasteboard"32
+B56@0:8@"NSTextView"16@"<NSTextAttachmentCell>"24Q32@"NSPasteboard"40@"NSString"48

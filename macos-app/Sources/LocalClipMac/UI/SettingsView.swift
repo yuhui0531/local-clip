@@ -1,0 +1,96 @@
+// 配置界面：持久化完成后展示生效，系统权限由用户操作，by AI.Coding。
+import AppKit
+import SwiftUI
+import Carbon
+import LocalClipCore
+public struct SettingsView: View {
+    @ObservedObject var model: HistoryViewModel
+    let login: LoginItemService
+    @State private var retention = "30"
+    @State private var quota = "500"
+    @State private var recording = false
+    @State private var monitor: Any?
+    @State private var loginStatus = ""
+    @State private var permitted = false
+    public init(model: HistoryViewModel, login: LoginItemService) { self.model = model; self.login = login }
+    public var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                Text("LocalClip 设置").font(.title2.bold())
+                GroupBox("采集与操作") {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Toggle("记录新的剪贴板变化", isOn: Binding(get: { model.settings.captureEnabled }, set: { value in model.updateSettings { $0.captureEnabled = value } }))
+                        Picker("Enter 默认操作", selection: Binding(get: { model.settings.defaultAction }, set: { value in model.updateSettings { $0.defaultAction = value } })) {
+                            Text("复制（默认）").tag(PasteAction.copy); Text("直接粘贴").tag(PasteAction.directPaste)
+                        }
+                        Text("直接粘贴需要辅助功能权限，仅恢复目标应用，不能保证原输入框或光标位置。没有权限仍可复制后手动粘贴。").font(.caption).foregroundStyle(.secondary)
+                        HStack { Text(permitted ? "辅助功能：已授予" : "辅助功能：未授予"); Button("打开权限设置", action: MacApplicationClient.openAccessibilitySettings) }
+                        HStack { Text("全局快捷键：\(HotKeyService.label(model.settings.shortcut))"); Spacer(); Button(recording ? "按下新的快捷键（Esc取消）" : "更改快捷键", action: recordShortcut) }
+                        HStack { Text(loginStatus); Spacer(); Button("开启登录启动") { loginChange(true) }; Button("关闭") { loginChange(false) } }
+                        Button("查看系统登录项") { login.openSettings() }
+                    }.padding(10).frame(maxWidth: .infinity, alignment: .leading)
+                }
+                GroupBox("隐私与应用排除") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("来源优先使用应用声明，缺失时显示复制时前台应用及其图标。前台推断与未知来源不参与应用排除；需要停止记录时请暂停采集。").font(.callout)
+                        Text("排除仅按 org.nspasteboard.source 声明的 bundleID 匹配。前台推断可能误判后台写入，来源依据可在卡片提示和详情查看。敏感/临时标记在正文读取前整次过滤，不能识别所有密码。").font(.caption).foregroundStyle(.secondary)
+                        ForEach(model.settings.excludedBundleIDs.sorted(), id: \.self) { id in
+                            HStack { Text(id); Spacer(); Button("移除") { model.updateSettings { $0.excludedBundleIDs.remove(id) } } }
+                        }
+                        Button("选择要排除的应用…", action: chooseApplication)
+                        Text("新增排除不会自动删除已有历史；移除排除不会补采过去内容。数据保存在本机，未宣称加密，不上传剪贴板内容。").font(.caption).foregroundStyle(.secondary)
+                    }.padding(10).frame(maxWidth: .infinity, alignment: .leading)
+                }
+                GroupBox("存储与清理") {
+                    VStack(alignment: .leading, spacing: 12) {
+                        if let usage = model.usage {
+                            Text("实际总占用 \(HistoryViewModel.bytes(usage.measuredTotal)) / \(HistoryViewModel.bytes(model.settings.quotaBytes))").font(.headline)
+                            Text("收藏载荷 \(HistoryViewModel.bytes(usage.favoritePayload)) · 普通载荷 \(HistoryViewModel.bytes(usage.normalPayload))\n公共页/索引/缩略图 \(HistoryViewModel.bytes(usage.common)) · 待回收 \(HistoryViewModel.bytes(usage.pending))").font(.caption).foregroundStyle(.secondary)
+                        }
+                        HStack { Text("保留天数"); TextField("1–365", text: $retention).frame(width: 80); Button("应用") { if let days = Int(retention) { model.change(.retention(days)) } else { model.message = "保留天数需为1–365" } }; Text("当前\(model.settings.retentionDays)天").foregroundStyle(.secondary) }
+                        HStack { Text("容量 MiB"); TextField("100–4096", text: $quota).frame(width: 80); Button("应用") { if let value = Int64(quota), (100...4096).contains(value) { model.change(.quota(value * MiB)) } else { model.message = "容量需为100–4096MiB" } }; Text("1MiB=1,048,576字节").font(.caption).foregroundStyle(.secondary) }
+                        Text("期限按最近有效用户复制起算；浏览和自身恢复不续期。收藏不参与期限和自动淘汰，但计入容量。无法容纳新内容时保留旧历史，跳过新增。降低设置需预览确认。").font(.caption).foregroundStyle(.secondary)
+                        HStack { Button("清理已到期内容") { Task { await model.maintenance() } }; Button("清空普通历史", role: .destructive) { model.change(.clearOrdinary) } }
+                    }.padding(10).frame(maxWidth: .infinity, alignment: .leading)
+                }
+                if !model.message.isEmpty { Text(model.message).font(.callout).foregroundStyle(.secondary).textSelection(.enabled) }
+                Text("支持文本、URL、RTF、简单HTML、PNG/TIFF/JPEG和文件引用；每次32项、表示数据50MiB。文件不备份本体，原件删除后无法恢复。Finder中双击文件复制到当前文件夹。RTFD、云同步、OCR、AI不在此版本。").font(.caption).foregroundStyle(.secondary)
+            }.padding(24)
+        }.frame(minWidth: 640, minHeight: 600)
+        .onAppear { retention = String(model.settings.retentionDays); quota = String(model.settings.quotaBytes / MiB); loginStatus = login.message; permitted = MacApplicationClient().permitted }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in loginStatus = login.message; permitted = MacApplicationClient().permitted }
+        .onDisappear { stopRecording() }
+    }
+    /// 应用选择器读取 bundleID，不将名称作为唯一键。
+    private func chooseApplication() {
+        let picker = NSOpenPanel(); picker.title = "选择要排除的应用"; picker.directoryURL = URL(fileURLWithPath: "/Applications")
+        picker.canChooseFiles = true; picker.canChooseDirectories = false; picker.allowedContentTypes = [.application]
+        guard picker.runModal() == .OK, let url = picker.url, let bundle = Bundle(url: url)?.bundleIdentifier else { return }
+        model.updateSettings { $0.excludedBundleIDs.insert(bundle) }
+    }
+    /// 只捕获本设置窗口内用户主动录制的一次按键。
+    private func recordShortcut() {
+        stopRecording(); recording = true
+        let window = NSApp.keyWindow
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak window] event in
+            guard let window, event.window === window else { return event }
+            if event.keyCode == 53 { stopRecording(); return nil }
+            let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            guard flags.contains(.command) || flags.contains(.option) || flags.contains(.control) else { model.message = "快捷键需包含 Command、Option 或 Control"; return nil }
+            var modifiers: UInt32 = 0
+            if flags.contains(.command) { modifiers |= UInt32(cmdKey) }
+            if flags.contains(.option) { modifiers |= UInt32(optionKey) }
+            if flags.contains(.shift) { modifiers |= UInt32(shiftKey) }
+            if flags.contains(.control) { modifiers |= UInt32(controlKey) }
+            let shortcut = Shortcut(keyCode: UInt32(event.keyCode), modifiers: modifiers)
+            stopRecording(); model.updateSettings { $0.shortcut = shortcut }; return nil
+        }
+    }
+    /// 窗口关闭和录制完成都移除监听。
+    private func stopRecording() { if let monitor { NSEvent.removeMonitor(monitor) }; monitor = nil; recording = false }
+    /// 只在用户点击时请求注册，不把 API 返回当作系统授权完成。
+    private func loginChange(_ enabled: Bool) {
+        do { try login.setEnabled(enabled); loginStatus = login.message }
+        catch { loginStatus = "请求失败：\(login.message)" }
+    }
+}

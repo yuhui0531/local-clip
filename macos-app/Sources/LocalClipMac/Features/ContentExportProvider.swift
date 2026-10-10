@@ -1,0 +1,130 @@
+// 原生有序多项拖出、延迟载荷与图片文件租约，by AI.Coding。
+import AppKit
+import SwiftUI
+import UniformTypeIdentifiers
+import ImageIO
+import LocalClipCore
+
+@MainActor final class ContentExportProvider {
+    /// 内部令牌只供本进程分类；每个真实项目有独立公开提供者。
+    static func writers(ids: [ClipID], store: HistoryStore, token: String) async throws -> [any NSPasteboardWriting] {
+        var result: [any NSPasteboardWriting] = []
+        for id in ids {
+            let access = try await store.exportAccess(id: id)
+            let types = try await Task.detached { try access.itemTypes() }.value
+            for (index, values) in types.enumerated() {
+                if !Set(values).isDisjoint(with: [SupportedType.png, SupportedType.tiff, SupportedType.jpeg]) {
+                    let delegate = ImagePromise(access: access, index: index, types: values, store: store)
+                    let writer = ImageWriter(fileType: UTType.png.identifier, delegate: delegate)
+                    writer.owner = delegate; writer.access = access; writer.index = index; writer.types = values; writer.token = token
+                    result.append(writer)
+                } else { result.append(ClipWriter(access: access, index: index, types: values, token: token)) }
+            }
+        }
+        return result
+    }
+}
+@MainActor private final class ClipWriter: NSObject, NSPasteboardWriting {
+    let access: ClipExportAccess
+    let index: Int
+    let types: [String]
+    let token: String
+    init(access: ClipExportAccess, index: Int, types: [String], token: String) { self.access = access; self.index = index; self.types = types; self.token = token }
+    func writableTypes(for pasteboard: NSPasteboard) -> [NSPasteboard.PasteboardType] { (types + [HistoryViewModel.categoryDragType]).map(NSPasteboard.PasteboardType.init) }
+    func writingOptions(forType type: NSPasteboard.PasteboardType, pasteboard: NSPasteboard) -> NSPasteboard.WritingOptions { .promised }
+    func pasteboardPropertyList(forType type: NSPasteboard.PasteboardType) -> Any? {
+        if type.rawValue == HistoryViewModel.categoryDragType { return Data(token.utf8) }
+        return try? access.itemData(index: index, type: type.rawValue)
+    }
+}
+@MainActor private final class ImageWriter: NSFilePromiseProvider {
+    var owner: ImagePromise?
+    var access: ClipExportAccess?
+    var index = 0
+    var types: [String] = []
+    var token = ""
+    override func writableTypes(for pasteboard: NSPasteboard) -> [NSPasteboard.PasteboardType] { super.writableTypes(for: pasteboard) + (types + [HistoryViewModel.categoryDragType]).map(NSPasteboard.PasteboardType.init) }
+    override func writingOptions(forType type: NSPasteboard.PasteboardType, pasteboard: NSPasteboard) -> NSPasteboard.WritingOptions { types.contains(type.rawValue) || type.rawValue == HistoryViewModel.categoryDragType ? .promised : super.writingOptions(forType: type, pasteboard: pasteboard) }
+    override func pasteboardPropertyList(forType type: NSPasteboard.PasteboardType) -> Any? {
+        if type.rawValue == HistoryViewModel.categoryDragType { return Data(token.utf8) }
+        if types.contains(type.rawValue) { return try? access?.itemData(index: index, type: type.rawValue) }
+        return super.pasteboardPropertyList(forType: type)
+    }
+}
+@MainActor private final class ImagePromise: NSObject, NSFilePromiseProviderDelegate {
+    let access: ClipExportAccess
+    let index: Int
+    let types: [String]
+    let store: HistoryStore
+    private let queue = OperationQueue()
+    init(access: ClipExportAccess, index: Int, types: [String], store: HistoryStore) { self.access = access; self.index = index; self.types = types; self.store = store; queue.maxConcurrentOperationCount = 1 }
+    func filePromiseProvider(_ provider: NSFilePromiseProvider, fileNameForType fileType: String) -> String { "LocalClip-" + UUID().uuidString + ".png" }
+    func operationQueue(for provider: NSFilePromiseProvider) -> OperationQueue { queue }
+    nonisolated func filePromiseProvider(_ provider: NSFilePromiseProvider, writePromiseTo url: URL, completionHandler: @escaping @Sendable (Error?) -> Void) {
+        Task { @MainActor in
+            let access = self.access, index = self.index, types = self.types, store = self.store
+            do {
+                let data = try await Task.detached { () throws -> Data in
+                    guard let type = [SupportedType.png,SupportedType.tiff,SupportedType.jpeg].first(where: { types.contains($0) }) else { throw StoreError.notFound }
+                    let raw = try access.itemData(index: index, type: type)
+                    if type == SupportedType.png { return raw }
+                    guard let source = CGImageSourceCreateWithData(raw as CFData, nil), let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any], let width = props[kCGImagePropertyPixelWidth] as? Int, let height = props[kCGImagePropertyPixelHeight] as? Int, width > 0, height > 0, Int64(width)*Int64(height) <= 40_000_000, let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else { throw StoreError.corruptPayload }
+                    let output = NSMutableData()
+                    guard let destination = CGImageDestinationCreateWithData(output, UTType.png.identifier as CFString, 1, nil) else { throw StoreError.ioFailure }
+                    CGImageDestinationAddImage(destination, image, nil)
+                    guard CGImageDestinationFinalize(destination) else { throw StoreError.ioFailure }
+                    _ = try access.itemData(index: index, type: type)
+                    return output as Data
+                }.value
+                let lease = try await store.writeExport(data, id: access.id, revision: access.revision)
+                try await Task.detached { try FileManager.default.copyItem(at: lease, to: url) }.value
+                completionHandler(nil)
+            } catch { completionHandler(error) }
+        }
+    }
+}
+// 只监听卡片区域的拖动；点击与双击继续由SwiftUI处理，by AI.Coding。
+struct HistoryDragBridge: NSViewRepresentable {
+    let model: HistoryViewModel
+    let id: ClipID
+    func makeNSView(context: Context) -> DragView { let view = DragView(); view.model = model; view.id = id; view.install(); return view }
+    func updateNSView(_ view: DragView, context: Context) { view.model = model; view.id = id }
+    @MainActor final class DragView: NSView, NSDraggingSource {
+        weak var model: HistoryViewModel?
+        var id: ClipID = ""
+        private var monitor: Any?
+        private var start: NSPoint?
+        private var preparing = false
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+        func install() {
+            monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown,.leftMouseDragged,.leftMouseUp]) { [weak self] event in
+                guard let self, event.window === self.window, let model = self.model else { return event }
+                let point = self.convert(event.locationInWindow, from: nil)
+                if event.type == .leftMouseDown { self.start = self.bounds.contains(point) ? point : nil; return event }
+                if event.type == .leftMouseUp { self.start = nil; return event }
+                guard let start = self.start, !self.preparing, hypot(point.x-start.x,point.y-start.y) > 4 else { return event }
+                self.preparing = true; self.start = nil
+                Task { @MainActor in
+                    defer { self.preparing = false }
+                    guard NSEvent.pressedMouseButtons & 1 != 0 else { return }
+                    let token = model.prepareDrag(self.id)
+                    do {
+                        let writers = try await ContentExportProvider.writers(ids: model.orderedSelection, store: model.store, token: token)
+                        guard self.window != nil, NSEvent.pressedMouseButtons & 1 != 0 else { model.dragActive = false; return }
+                        let values = writers.enumerated().map { index, writer in
+                            let item = NSDraggingItem(pasteboardWriter: writer)
+                            let image = NSImage(systemSymbolName: "doc.on.clipboard", accessibilityDescription: nil) ?? NSImage(size: NSSize(width:40,height:40))
+                            item.setDraggingFrame(NSRect(x:point.x+CGFloat(index)*8,y:point.y,width:48,height:48), contents: image); return item
+                        }
+                        guard !values.isEmpty else { model.dragActive = false; return }
+                        self.beginDraggingSession(with: values, event: event, source: self)
+                    } catch { model.dragActive = false; model.message = "拖出失败，记录或容量已变化" }
+                }
+                return nil
+            }
+        }
+        func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation { .copy }
+        func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) { model?.dragActive = false; model?.panelInteractionChanged?() }
+        deinit { if let monitor { NSEvent.removeMonitor(monitor) } }
+    }
+}

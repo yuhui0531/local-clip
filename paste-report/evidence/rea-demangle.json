@@ -1,0 +1,199 @@
+{
+  "result": {
+    "symbols": [
+      {
+        "input": "$s10Foundation4DataV8CloudKit21CKRecordValueProtocolADWP",
+        "output": "protocol witness table for Foundation.Data : CloudKit.CKRecordValueProtocol in CloudKit",
+        "status": "demangled"
+      },
+      {
+        "input": "$sSC11CKErrorCodeLeV8CloudKitE12serverRecordSo8CKRecordCSgvg",
+        "output": "(extension in CloudKit):__C_Synthesized.related decl 'e' for CKErrorCode.serverRecord.getter : __C.CKRecord?",
+        "status": "demangled"
+      },
+      {
+        "input": "$sSC11CKErrorCodeLeV8CloudKitE17retryAfterSecondsSdSgvg",
+        "output": "(extension in CloudKit):__C_Synthesized.related decl 'e' for CKErrorCode.retryAfterSeconds.getter : Swift.Double?",
+        "status": "demangled"
+      },
+      {
+        "input": "$sSS8CloudKit21CKRecordValueProtocolAAWP",
+        "output": "protocol witness table for Swift.String : CloudKit.CKRecordValueProtocol in CloudKit",
+        "status": "demangled"
+      },
+      {
+        "input": "$sSo10CKDatabaseC8CloudKitE13modifyRecords6saving8deleting10savePolicy10atomicallySDySo10CKRecordIDCs6ResultOySo0K0Cs5Error_pGG0H7Results_SDyAjLyytsAO_pGG06deleteO0tSayANG_SayAJGSo0k4SaveI0VSbtYaKF",
+        "output": "(extension in CloudKit):__C.CKDatabase.modifyRecords(saving: [__C.CKRecord], deleting: [__C.CKRecordID], savePolicy: __C.CKRecordSavePolicy, atomically: Swift.Bool) async throws -> (saveResults: [__C.CKRecordID : Swift.Result<__C.CKRecord, Swift.Error>], deleteResults: [__C.CKRecordID : Swift.Result<(), Swift.Error>])",
+        "status": "demangled"
+      },
+      {
+        "input": "$sSo10CKDatabaseC8CloudKitE13modifyRecords6saving8deleting10savePolicy10atomicallySDySo10CKRecordIDCs6ResultOySo0K0Cs5Error_pGG0H7Results_SDyAjLyytsAO_pGG06deleteO0tSayANG_SayAJGSo0k4SaveI0VSbtYaKFTu",
+        "output": "async function pointer to (extension in CloudKit):__C.CKDatabase.modifyRecords(saving: [__C.CKRecord], deleting: [__C.CKRecordID], savePolicy: __C.CKRecordSavePolicy, atomically: Swift.Bool) async throws -> (saveResults: [__C.CKRecordID : Swift.Result<__C.CKRecord, Swift.Error>], deleteResults: [__C.CKRecordID : Swift.Result<(), Swift.Error>])",
+        "status": "demangled"
+      },
+      {
+        "input": "$sSo10CKDatabaseC8CloudKitE16RecordZoneChangeO12ModificationV6recordSo8CKRecordCvg",
+        "output": "(extension in CloudKit):__C.CKDatabase.RecordZoneChange.Modification.record.getter : __C.CKRecord",
+        "status": "demangled"
+      }
+    ],
+    "provenance": [
+      {
+        "tool": "swift-demangle",
+        "command": [
+          "/Library/Developer/CommandLineTools/usr/bin/swift-demangle",
+          "--compact",
+          "--",
+          "$s10Foundation4DataV8CloudKit21CKRecordValueProtocolADWP",
+          "$sSC11CKErrorCodeLeV8CloudKitE12serverRecordSo8CKRecordCSgvg",
+          "$sSC11CKErrorCodeLeV8CloudKitE17retryAfterSecondsSdSgvg",
+          "$sSS8CloudKit21CKRecordValueProtocolAAWP",
+          "$sSo10CKDatabaseC8CloudKitE13modifyRecords6saving8deleting10savePolicy10atomicallySDySo10CKRecordIDCs6ResultOySo0K0Cs5Error_pGG0H7Results_SDyAjLyytsAO_pGG06deleteO0tSayANG_SayAJGSo0k4SaveI0VSbtYaKF",
+          "$sSo10CKDatabaseC8CloudKitE13modifyRecords6saving8deleting10savePolicy10atomicallySDySo10CKRecordIDCs6ResultOySo0K0Cs5Error_pGG0H7Results_SDyAjLyytsAO_pGG06deleteO0tSayANG_SayAJGSo0k4SaveI0VSbtYaKFTu",
+          "$sSo10CKDatabaseC8CloudKitE16RecordZoneChangeO12ModificationV6recordSo8CKRecordCvg"
+        ],
+        "tool_version": null,
+        "version_reason": "Tool exposes no uniform stable version flag; executable digest identifies it.",
+        "executable_sha256": "25b85b27cb477cded5be8d1b76dd9801be5d934e735f1f9b44637e4812faec44",
+        "exit": {
+          "code": 0,
+          "signal": null
+        },
+        "stdout_bytes": 1160,
+        "stderr_bytes": 0
+      }
+    ],
+    "limitations": []
+  },
+  "evidence_id": "ev_15495555a081f95efaf158d0c8f512a611744311a1d462673a569b78335e9bac",
+  "evidence": {
+    "evidence_id": "ev_15495555a081f95efaf158d0c8f512a611744311a1d462673a569b78335e9bac",
+    "subject": {
+      "name": "Paste",
+      "digest": {
+        "sha256": "e0b96d48ee4027dccacded16dd3c738878496ef005b913580b34bfc89d31b2e7"
+      },
+      "format": "mach-o",
+      "architecture": "arm64",
+      "local_path": "/Applications/Paste.app/Contents/MacOS/Paste"
+    },
+    "provider": {
+      "id": "native-macos",
+      "name": "macOS native inspection utilities",
+      "version": null
+    },
+    "predicate_type": "rea.analysis",
+    "operation": "demangle_swift",
+    "parameters": {
+      "symbols": [
+        "$s10Foundation4DataV8CloudKit21CKRecordValueProtocolADWP",
+        "$sSC11CKErrorCodeLeV8CloudKitE12serverRecordSo8CKRecordCSgvg",
+        "$sSC11CKErrorCodeLeV8CloudKitE17retryAfterSecondsSdSgvg",
+        "$sSS8CloudKit21CKRecordValueProtocolAAWP",
+        "$sSo10CKDatabaseC8CloudKitE13modifyRecords6saving8deleting10savePolicy10atomicallySDySo10CKRecordIDCs6ResultOySo0K0Cs5Error_pGG0H7Results_SDyAjLyytsAO_pGG06deleteO0tSayANG_SayAJGSo0k4SaveI0VSbtYaKF",
+        "$sSo10CKDatabaseC8CloudKitE13modifyRecords6saving8deleting10savePolicy10atomicallySDySo10CKRecordIDCs6ResultOySo0K0Cs5Error_pGG0H7Results_SDyAjLyytsAO_pGG06deleteO0tSayANG_SayAJGSo0k4SaveI0VSbtYaKFTu",
+        "$sSo10CKDatabaseC8CloudKitE16RecordZoneChangeO12ModificationV6recordSo8CKRecordCvg"
+      ]
+    },
+    "raw_result": {
+      "provenance": [
+        {
+          "tool": "swift-demangle",
+          "command": [
+            "/Library/Developer/CommandLineTools/usr/bin/swift-demangle",
+            "--compact",
+            "--",
+            "$s10Foundation4DataV8CloudKit21CKRecordValueProtocolADWP",
+            "$sSC11CKErrorCodeLeV8CloudKitE12serverRecordSo8CKRecordCSgvg",
+            "$sSC11CKErrorCodeLeV8CloudKitE17retryAfterSecondsSdSgvg",
+            "$sSS8CloudKit21CKRecordValueProtocolAAWP",
+            "$sSo10CKDatabaseC8CloudKitE13modifyRecords6saving8deleting10savePolicy10atomicallySDySo10CKRecordIDCs6ResultOySo0K0Cs5Error_pGG0H7Results_SDyAjLyytsAO_pGG06deleteO0tSayANG_SayAJGSo0k4SaveI0VSbtYaKF",
+            "$sSo10CKDatabaseC8CloudKitE13modifyRecords6saving8deleting10savePolicy10atomicallySDySo10CKRecordIDCs6ResultOySo0K0Cs5Error_pGG0H7Results_SDyAjLyytsAO_pGG06deleteO0tSayANG_SayAJGSo0k4SaveI0VSbtYaKFTu",
+            "$sSo10CKDatabaseC8CloudKitE16RecordZoneChangeO12ModificationV6recordSo8CKRecordCvg"
+          ],
+          "tool_version": null,
+          "version_reason": "Tool exposes no uniform stable version flag; executable digest identifies it.",
+          "executable_sha256": "25b85b27cb477cded5be8d1b76dd9801be5d934e735f1f9b44637e4812faec44",
+          "exit": {
+            "code": 0,
+            "signal": null
+          },
+          "stdout_bytes": 1160,
+          "stderr_bytes": 0
+        }
+      ]
+    },
+    "normalized_result": {
+      "symbols": [
+        {
+          "input": "$s10Foundation4DataV8CloudKit21CKRecordValueProtocolADWP",
+          "output": "protocol witness table for Foundation.Data : CloudKit.CKRecordValueProtocol in CloudKit",
+          "status": "demangled"
+        },
+        {
+          "input": "$sSC11CKErrorCodeLeV8CloudKitE12serverRecordSo8CKRecordCSgvg",
+          "output": "(extension in CloudKit):__C_Synthesized.related decl 'e' for CKErrorCode.serverRecord.getter : __C.CKRecord?",
+          "status": "demangled"
+        },
+        {
+          "input": "$sSC11CKErrorCodeLeV8CloudKitE17retryAfterSecondsSdSgvg",
+          "output": "(extension in CloudKit):__C_Synthesized.related decl 'e' for CKErrorCode.retryAfterSeconds.getter : Swift.Double?",
+          "status": "demangled"
+        },
+        {
+          "input": "$sSS8CloudKit21CKRecordValueProtocolAAWP",
+          "output": "protocol witness table for Swift.String : CloudKit.CKRecordValueProtocol in CloudKit",
+          "status": "demangled"
+        },
+        {
+          "input": "$sSo10CKDatabaseC8CloudKitE13modifyRecords6saving8deleting10savePolicy10atomicallySDySo10CKRecordIDCs6ResultOySo0K0Cs5Error_pGG0H7Results_SDyAjLyytsAO_pGG06deleteO0tSayANG_SayAJGSo0k4SaveI0VSbtYaKF",
+          "output": "(extension in CloudKit):__C.CKDatabase.modifyRecords(saving: [__C.CKRecord], deleting: [__C.CKRecordID], savePolicy: __C.CKRecordSavePolicy, atomically: Swift.Bool) async throws -> (saveResults: [__C.CKRecordID : Swift.Result<__C.CKRecord, Swift.Error>], deleteResults: [__C.CKRecordID : Swift.Result<(), Swift.Error>])",
+          "status": "demangled"
+        },
+        {
+          "input": "$sSo10CKDatabaseC8CloudKitE13modifyRecords6saving8deleting10savePolicy10atomicallySDySo10CKRecordIDCs6ResultOySo0K0Cs5Error_pGG0H7Results_SDyAjLyytsAO_pGG06deleteO0tSayANG_SayAJGSo0k4SaveI0VSbtYaKFTu",
+          "output": "async function pointer to (extension in CloudKit):__C.CKDatabase.modifyRecords(saving: [__C.CKRecord], deleting: [__C.CKRecordID], savePolicy: __C.CKRecordSavePolicy, atomically: Swift.Bool) async throws -> (saveResults: [__C.CKRecordID : Swift.Result<__C.CKRecord, Swift.Error>], deleteResults: [__C.CKRecordID : Swift.Result<(), Swift.Error>])",
+          "status": "demangled"
+        },
+        {
+          "input": "$sSo10CKDatabaseC8CloudKitE16RecordZoneChangeO12ModificationV6recordSo8CKRecordCvg",
+          "output": "(extension in CloudKit):__C.CKDatabase.RecordZoneChange.Modification.record.getter : __C.CKRecord",
+          "status": "demangled"
+        }
+      ],
+      "provenance": [
+        {
+          "tool": "swift-demangle",
+          "command": [
+            "/Library/Developer/CommandLineTools/usr/bin/swift-demangle",
+            "--compact",
+            "--",
+            "$s10Foundation4DataV8CloudKit21CKRecordValueProtocolADWP",
+            "$sSC11CKErrorCodeLeV8CloudKitE12serverRecordSo8CKRecordCSgvg",
+            "$sSC11CKErrorCodeLeV8CloudKitE17retryAfterSecondsSdSgvg",
+            "$sSS8CloudKit21CKRecordValueProtocolAAWP",
+            "$sSo10CKDatabaseC8CloudKitE13modifyRecords6saving8deleting10savePolicy10atomicallySDySo10CKRecordIDCs6ResultOySo0K0Cs5Error_pGG0H7Results_SDyAjLyytsAO_pGG06deleteO0tSayANG_SayAJGSo0k4SaveI0VSbtYaKF",
+            "$sSo10CKDatabaseC8CloudKitE13modifyRecords6saving8deleting10savePolicy10atomicallySDySo10CKRecordIDCs6ResultOySo0K0Cs5Error_pGG0H7Results_SDyAjLyytsAO_pGG06deleteO0tSayANG_SayAJGSo0k4SaveI0VSbtYaKFTu",
+            "$sSo10CKDatabaseC8CloudKitE16RecordZoneChangeO12ModificationV6recordSo8CKRecordCvg"
+          ],
+          "tool_version": null,
+          "version_reason": "Tool exposes no uniform stable version flag; executable digest identifies it.",
+          "executable_sha256": "25b85b27cb477cded5be8d1b76dd9801be5d934e735f1f9b44637e4812faec44",
+          "exit": {
+            "code": 0,
+            "signal": null
+          },
+          "stdout_bytes": 1160,
+          "stderr_bytes": 0
+        }
+      ],
+      "limitations": []
+    },
+    "confidence": "observed",
+    "authority": "shipped-artifact",
+    "environment": null,
+    "limitations": [],
+    "locations": [],
+    "evidence_links": []
+  }
+}

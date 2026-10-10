@@ -1,0 +1,4 @@
+LOCALCLIP_AUTHORIZED_TEXT_20261010
+中文短词：测试
+代码：a::b -> value?.map()
+URL：https://fixture.invalid/path?q=localclip

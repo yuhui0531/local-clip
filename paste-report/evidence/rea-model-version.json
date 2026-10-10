@@ -1,0 +1,523 @@
+{
+  "result": {
+    "format": "binary",
+    "value": {
+      "NSManagedObjectModel_CurrentVersionName": "v3",
+      "NSManagedObjectModel_VersionChecksums": {
+        "v1": "sDK9wruhodNYWP1Esi9k7DC4huATK6R82HWpcNHbm24=",
+        "v2": "4v5ZvEeTK43ZieB0ZzScFiQ9Vz8INUDD7VvGfqy4UZI=",
+        "v3": "ZaumikppJe6kAm9LWvuaSPKXaLP826c4WZ4vmJIZ6iU="
+      },
+      "NSManagedObjectModel_VersionHashes": {
+        "v1": {
+          "ApplicationEntity": {
+            "$plist_type": "data",
+            "base64": "gaQIn2/NIAKkIslEHXt2mr1AXxJ1qgnhK9X804mHIl0="
+          },
+          "ChangeToken": {
+            "$plist_type": "data",
+            "base64": "xvI3sNPfJZyoby9JIcoUfgW/n/jPr/x9QWsr532fNao="
+          },
+          "DeviceEntity": {
+            "$plist_type": "data",
+            "base64": "ILcw/S09bjujY9v1Cs+uckmytsYc8nNFPSuYXBxes/E="
+          },
+          "ItemDataEntity": {
+            "$plist_type": "data",
+            "base64": "gQJxWqHLquN6igBJJApnmW+dazFLXNNKr9caFnzbjlc="
+          },
+          "ItemEntity": {
+            "$plist_type": "data",
+            "base64": "0M7cnD9/VqO5PW80Q1fs9n2RJ5jN3WPXN+E5SxaLnjA="
+          },
+          "ListEntity": {
+            "$plist_type": "data",
+            "base64": "JiDqtgOvjl89JJz4mAkDDw18aKlJP0O4AZiHutc/c0c="
+          },
+          "ListMetadataEntity": {
+            "$plist_type": "data",
+            "base64": "KSqzrlN4ClaPRq5W+XGJlWBqJ1wWunGa04CEjNvblzM="
+          },
+          "ObjectChange": {
+            "$plist_type": "data",
+            "base64": "OuVXcJK9rRh72NxnBg/mygbFZ2i36IICR69CdS5K1bU="
+          },
+          "ObjectMetadata": {
+            "$plist_type": "data",
+            "base64": "/NWHGEUBJgw3Gzfkuzj5UuIg6PRuFU5Jyot71/vcnHs="
+          }
+        },
+        "v2": {
+          "ApplicationEntity": {
+            "$plist_type": "data",
+            "base64": "gaQIn2/NIAKkIslEHXt2mr1AXxJ1qgnhK9X804mHIl0="
+          },
+          "ChangeToken": {
+            "$plist_type": "data",
+            "base64": "xvI3sNPfJZyoby9JIcoUfgW/n/jPr/x9QWsr532fNao="
+          },
+          "DeviceEntity": {
+            "$plist_type": "data",
+            "base64": "ILcw/S09bjujY9v1Cs+uckmytsYc8nNFPSuYXBxes/E="
+          },
+          "ItemDataEntity": {
+            "$plist_type": "data",
+            "base64": "gQJxWqHLquN6igBJJApnmW+dazFLXNNKr9caFnzbjlc="
+          },
+          "ItemEntity": {
+            "$plist_type": "data",
+            "base64": "0M7cnD9/VqO5PW80Q1fs9n2RJ5jN3WPXN+E5SxaLnjA="
+          },
+          "ListEntity": {
+            "$plist_type": "data",
+            "base64": "auQUDQfcGd+WgjYg4kGw/I2SORg0Cg5zy25q5TA3Zwg="
+          },
+          "ListMetadataEntity": {
+            "$plist_type": "data",
+            "base64": "KSqzrlN4ClaPRq5W+XGJlWBqJ1wWunGa04CEjNvblzM="
+          },
+          "ObjectChange": {
+            "$plist_type": "data",
+            "base64": "OuVXcJK9rRh72NxnBg/mygbFZ2i36IICR69CdS5K1bU="
+          },
+          "ObjectMetadata": {
+            "$plist_type": "data",
+            "base64": "AfJidKG5SwysQfq6pSEk6Y0NXo/d/UchfF8tNbqbfMY="
+          },
+          "ObjectShare": {
+            "$plist_type": "data",
+            "base64": "7v8KBdV3GWmb1dPUK8+xn2FjD53FQi05cwXKcBDAdhQ="
+          }
+        },
+        "v3": {
+          "ApplicationEntity": {
+            "$plist_type": "data",
+            "base64": "gaQIn2/NIAKkIslEHXt2mr1AXxJ1qgnhK9X804mHIl0="
+          },
+          "ChangeToken": {
+            "$plist_type": "data",
+            "base64": "xvI3sNPfJZyoby9JIcoUfgW/n/jPr/x9QWsr532fNao="
+          },
+          "DeviceEntity": {
+            "$plist_type": "data",
+            "base64": "ILcw/S09bjujY9v1Cs+uckmytsYc8nNFPSuYXBxes/E="
+          },
+          "ItemDataEntity": {
+            "$plist_type": "data",
+            "base64": "gQJxWqHLquN6igBJJApnmW+dazFLXNNKr9caFnzbjlc="
+          },
+          "ItemEntity": {
+            "$plist_type": "data",
+            "base64": "0M7cnD9/VqO5PW80Q1fs9n2RJ5jN3WPXN+E5SxaLnjA="
+          },
+          "ListEntity": {
+            "$plist_type": "data",
+            "base64": "auQUDQfcGd+WgjYg4kGw/I2SORg0Cg5zy25q5TA3Zwg="
+          },
+          "ListMetadataEntity": {
+            "$plist_type": "data",
+            "base64": "KSqzrlN4ClaPRq5W+XGJlWBqJ1wWunGa04CEjNvblzM="
+          },
+          "ObjectChange": {
+            "$plist_type": "data",
+            "base64": "OuVXcJK9rRh72NxnBg/mygbFZ2i36IICR69CdS5K1bU="
+          },
+          "ObjectMetadata": {
+            "$plist_type": "data",
+            "base64": "AfJidKG5SwysQfq6pSEk6Y0NXo/d/UchfF8tNbqbfMY="
+          },
+          "ObjectPendingMapping": {
+            "$plist_type": "data",
+            "base64": "a1/puct3qHdnTKad5VydhhBDRZ2aK7Gd2Cwz99a9B+Q="
+          },
+          "ObjectShare": {
+            "$plist_type": "data",
+            "base64": "7v8KBdV3GWmb1dPUK8+xn2FjD53FQi05cwXKcBDAdhQ="
+          }
+        }
+      }
+    },
+    "bundle": {
+      "identifier": null,
+      "executable": null,
+      "name": null,
+      "version": null,
+      "short_version": null
+    },
+    "source_path": "/Applications/Paste.app/Contents/Resources/PasteCore.bundle/Contents/Resources/v5Paste.momd/VersionInfo.plist",
+    "provenance": [
+      {
+        "tool": "file",
+        "command": [
+          "/usr/bin/file",
+          "-b",
+          "$PLIST"
+        ],
+        "tool_version": null,
+        "version_reason": "Tool exposes no uniform stable version flag; executable digest identifies it.",
+        "executable_sha256": "926f3fdd8fefe73b596806f6844a4d62b7c4e6bc5e247f6cbd22e5b6424881dd",
+        "exit": {
+          "code": 0,
+          "signal": null
+        },
+        "stdout_bytes": 27,
+        "stderr_bytes": 0
+      },
+      {
+        "tool": "plutil",
+        "command": [
+          "/usr/bin/plutil",
+          "-convert",
+          "json",
+          "-o",
+          "-",
+          "--",
+          "$PLIST"
+        ],
+        "tool_version": null,
+        "version_reason": "Tool exposes no uniform stable version flag; executable digest identifies it.",
+        "executable_sha256": "2d4518b33072df72264a6980d5f139ea733fd80926d540bc4e19102725407471",
+        "exit": {
+          "code": 1,
+          "signal": null
+        },
+        "stdout_bytes": 158,
+        "stderr_bytes": 0
+      },
+      {
+        "tool": "plutil",
+        "command": [
+          "/usr/bin/plutil",
+          "-convert",
+          "xml1",
+          "-o",
+          "-",
+          "--",
+          "$PLIST"
+        ],
+        "tool_version": null,
+        "version_reason": "Tool exposes no uniform stable version flag; executable digest identifies it.",
+        "executable_sha256": "2d4518b33072df72264a6980d5f139ea733fd80926d540bc4e19102725407471",
+        "exit": {
+          "code": 0,
+          "signal": null
+        },
+        "stdout_bytes": 3653,
+        "stderr_bytes": 0
+      }
+    ],
+    "limitations": [
+      "plutil cannot express this plist as JSON, so it was decoded from plutil's XML conversion; data and date values are typed objects such as { \"$plist_type\": \"data\", \"base64\": ... }."
+    ]
+  },
+  "evidence_id": "ev_6e0e75eb3bc5c9c6305c135acc7662811c252709a7aa409a8deed1913acee3a4",
+  "evidence": {
+    "evidence_id": "ev_6e0e75eb3bc5c9c6305c135acc7662811c252709a7aa409a8deed1913acee3a4",
+    "subject": {
+      "name": "Paste",
+      "digest": {
+        "sha256": "e0b96d48ee4027dccacded16dd3c738878496ef005b913580b34bfc89d31b2e7"
+      },
+      "format": "mach-o",
+      "architecture": "arm64",
+      "local_path": "/Applications/Paste.app/Contents/MacOS/Paste"
+    },
+    "provider": {
+      "id": "native-macos",
+      "name": "macOS native inspection utilities",
+      "version": null
+    },
+    "predicate_type": "rea.analysis",
+    "operation": "inspect_plist",
+    "parameters": {
+      "path": "/Applications/Paste.app/Contents/Resources/PasteCore.bundle/Contents/Resources/v5Paste.momd/VersionInfo.plist"
+    },
+    "raw_result": {
+      "provenance": [
+        {
+          "tool": "file",
+          "command": [
+            "/usr/bin/file",
+            "-b",
+            "$PLIST"
+          ],
+          "tool_version": null,
+          "version_reason": "Tool exposes no uniform stable version flag; executable digest identifies it.",
+          "executable_sha256": "926f3fdd8fefe73b596806f6844a4d62b7c4e6bc5e247f6cbd22e5b6424881dd",
+          "exit": {
+            "code": 0,
+            "signal": null
+          },
+          "stdout_bytes": 27,
+          "stderr_bytes": 0
+        },
+        {
+          "tool": "plutil",
+          "command": [
+            "/usr/bin/plutil",
+            "-convert",
+            "json",
+            "-o",
+            "-",
+            "--",
+            "$PLIST"
+          ],
+          "tool_version": null,
+          "version_reason": "Tool exposes no uniform stable version flag; executable digest identifies it.",
+          "executable_sha256": "2d4518b33072df72264a6980d5f139ea733fd80926d540bc4e19102725407471",
+          "exit": {
+            "code": 1,
+            "signal": null
+          },
+          "stdout_bytes": 158,
+          "stderr_bytes": 0
+        },
+        {
+          "tool": "plutil",
+          "command": [
+            "/usr/bin/plutil",
+            "-convert",
+            "xml1",
+            "-o",
+            "-",
+            "--",
+            "$PLIST"
+          ],
+          "tool_version": null,
+          "version_reason": "Tool exposes no uniform stable version flag; executable digest identifies it.",
+          "executable_sha256": "2d4518b33072df72264a6980d5f139ea733fd80926d540bc4e19102725407471",
+          "exit": {
+            "code": 0,
+            "signal": null
+          },
+          "stdout_bytes": 3653,
+          "stderr_bytes": 0
+        }
+      ]
+    },
+    "normalized_result": {
+      "format": "binary",
+      "value": {
+        "NSManagedObjectModel_CurrentVersionName": "v3",
+        "NSManagedObjectModel_VersionChecksums": {
+          "v1": "sDK9wruhodNYWP1Esi9k7DC4huATK6R82HWpcNHbm24=",
+          "v2": "4v5ZvEeTK43ZieB0ZzScFiQ9Vz8INUDD7VvGfqy4UZI=",
+          "v3": "ZaumikppJe6kAm9LWvuaSPKXaLP826c4WZ4vmJIZ6iU="
+        },
+        "NSManagedObjectModel_VersionHashes": {
+          "v1": {
+            "ApplicationEntity": {
+              "$plist_type": "data",
+              "base64": "gaQIn2/NIAKkIslEHXt2mr1AXxJ1qgnhK9X804mHIl0="
+            },
+            "ChangeToken": {
+              "$plist_type": "data",
+              "base64": "xvI3sNPfJZyoby9JIcoUfgW/n/jPr/x9QWsr532fNao="
+            },
+            "DeviceEntity": {
+              "$plist_type": "data",
+              "base64": "ILcw/S09bjujY9v1Cs+uckmytsYc8nNFPSuYXBxes/E="
+            },
+            "ItemDataEntity": {
+              "$plist_type": "data",
+              "base64": "gQJxWqHLquN6igBJJApnmW+dazFLXNNKr9caFnzbjlc="
+            },
+            "ItemEntity": {
+              "$plist_type": "data",
+              "base64": "0M7cnD9/VqO5PW80Q1fs9n2RJ5jN3WPXN+E5SxaLnjA="
+            },
+            "ListEntity": {
+              "$plist_type": "data",
+              "base64": "JiDqtgOvjl89JJz4mAkDDw18aKlJP0O4AZiHutc/c0c="
+            },
+            "ListMetadataEntity": {
+              "$plist_type": "data",
+              "base64": "KSqzrlN4ClaPRq5W+XGJlWBqJ1wWunGa04CEjNvblzM="
+            },
+            "ObjectChange": {
+              "$plist_type": "data",
+              "base64": "OuVXcJK9rRh72NxnBg/mygbFZ2i36IICR69CdS5K1bU="
+            },
+            "ObjectMetadata": {
+              "$plist_type": "data",
+              "base64": "/NWHGEUBJgw3Gzfkuzj5UuIg6PRuFU5Jyot71/vcnHs="
+            }
+          },
+          "v2": {
+            "ApplicationEntity": {
+              "$plist_type": "data",
+              "base64": "gaQIn2/NIAKkIslEHXt2mr1AXxJ1qgnhK9X804mHIl0="
+            },
+            "ChangeToken": {
+              "$plist_type": "data",
+              "base64": "xvI3sNPfJZyoby9JIcoUfgW/n/jPr/x9QWsr532fNao="
+            },
+            "DeviceEntity": {
+              "$plist_type": "data",
+              "base64": "ILcw/S09bjujY9v1Cs+uckmytsYc8nNFPSuYXBxes/E="
+            },
+            "ItemDataEntity": {
+              "$plist_type": "data",
+              "base64": "gQJxWqHLquN6igBJJApnmW+dazFLXNNKr9caFnzbjlc="
+            },
+            "ItemEntity": {
+              "$plist_type": "data",
+              "base64": "0M7cnD9/VqO5PW80Q1fs9n2RJ5jN3WPXN+E5SxaLnjA="
+            },
+            "ListEntity": {
+              "$plist_type": "data",
+              "base64": "auQUDQfcGd+WgjYg4kGw/I2SORg0Cg5zy25q5TA3Zwg="
+            },
+            "ListMetadataEntity": {
+              "$plist_type": "data",
+              "base64": "KSqzrlN4ClaPRq5W+XGJlWBqJ1wWunGa04CEjNvblzM="
+            },
+            "ObjectChange": {
+              "$plist_type": "data",
+              "base64": "OuVXcJK9rRh72NxnBg/mygbFZ2i36IICR69CdS5K1bU="
+            },
+            "ObjectMetadata": {
+              "$plist_type": "data",
+              "base64": "AfJidKG5SwysQfq6pSEk6Y0NXo/d/UchfF8tNbqbfMY="
+            },
+            "ObjectShare": {
+              "$plist_type": "data",
+              "base64": "7v8KBdV3GWmb1dPUK8+xn2FjD53FQi05cwXKcBDAdhQ="
+            }
+          },
+          "v3": {
+            "ApplicationEntity": {
+              "$plist_type": "data",
+              "base64": "gaQIn2/NIAKkIslEHXt2mr1AXxJ1qgnhK9X804mHIl0="
+            },
+            "ChangeToken": {
+              "$plist_type": "data",
+              "base64": "xvI3sNPfJZyoby9JIcoUfgW/n/jPr/x9QWsr532fNao="
+            },
+            "DeviceEntity": {
+              "$plist_type": "data",
+              "base64": "ILcw/S09bjujY9v1Cs+uckmytsYc8nNFPSuYXBxes/E="
+            },
+            "ItemDataEntity": {
+              "$plist_type": "data",
+              "base64": "gQJxWqHLquN6igBJJApnmW+dazFLXNNKr9caFnzbjlc="
+            },
+            "ItemEntity": {
+              "$plist_type": "data",
+              "base64": "0M7cnD9/VqO5PW80Q1fs9n2RJ5jN3WPXN+E5SxaLnjA="
+            },
+            "ListEntity": {
+              "$plist_type": "data",
+              "base64": "auQUDQfcGd+WgjYg4kGw/I2SORg0Cg5zy25q5TA3Zwg="
+            },
+            "ListMetadataEntity": {
+              "$plist_type": "data",
+              "base64": "KSqzrlN4ClaPRq5W+XGJlWBqJ1wWunGa04CEjNvblzM="
+            },
+            "ObjectChange": {
+              "$plist_type": "data",
+              "base64": "OuVXcJK9rRh72NxnBg/mygbFZ2i36IICR69CdS5K1bU="
+            },
+            "ObjectMetadata": {
+              "$plist_type": "data",
+              "base64": "AfJidKG5SwysQfq6pSEk6Y0NXo/d/UchfF8tNbqbfMY="
+            },
+            "ObjectPendingMapping": {
+              "$plist_type": "data",
+              "base64": "a1/puct3qHdnTKad5VydhhBDRZ2aK7Gd2Cwz99a9B+Q="
+            },
+            "ObjectShare": {
+              "$plist_type": "data",
+              "base64": "7v8KBdV3GWmb1dPUK8+xn2FjD53FQi05cwXKcBDAdhQ="
+            }
+          }
+        }
+      },
+      "bundle": {
+        "identifier": null,
+        "executable": null,
+        "name": null,
+        "version": null,
+        "short_version": null
+      },
+      "source_path": "/Applications/Paste.app/Contents/Resources/PasteCore.bundle/Contents/Resources/v5Paste.momd/VersionInfo.plist",
+      "provenance": [
+        {
+          "tool": "file",
+          "command": [
+            "/usr/bin/file",
+            "-b",
+            "$PLIST"
+          ],
+          "tool_version": null,
+          "version_reason": "Tool exposes no uniform stable version flag; executable digest identifies it.",
+          "executable_sha256": "926f3fdd8fefe73b596806f6844a4d62b7c4e6bc5e247f6cbd22e5b6424881dd",
+          "exit": {
+            "code": 0,
+            "signal": null
+          },
+          "stdout_bytes": 27,
+          "stderr_bytes": 0
+        },
+        {
+          "tool": "plutil",
+          "command": [
+            "/usr/bin/plutil",
+            "-convert",
+            "json",
+            "-o",
+            "-",
+            "--",
+            "$PLIST"
+          ],
+          "tool_version": null,
+          "version_reason": "Tool exposes no uniform stable version flag; executable digest identifies it.",
+          "executable_sha256": "2d4518b33072df72264a6980d5f139ea733fd80926d540bc4e19102725407471",
+          "exit": {
+            "code": 1,
+            "signal": null
+          },
+          "stdout_bytes": 158,
+          "stderr_bytes": 0
+        },
+        {
+          "tool": "plutil",
+          "command": [
+            "/usr/bin/plutil",
+            "-convert",
+            "xml1",
+            "-o",
+            "-",
+            "--",
+            "$PLIST"
+          ],
+          "tool_version": null,
+          "version_reason": "Tool exposes no uniform stable version flag; executable digest identifies it.",
+          "executable_sha256": "2d4518b33072df72264a6980d5f139ea733fd80926d540bc4e19102725407471",
+          "exit": {
+            "code": 0,
+            "signal": null
+          },
+          "stdout_bytes": 3653,
+          "stderr_bytes": 0
+        }
+      ],
+      "limitations": [
+        "plutil cannot express this plist as JSON, so it was decoded from plutil's XML conversion; data and date values are typed objects such as { \"$plist_type\": \"data\", \"base64\": ... }."
+      ]
+    },
+    "confidence": "observed",
+    "authority": "shipped-artifact",
+    "environment": null,
+    "limitations": [
+      "plutil cannot express this plist as JSON, so it was decoded from plutil's XML conversion; data and date values are typed objects such as { \"$plist_type\": \"data\", \"base64\": ... }."
+    ],
+    "locations": [
+      {
+        "kind": "artifact-path",
+        "path": "/Applications/Paste.app/Contents/Resources/PasteCore.bundle/Contents/Resources/v5Paste.momd/VersionInfo.plist"
+      }
+    ],
+    "evidence_links": []
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "opened": {
+    "result": {
+      "path": "/Applications/Paste.app/Contents/MacOS/Paste",
+      "format": "mach-o",
+      "kind": "executable",
+      "loaderArgs": [],
+      "sha256": "e0b96d48ee4027dccacded16dd3c738878496ef005b913580b34bfc89d31b2e7",
+      "architecture": "arm64"
+    }
+  },
+  "closed": {
+    "result": null
+  }
+}

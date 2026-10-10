@@ -1,0 +1,97 @@
+[
+  {
+    "file": "evidence/rea-db-model-hashes.json",
+    "sha256": "8e06e84d302f19dce4308c71906a1ab3424bb5b7d9c17ef558f1efffa9e6f1d1",
+    "evidence_id": null
+  },
+  {
+    "file": "evidence/rea-demangle.json",
+    "sha256": "a5bd9de68d82f393c5ba1b74cf062ec35cfac86d6556fc227af394d90c4b29a4",
+    "evidence_id": "ev_15495555a081f95efaf158d0c8f512a611744311a1d462673a569b78335e9bac"
+  },
+  {
+    "file": "evidence/rea-dylibs.json",
+    "sha256": "a24faeabe8029f144c06111e5f5534594413c1b9a5e2c174223f7467f9248b7e",
+    "evidence_id": "ev_34058d3d4e38c010be0186c74507f4f04916b1b0c575a1d343b09633b2d1a6ab"
+  },
+  {
+    "file": "evidence/rea-graph.json",
+    "sha256": "3ded73ed9b0ee98a569e3a3ae71fe787135033ec83595f93478f165e891fda5b",
+    "evidence_id": "ev_33ccaca12a6a53659403d19cbb5ca306981091a33e4895a594a2b05d1ff8abb6"
+  },
+  {
+    "file": "evidence/rea-helper-plist.json",
+    "sha256": "d0197a05307c8dfefa49b9faf52d6dbaa10b22479b537fe08f671ef9fcfc8793",
+    "evidence_id": "ev_52743a22cc056b1c53b12fdf7ee9eafb92620cc1d48776584ea33380a9fdff9d"
+  },
+  {
+    "file": "evidence/rea-interface.json",
+    "sha256": "07fa3442810899c66ebcaa7e60002716e4e94298c5651744c9e3fe4fc8035f4a",
+    "evidence_id": "ev_3da538c1f518a67a8d2299f1eaf38ee83afe8709fc5c9b7aa86a9574196ca0e1"
+  },
+  {
+    "file": "evidence/rea-inventory.json",
+    "sha256": "01b0442faccfd2901455057e8f3a5600dc11977bf4149176661323a091e462d1",
+    "evidence_id": "ev_9a95d98406d6f0bcbd392e20ea82fba38df284b9293e1af8c06e43042c5bc568"
+  },
+  {
+    "file": "evidence/rea-labels.json",
+    "sha256": "b924f2430597c6ba68986e844e04f5ec375eeab7124e43efa18860f03e29bb18",
+    "evidence_id": "ev_26ab9ac5354fa1308d6183766c5861e509536f1459a000fd4bca83f693afa42e"
+  },
+  {
+    "file": "evidence/rea-lib-macho.json",
+    "sha256": "bb31dcb9976f955f14136199eb7ac98174b150d05f2e499981a1739e430f0be4",
+    "evidence_id": "ev_f2350a90ea9648b127f4dd9a57d2617803e3bb674a43ad3373bbd9f4fcbb6fd7"
+  },
+  {
+    "file": "evidence/rea-lib-signature.json",
+    "sha256": "6e3633d2218a714b10e499e1f523c11fb4bf2097662867bfe4d2fcdbf6719f1f",
+    "evidence_id": "ev_ca0815ceaba0cd141e2fdd45760dfaba2015e6603cd32f48f26b080de716c206"
+  },
+  {
+    "file": "evidence/rea-macho.json",
+    "sha256": "fd1d38263d5940729049c60b0bb7bb5543319dd8343ac379e79f94f61ecccfbf",
+    "evidence_id": "ev_2bc1bc9067fd19a93ab89c958ba765ff233e23b57166e7bf11c3319dedbda7e7"
+  },
+  {
+    "file": "evidence/rea-model-db-comparison.json",
+    "sha256": "3cccf2884b948ae43cdacb122a6920d26168e3cb40b8755c7bb350303604c3c9",
+    "evidence_id": null
+  },
+  {
+    "file": "evidence/rea-model-summary.json",
+    "sha256": "627544fbb1be17d4339d359059e8a48762d041a237849f22a1b38fff684c4fc4",
+    "evidence_id": null
+  },
+  {
+    "file": "evidence/rea-model-version.json",
+    "sha256": "6342311517dcd13e19a5f1f2e32a19f31f90ef0ec47457ca6916c3658df799f4",
+    "evidence_id": "ev_6e0e75eb3bc5c9c6305c135acc7662811c252709a7aa409a8deed1913acee3a4"
+  },
+  {
+    "file": "evidence/rea-model.json",
+    "sha256": "5b09a5d9a7deb9819eaf65ce87122d38ee7632dd8248d02bb2985dc003727f26",
+    "evidence_id": "ev_68ef56cdde77ea52119da39a6e391d1873b4bd73c9f5938e0884c7727c1dfa69"
+  },
+  {
+    "file": "evidence/rea-plist.json",
+    "sha256": "35eef829191578777c20ea0700e86b203566dff5d0bbf4d89ecb180f82d0f4fd",
+    "evidence_id": "ev_e6c1879756ede8276547fe8d633f53ed4dc41527b952640af3f44778a5cd2f69"
+  },
+  {
+    "file": "evidence/rea-preferences.json",
+    "sha256": "8e49f837ed5171b4c3adfef4b964591c99fa51338650198a24749f68231980b4",
+    "evidence_id": "ev_e938ac630b4d9ca078f9c37b40e679a3b2f6ec091f7a172a14e23c98410cbb2b"
+  },
+  {
+    "file": "evidence/rea-provider-availability.json",
+    "sha256": "5136c79fd29444801803c293f66134253e2d963add766a2dcbe49782e4928ba3",
+    "evidence_id": null
+  },
+  {
+    "file": "evidence/rea-signature.json",
+    "sha256": "22773d6b848e9d06bbf6b2fb5912e397193d14c1047667be114bfb0fe8176c63",
+    "evidence_id": "ev_6ea590ddfd6acbb67731b0d8ea1f4b1172a17fc1a7e19f4468d311e1140e4eef"
+  }
+]

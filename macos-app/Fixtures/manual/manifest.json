@@ -1,0 +1,29 @@
+{
+  "source": "localclip-fixtures-v2; synthetic only",
+  "images": [
+    {
+      "file": "sample.png",
+      "type": "public.png",
+      "bytes": 1662407,
+      "width": 1920,
+      "height": 1080,
+      "sha256": "f0d0d8a7b469da88b63c09d2bbf665df6ea4bb172fce3824fcb90f40ac3fb2b1"
+    },
+    {
+      "file": "sample.tiff",
+      "type": "public.tiff",
+      "bytes": 2749512,
+      "width": 1920,
+      "height": 1080,
+      "sha256": "c1be96d8412d7ccc1d9a659af6ce7688e322ba4e14037ca763c2c43f49e76f60"
+    },
+    {
+      "file": "sample.jpg",
+      "type": "public.jpeg",
+      "bytes": 1267752,
+      "width": 1920,
+      "height": 1080,
+      "sha256": "1f30fe9b14e3be8cbf05236c846a01ed0f4f312ab1f85155acfcea59e75a5e02"
+    }
+  ]
+}

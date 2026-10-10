@@ -1,0 +1,41 @@
+// 仅 Debug 可用的合成子进程崩溃探针，by AI.Coding。
+#if DEBUG
+import Foundation
+import Darwin
+public enum StorageProbe {
+    private struct KillAt: StorageFaultInjector {
+        let point: FaultPoint
+        /// 真正 SIGKILL 验证磁盘恢复，不用抛错冒充崩溃。
+        func check(_ point: FaultPoint) throws {
+            if point == self.point {
+                guard kill(getpid(), SIGKILL) == 0 else { throw StoreError.ioFailure }
+                // 多线程进程的信号投递可能晚于kill返回，停在断点，绝不继续到rename。
+                while true { Darwin.pause() }
+            }
+        }
+    }
+    /// 独立数据目录与固定 fixture，不能进入正式 UI 或 Release。
+    public static func run(root: URL, point: String) throws {
+        let setup = try CommitStrategy(root: root)
+        try setup.initialize { db in try db.exec("CREATE TABLE fixture(id INTEGER PRIMARY KEY, data BLOB); INSERT INTO fixture VALUES(1,zeroblob(65536))") }
+        guard let point = FaultPoint(rawValue: point) else { throw StoreError.invalidSettings }
+        let crashing = try CommitStrategy(root: root, faults: KillAt(point: point))
+        try crashing.commit(quota: 4 * MiB) { db in try db.exec("DELETE FROM fixture; INSERT INTO fixture VALUES(2,zeroblob(131072))") }
+    }
+    /// 生产历史模型包含收藏、普通条目、共享引用及需要淘汰的新内容。
+    public static func runHistory(root: URL, point: String) async throws {
+        var settings = SettingsSnapshot(); settings.quotaBytes = 400_000
+        let store = try HistoryStore(location: root, initialSettings: settings)
+        let now = SystemClock().now()
+        func input(_ byte: UInt8, _ count: Int) -> ClipboardSnapshot { .init(payload: .init([.init([.init(SupportedType.png, Data(repeating: byte, count: count))])])) }
+        guard case .inserted(let favorite) = try await store.ingest(input(1,180_000), at: now) else { throw StoreError.ioFailure }
+        let preview = try await store.preview(.favorite(favorite,true)); _ = try await store.apply(preview.token)
+        _ = try await store.ingest(input(2,70_000), at: now + 1)
+        let bytes = try Data(contentsOf: root.appendingPathComponent("History/history.sqlite"))
+        try Data(ContentFingerprint.hash(bytes).utf8).write(to: root.appendingPathComponent("before.sha256"))
+        guard let point = FaultPoint(rawValue: point) else { throw StoreError.invalidSettings }
+        let failing = try HistoryStore(location: root, faults: KillAt(point: point))
+        _ = try await failing.ingest(input(3,110_000), at: now + 2)
+    }
+}
+#endif

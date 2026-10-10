@@ -1,0 +1,106 @@
+{
+  "retrievedOn": "2026-10-10",
+  "comparisonBaseline": "Paste当前官方文档；不代表本机6.0.3具备全部功能",
+  "sources": [
+    {
+      "id": "W01",
+      "url": "https://pasteapp.io/help/paste-on-mac"
+    },
+    {
+      "id": "W02",
+      "url": "https://pasteapp.io/help/organize-with-pinboards"
+    },
+    {
+      "id": "W03",
+      "url": "https://pasteapp.io/help/search-and-filters"
+    },
+    {
+      "id": "W04",
+      "url": "https://pasteapp.io/help/keyboard-shortcuts"
+    },
+    {
+      "id": "W05",
+      "url": "https://pasteapp.io/help/edit-items-before-pasting"
+    },
+    {
+      "id": "W06",
+      "url": "https://pasteapp.io/help/using-paste-stack"
+    },
+    {
+      "id": "W07",
+      "url": "https://pasteapp.io/help/what-paste-captures"
+    },
+    {
+      "id": "W08",
+      "url": "https://pasteapp.io/help/paste-as-plain-text"
+    },
+    {
+      "id": "W09",
+      "url": "https://pasteapp.io/help/control-history-retention"
+    },
+    {
+      "id": "W10",
+      "url": "https://pasteapp.io/help/exclude-apps"
+    },
+    {
+      "id": "W11",
+      "url": "https://pasteapp.io/help/paste-directly-to-other-applications"
+    },
+    {
+      "id": "W12",
+      "url": "https://pasteapp.io/help/shared-pinboards"
+    },
+    {
+      "id": "W13",
+      "url": "https://pasteapp.io/help/intelligent-clipboard"
+    },
+    {
+      "id": "W14",
+      "url": "https://pasteapp.io/updates"
+    },
+    {
+      "id": "W15",
+      "url": "https://pasteapp.io/help/paste-mcp"
+    },
+    {
+      "id": "W16",
+      "url": "https://pasteapp.io/help/where-paste-stores-your-data"
+    },
+    {
+      "id": "W17",
+      "url": "https://pasteapp.io/help/paste-doesn-t-launch-on-system-startup"
+    },
+    {
+      "id": "W18",
+      "url": "https://pasteapp.io/help/intel-to-apple-silicon"
+    },
+    {
+      "id": "W19",
+      "url": "https://pasteapp.io/help/quick-paste-with-numbered-shortcuts"
+    },
+    {
+      "id": "W20",
+      "url": "https://pasteapp.io/help/paste-on-iphone"
+    },
+    {
+      "id": "W21",
+      "url": "https://pasteapp.io/help/paste-on-ipad"
+    },
+    {
+      "id": "W23",
+      "url": "https://pasteapp.io/blog/link-previews"
+    },
+    {
+      "id": "W24",
+      "url": "https://pasteapp.io/blog/paste-with-shortcuts-for-macos-monterey"
+    },
+    {
+      "id": "W25",
+      "url": "https://pasteapp.io/privacy"
+    }
+  ],
+  "matrixRows": 76,
+  "sourceAudit": "localclip-source-audit.md",
+  "identityRecord": "evidence/identity-and-reuse.json",
+  "reportLanguage": "zh-CN"
+}

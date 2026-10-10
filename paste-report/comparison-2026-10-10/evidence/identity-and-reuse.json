@@ -1,0 +1,39 @@
+{
+  "recordedUTC": "2026-10-10T12:56:47.075544+00:00",
+  "paste": {
+    "bundle": "/Applications/Paste.app",
+    "version": "6.0.3",
+    "build": "14117",
+    "minimumOS": "13.0",
+    "binarySHA256": "e0b96d48ee4027dccacded16dd3c738878496ef005b913580b34bfc89d31b2e7",
+    "englishLabelsMatchPriorParsedEvidence": true,
+    "resourceMatches": [
+      {
+        "path": "Contents/Resources/PasteCore.bundle/Contents/Resources/v5Paste.momd/v3.mom",
+        "expected": "e8d4a2affdbd23153ac84aa53c536383e069927ae75046d9d4c14caeca12afe1",
+        "actual": "e8d4a2affdbd23153ac84aa53c536383e069927ae75046d9d4c14caeca12afe1",
+        "matches": true
+      },
+      {
+        "path": "Contents/Resources/PasteStack.storyboardc/7aE-aT-8LC-view-NAZ-eB-2HW.nib",
+        "expected": "8f15d66c6c2b60abd243b34635cdb4b505d92d842853ed5ada95bac230350f37",
+        "actual": "8f15d66c6c2b60abd243b34635cdb4b505d92d842853ed5ada95bac230350f37",
+        "matches": true
+      },
+      {
+        "path": "Contents/Resources/PasteStack.storyboardc/NSWindowController-HiK-vN-N5b.nib",
+        "expected": "c54081a2286106f9f1b42bb76086758ed42127a2f7aafd0c0bec5cbf2bdb9f2e",
+        "actual": "c54081a2286106f9f1b42bb76086758ed42127a2f7aafd0c0bec5cbf2bdb9f2e",
+        "matches": true
+      }
+    ],
+    "signatureMetadataExit": 0
+  },
+  "localclip": {
+    "version": "0.1.14 (15)",
+    "binarySHA256": "16cad28b4c165441ab196d800cc5806e24e2bda6160e8651e2d6ec04e544e3ec",
+    "matchesManifest": true,
+    "latestVersionTestsExecuted": false
+  },
+  "scope": "Installed package and workspace source only; no user preferences, databases, pasteboard, app launch, runtime tests or trace"
+}

@@ -1,0 +1,458 @@
+{
+  "result": {
+    "projection_id": "aap_6062ef55d5c8f12d2fd0078049205d209274314f1c7679536ee235fc4da3bfb2",
+    "root_sha256": "12c7cea2e874dc78327f761a6a0797e811675472568e7e5152627fddaf3176f2",
+    "root_format": "directory",
+    "platforms": [
+      "macos"
+    ],
+    "source_evidence_ids": [
+      "ev_1a0d3cf4e40c0162b59ebb85b0c0edf7a221f4f71cae995a8e1b19f3c9474915"
+    ],
+    "application_roots": [
+      "."
+    ],
+    "bundles": [
+      {
+        "path": ".",
+        "parent_path": null,
+        "layout": "macos-deep",
+        "role": "application",
+        "role_basis": "path-convention",
+        "info_plist_path": "Contents/Info.plist",
+        "executable_candidates": [
+          "Contents/MacOS/Paste",
+          "Contents/MacOS/libPaste.dylib"
+        ],
+        "signing_paths": [
+          "Contents/_CodeSignature/CodeResources"
+        ]
+      },
+      {
+        "path": "Contents/Library/LoginItems/Paste Helper.app",
+        "parent_path": ".",
+        "layout": "macos-deep",
+        "role": "login-item",
+        "role_basis": "path-convention",
+        "info_plist_path": "Contents/Library/LoginItems/Paste Helper.app/Contents/Info.plist",
+        "executable_candidates": [
+          "Contents/Library/LoginItems/Paste Helper.app/Contents/MacOS/Paste Helper"
+        ],
+        "signing_paths": [
+          "Contents/Library/LoginItems/Paste Helper.app/Contents/_CodeSignature/CodeResources"
+        ]
+      },
+      {
+        "path": "Contents/Resources/PasteCore.bundle",
+        "parent_path": ".",
+        "layout": "macos-deep",
+        "role": "resource-bundle",
+        "role_basis": "path-convention",
+        "info_plist_path": "Contents/Resources/PasteCore.bundle/Contents/Info.plist",
+        "executable_candidates": [],
+        "signing_paths": []
+      },
+      {
+        "path": "Contents/Resources/PasteLicensingAppStore.bundle",
+        "parent_path": ".",
+        "layout": "macos-deep",
+        "role": "resource-bundle",
+        "role_basis": "path-convention",
+        "info_plist_path": "Contents/Resources/PasteLicensingAppStore.bundle/Contents/Info.plist",
+        "executable_candidates": [],
+        "signing_paths": []
+      },
+      {
+        "path": "Contents/Resources/PasteLicensingDirect.bundle",
+        "parent_path": ".",
+        "layout": "macos-deep",
+        "role": "resource-bundle",
+        "role_basis": "path-convention",
+        "info_plist_path": "Contents/Resources/PasteLicensingDirect.bundle/Contents/Info.plist",
+        "executable_candidates": [],
+        "signing_paths": []
+      },
+      {
+        "path": "Contents/Resources/PasteSystemPermissions.bundle",
+        "parent_path": ".",
+        "layout": "macos-deep",
+        "role": "resource-bundle",
+        "role_basis": "path-convention",
+        "info_plist_path": "Contents/Resources/PasteSystemPermissions.bundle/Contents/Info.plist",
+        "executable_candidates": [],
+        "signing_paths": []
+      },
+      {
+        "path": "Contents/Resources/Sentry.bundle",
+        "parent_path": ".",
+        "layout": "macos-deep",
+        "role": "resource-bundle",
+        "role_basis": "path-convention",
+        "info_plist_path": "Contents/Resources/Sentry.bundle/Contents/Info.plist",
+        "executable_candidates": [],
+        "signing_paths": []
+      }
+    ],
+    "components": {
+      "bundle_metadata": [
+        {
+          "path": "Contents/Info.plist",
+          "artifact_id": "art_30e61e7dd7300886c4ec14eba2bfeb423c64da6cefd396002f015200cfca34b8",
+          "sha256": "e68795c2796a71ee35c80877d22fb29e968782ff82a1bcbfd88868affa4776e9",
+          "format": "plist"
+        },
+        {
+          "path": "Contents/Library/LoginItems/Paste Helper.app/Contents/Info.plist",
+          "artifact_id": "art_907f34b2285e8147e39df9a3ed222002b898c38d7da1ddec9098858da176a823",
+          "sha256": "465ce2d8ff4fe3bee37ee6a2b9694b43d8aeac6a157498363466d36a5684021c",
+          "format": "plist"
+        },
+        {
+          "path": "Contents/Resources/PasteCore.bundle/Contents/Info.plist",
+          "artifact_id": "art_ec03d150736aeb6b874dbb07692529cfd0df233e9e2ac0246a60d1b1a94f50a3",
+          "sha256": "5d885fae90ad292da2f2731fbbed9e0f5bd275d7ae67bb20f3eeeb99b3111841",
+          "format": "plist"
+        },
+        {
+          "path": "Contents/Resources/PasteLicensingAppStore.bundle/Contents/Info.plist",
+          "artifact_id": "art_42923a47f21ebd86c6f0f7b0a7358dee5019f9879ce98b728e4a6c1c7f8c665a",
+          "sha256": "e33dba1c59cc589c5ec545b0f75f7daa14f672bc0cb70fb5c5340be1ba687f6d",
+          "format": "plist"
+        },
+        {
+          "path": "Contents/Resources/PasteLicensingDirect.bundle/Contents/Info.plist",
+          "artifact_id": "art_3ffcbc2d31131c0ed5b8182e83d7a760ca011f2d2dcd552eee902e2e32f24ae2",
+          "sha256": "2cc146d79451e9ce1ece0d14e0c717d67b68b4b843e2301d8267ba245fc57660",
+          "format": "plist"
+        },
+        {
+          "path": "Contents/Resources/PasteStack.storyboardc/Info.plist",
+          "artifact_id": "art_1a764fa48702fe9f6d76e96a12ce9a790ef6290aa6d4170bfc0cda0e97c5cefc",
+          "sha256": "0d02f7c2def6c879ec6cf0be92e2d3e379d691e70831493454882d1d741f38f4",
+          "format": "plist"
+        },
+        {
+          "path": "Contents/Resources/PasteSystemPermissions.bundle/Contents/Info.plist",
+          "artifact_id": "art_1537a853e81a06354baa7ffcf0d19568e9550fe949c5e11defb5689a6db26166",
+          "sha256": "a5c5cf0b63ac99f44c8b7c2329d6a4fd029812c3a1fb0ff056587b892790138e",
+          "format": "plist"
+        },
+        {
+          "path": "Contents/Resources/Sentry.bundle/Contents/Info.plist",
+          "artifact_id": "art_656938aa86c2dfd59e465ec534e0d14f32a657fcdbb33da74ee0f9b86b2c437e",
+          "sha256": "0a39f78ec10d68a73eb26b77f1e418e5471dd0d7aacff3726468372d36e9167d",
+          "format": "plist"
+        }
+      ],
+      "executables": [
+        {
+          "path": "Contents/Library/LoginItems/Paste Helper.app/Contents/MacOS/Paste Helper",
+          "artifact_id": "art_0b6added737d7945c6663254d2401e1f4601545bbc431491efc86f2ac9f16410",
+          "sha256": "a8459f4dfc4bbbf65aa7f50bf8f51846758aa645a2d9dc2f68c74c1c2bde308f",
+          "format": "mach-o-universal"
+        },
+        {
+          "path": "Contents/MacOS/libPaste.dylib",
+          "artifact_id": "art_94a7096d9c106437d9c6b1b747c4acb809625a11c4117419afe250ee7513cde9",
+          "sha256": "af244236383c875acd5145cb6c8c4a260b40be0190c534d0a50e8450a1307946",
+          "format": "mach-o-universal"
+        },
+        {
+          "path": "Contents/MacOS/Paste",
+          "artifact_id": "art_faf96da4e9d3e54397f5c11d752d0aaf1e6f89ec3cdacad2c57f42e70dd0f7ad",
+          "sha256": "e0b96d48ee4027dccacded16dd3c738878496ef005b913580b34bfc89d31b2e7",
+          "format": "mach-o-universal"
+        }
+      ],
+      "frameworks": [],
+      "native_libraries": [
+        {
+          "path": "Contents/MacOS/libPaste.dylib",
+          "artifact_id": "art_94a7096d9c106437d9c6b1b747c4acb809625a11c4117419afe250ee7513cde9",
+          "sha256": "af244236383c875acd5145cb6c8c4a260b40be0190c534d0a50e8450a1307946",
+          "format": "mach-o-universal"
+        }
+      ],
+      "javascript": [],
+      "signing": [
+        {
+          "path": "Contents/_CodeSignature/CodeResources",
+          "artifact_id": "art_2b740e87cd1269730145d14283cb95184bfd27dcb335d35046b84e571e80502c",
+          "sha256": "4ef017b09112c42101ecba57045a6788c86fff19376e2d63aa6234f22ac22f36",
+          "format": "file"
+        },
+        {
+          "path": "Contents/Library/LoginItems/Paste Helper.app/Contents/_CodeSignature/CodeResources",
+          "artifact_id": "art_112cf9432594700833348d5553e9e3e8478c644ddc3f6f8852446d5405bce825",
+          "sha256": "d7edff06eddf16e70245dc24d6aea936a9a27d95bc18f028483403e4eaccd9c3",
+          "format": "file"
+        }
+      ],
+      "privileged_helpers": [],
+      "launchd_plists": [],
+      "helpers": []
+    },
+    "symlinks": [],
+    "runtime_families": [
+      "native",
+      "swift-objective-c"
+    ],
+    "bridge_candidates": [],
+    "coverage": {
+      "status": "complete-within-inventory",
+      "inventory_complete": true
+    },
+    "limitations": [
+      "Bundle roles follow path conventions. Read each info_plist_path with inspect_plist for CFBundleExecutable, identifiers, and declared services.",
+      "Bundle identifiers and signing claims require dedicated plist and CMS parsing; this projection reports only exact paths and hashes.",
+      "Bridge candidates are path-based hypotheses, not observed runtime calls."
+    ]
+  },
+  "evidence_id": "ev_33ccaca12a6a53659403d19cbb5ca306981091a33e4895a594a2b05d1ff8abb6",
+  "evidence": {
+    "evidence_id": "ev_33ccaca12a6a53659403d19cbb5ca306981091a33e4895a594a2b05d1ff8abb6",
+    "subject": {
+      "name": "Paste.app",
+      "digest": {
+        "sha256": "12c7cea2e874dc78327f761a6a0797e811675472568e7e5152627fddaf3176f2"
+      },
+      "format": "directory",
+      "architecture": null,
+      "local_path": "/Applications/Paste.app"
+    },
+    "provider": {
+      "id": "rea-apple-application",
+      "name": "REA Apple application workflows",
+      "version": "1"
+    },
+    "predicate_type": "rea.apple-application-graph",
+    "operation": "project_apple_application_graph",
+    "parameters": {
+      "inventory_evidence_ids": [
+        "ev_1a0d3cf4e40c0162b59ebb85b0c0edf7a221f4f71cae995a8e1b19f3c9474915"
+      ]
+    },
+    "raw_result": null,
+    "normalized_result": {
+      "projection_id": "aap_6062ef55d5c8f12d2fd0078049205d209274314f1c7679536ee235fc4da3bfb2",
+      "root_sha256": "12c7cea2e874dc78327f761a6a0797e811675472568e7e5152627fddaf3176f2",
+      "root_format": "directory",
+      "platforms": [
+        "macos"
+      ],
+      "source_evidence_ids": [
+        "ev_1a0d3cf4e40c0162b59ebb85b0c0edf7a221f4f71cae995a8e1b19f3c9474915"
+      ],
+      "application_roots": [
+        "."
+      ],
+      "bundles": [
+        {
+          "path": ".",
+          "parent_path": null,
+          "layout": "macos-deep",
+          "role": "application",
+          "role_basis": "path-convention",
+          "info_plist_path": "Contents/Info.plist",
+          "executable_candidates": [
+            "Contents/MacOS/Paste",
+            "Contents/MacOS/libPaste.dylib"
+          ],
+          "signing_paths": [
+            "Contents/_CodeSignature/CodeResources"
+          ]
+        },
+        {
+          "path": "Contents/Library/LoginItems/Paste Helper.app",
+          "parent_path": ".",
+          "layout": "macos-deep",
+          "role": "login-item",
+          "role_basis": "path-convention",
+          "info_plist_path": "Contents/Library/LoginItems/Paste Helper.app/Contents/Info.plist",
+          "executable_candidates": [
+            "Contents/Library/LoginItems/Paste Helper.app/Contents/MacOS/Paste Helper"
+          ],
+          "signing_paths": [
+            "Contents/Library/LoginItems/Paste Helper.app/Contents/_CodeSignature/CodeResources"
+          ]
+        },
+        {
+          "path": "Contents/Resources/PasteCore.bundle",
+          "parent_path": ".",
+          "layout": "macos-deep",
+          "role": "resource-bundle",
+          "role_basis": "path-convention",
+          "info_plist_path": "Contents/Resources/PasteCore.bundle/Contents/Info.plist",
+          "executable_candidates": [],
+          "signing_paths": []
+        },
+        {
+          "path": "Contents/Resources/PasteLicensingAppStore.bundle",
+          "parent_path": ".",
+          "layout": "macos-deep",
+          "role": "resource-bundle",
+          "role_basis": "path-convention",
+          "info_plist_path": "Contents/Resources/PasteLicensingAppStore.bundle/Contents/Info.plist",
+          "executable_candidates": [],
+          "signing_paths": []
+        },
+        {
+          "path": "Contents/Resources/PasteLicensingDirect.bundle",
+          "parent_path": ".",
+          "layout": "macos-deep",
+          "role": "resource-bundle",
+          "role_basis": "path-convention",
+          "info_plist_path": "Contents/Resources/PasteLicensingDirect.bundle/Contents/Info.plist",
+          "executable_candidates": [],
+          "signing_paths": []
+        },
+        {
+          "path": "Contents/Resources/PasteSystemPermissions.bundle",
+          "parent_path": ".",
+          "layout": "macos-deep",
+          "role": "resource-bundle",
+          "role_basis": "path-convention",
+          "info_plist_path": "Contents/Resources/PasteSystemPermissions.bundle/Contents/Info.plist",
+          "executable_candidates": [],
+          "signing_paths": []
+        },
+        {
+          "path": "Contents/Resources/Sentry.bundle",
+          "parent_path": ".",
+          "layout": "macos-deep",
+          "role": "resource-bundle",
+          "role_basis": "path-convention",
+          "info_plist_path": "Contents/Resources/Sentry.bundle/Contents/Info.plist",
+          "executable_candidates": [],
+          "signing_paths": []
+        }
+      ],
+      "components": {
+        "bundle_metadata": [
+          {
+            "path": "Contents/Info.plist",
+            "artifact_id": "art_30e61e7dd7300886c4ec14eba2bfeb423c64da6cefd396002f015200cfca34b8",
+            "sha256": "e68795c2796a71ee35c80877d22fb29e968782ff82a1bcbfd88868affa4776e9",
+            "format": "plist"
+          },
+          {
+            "path": "Contents/Library/LoginItems/Paste Helper.app/Contents/Info.plist",
+            "artifact_id": "art_907f34b2285e8147e39df9a3ed222002b898c38d7da1ddec9098858da176a823",
+            "sha256": "465ce2d8ff4fe3bee37ee6a2b9694b43d8aeac6a157498363466d36a5684021c",
+            "format": "plist"
+          },
+          {
+            "path": "Contents/Resources/PasteCore.bundle/Contents/Info.plist",
+            "artifact_id": "art_ec03d150736aeb6b874dbb07692529cfd0df233e9e2ac0246a60d1b1a94f50a3",
+            "sha256": "5d885fae90ad292da2f2731fbbed9e0f5bd275d7ae67bb20f3eeeb99b3111841",
+            "format": "plist"
+          },
+          {
+            "path": "Contents/Resources/PasteLicensingAppStore.bundle/Contents/Info.plist",
+            "artifact_id": "art_42923a47f21ebd86c6f0f7b0a7358dee5019f9879ce98b728e4a6c1c7f8c665a",
+            "sha256": "e33dba1c59cc589c5ec545b0f75f7daa14f672bc0cb70fb5c5340be1ba687f6d",
+            "format": "plist"
+          },
+          {
+            "path": "Contents/Resources/PasteLicensingDirect.bundle/Contents/Info.plist",
+            "artifact_id": "art_3ffcbc2d31131c0ed5b8182e83d7a760ca011f2d2dcd552eee902e2e32f24ae2",
+            "sha256": "2cc146d79451e9ce1ece0d14e0c717d67b68b4b843e2301d8267ba245fc57660",
+            "format": "plist"
+          },
+          {
+            "path": "Contents/Resources/PasteStack.storyboardc/Info.plist",
+            "artifact_id": "art_1a764fa48702fe9f6d76e96a12ce9a790ef6290aa6d4170bfc0cda0e97c5cefc",
+            "sha256": "0d02f7c2def6c879ec6cf0be92e2d3e379d691e70831493454882d1d741f38f4",
+            "format": "plist"
+          },
+          {
+            "path": "Contents/Resources/PasteSystemPermissions.bundle/Contents/Info.plist",
+            "artifact_id": "art_1537a853e81a06354baa7ffcf0d19568e9550fe949c5e11defb5689a6db26166",
+            "sha256": "a5c5cf0b63ac99f44c8b7c2329d6a4fd029812c3a1fb0ff056587b892790138e",
+            "format": "plist"
+          },
+          {
+            "path": "Contents/Resources/Sentry.bundle/Contents/Info.plist",
+            "artifact_id": "art_656938aa86c2dfd59e465ec534e0d14f32a657fcdbb33da74ee0f9b86b2c437e",
+            "sha256": "0a39f78ec10d68a73eb26b77f1e418e5471dd0d7aacff3726468372d36e9167d",
+            "format": "plist"
+          }
+        ],
+        "executables": [
+          {
+            "path": "Contents/Library/LoginItems/Paste Helper.app/Contents/MacOS/Paste Helper",
+            "artifact_id": "art_0b6added737d7945c6663254d2401e1f4601545bbc431491efc86f2ac9f16410",
+            "sha256": "a8459f4dfc4bbbf65aa7f50bf8f51846758aa645a2d9dc2f68c74c1c2bde308f",
+            "format": "mach-o-universal"
+          },
+          {
+            "path": "Contents/MacOS/libPaste.dylib",
+            "artifact_id": "art_94a7096d9c106437d9c6b1b747c4acb809625a11c4117419afe250ee7513cde9",
+            "sha256": "af244236383c875acd5145cb6c8c4a260b40be0190c534d0a50e8450a1307946",
+            "format": "mach-o-universal"
+          },
+          {
+            "path": "Contents/MacOS/Paste",
+            "artifact_id": "art_faf96da4e9d3e54397f5c11d752d0aaf1e6f89ec3cdacad2c57f42e70dd0f7ad",
+            "sha256": "e0b96d48ee4027dccacded16dd3c738878496ef005b913580b34bfc89d31b2e7",
+            "format": "mach-o-universal"
+          }
+        ],
+        "frameworks": [],
+        "native_libraries": [
+          {
+            "path": "Contents/MacOS/libPaste.dylib",
+            "artifact_id": "art_94a7096d9c106437d9c6b1b747c4acb809625a11c4117419afe250ee7513cde9",
+            "sha256": "af244236383c875acd5145cb6c8c4a260b40be0190c534d0a50e8450a1307946",
+            "format": "mach-o-universal"
+          }
+        ],
+        "javascript": [],
+        "signing": [
+          {
+            "path": "Contents/_CodeSignature/CodeResources",
+            "artifact_id": "art_2b740e87cd1269730145d14283cb95184bfd27dcb335d35046b84e571e80502c",
+            "sha256": "4ef017b09112c42101ecba57045a6788c86fff19376e2d63aa6234f22ac22f36",
+            "format": "file"
+          },
+          {
+            "path": "Contents/Library/LoginItems/Paste Helper.app/Contents/_CodeSignature/CodeResources",
+            "artifact_id": "art_112cf9432594700833348d5553e9e3e8478c644ddc3f6f8852446d5405bce825",
+            "sha256": "d7edff06eddf16e70245dc24d6aea936a9a27d95bc18f028483403e4eaccd9c3",
+            "format": "file"
+          }
+        ],
+        "privileged_helpers": [],
+        "launchd_plists": [],
+        "helpers": []
+      },
+      "symlinks": [],
+      "runtime_families": [
+        "native",
+        "swift-objective-c"
+      ],
+      "bridge_candidates": [],
+      "coverage": {
+        "status": "complete-within-inventory",
+        "inventory_complete": true
+      },
+      "limitations": [
+        "Bundle roles follow path conventions. Read each info_plist_path with inspect_plist for CFBundleExecutable, identifiers, and declared services.",
+        "Bundle identifiers and signing claims require dedicated plist and CMS parsing; this projection reports only exact paths and hashes.",
+        "Bridge candidates are path-based hypotheses, not observed runtime calls."
+      ]
+    },
+    "confidence": "inferred",
+    "authority": "analyst-inference",
+    "environment": null,
+    "limitations": [
+      "Bundle roles follow path conventions. Read each info_plist_path with inspect_plist for CFBundleExecutable, identifiers, and declared services.",
+      "Bundle identifiers and signing claims require dedicated plist and CMS parsing; this projection reports only exact paths and hashes.",
+      "Bridge candidates are path-based hypotheses, not observed runtime calls."
+    ],
+    "locations": [],
+    "evidence_links": [
+      "ev_1a0d3cf4e40c0162b59ebb85b0c0edf7a221f4f71cae995a8e1b19f3c9474915"
+    ]
+  }
+}

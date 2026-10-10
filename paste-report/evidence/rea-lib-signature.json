@@ -1,0 +1,248 @@
+{
+  "result": {
+    "signed": true,
+    "identifier": "libPaste",
+    "team_identifier": null,
+    "format": "Mach-O universal (x86_64 arm64)",
+    "cdhashes": [
+      "fbb0b3be342e30e1906420f93a9f9e1c9f245735"
+    ],
+    "hash_algorithms": [
+      "sha256"
+    ],
+    "authorities": [
+      "Antibiotics"
+    ],
+    "designated_requirement": "identifier libPaste and certificate root = H\"b231060196247a36c3094ac947ba60e226b848bf\"",
+    "entitlements": null,
+    "timestamp": "6 Oct 2025 at 21:12:08",
+    "hardened_runtime": false,
+    "provenance": [
+      {
+        "tool": "codesign",
+        "command": [
+          "/usr/bin/codesign",
+          "-d",
+          "--verbose=4",
+          "$ARTIFACT"
+        ],
+        "tool_version": null,
+        "version_reason": "Tool exposes no uniform stable version flag; executable digest identifies it.",
+        "executable_sha256": "c91d293ec824037dc4fcb204c5aae32545f73a79a4d6b5f0d113cc856465f209",
+        "exit": {
+          "code": 0,
+          "signal": null
+        },
+        "stdout_bytes": 0,
+        "stderr_bytes": 876
+      },
+      {
+        "tool": "codesign",
+        "command": [
+          "/usr/bin/codesign",
+          "-d",
+          "-r-",
+          "$ARTIFACT"
+        ],
+        "tool_version": null,
+        "version_reason": "Tool exposes no uniform stable version flag; executable digest identifies it.",
+        "executable_sha256": "c91d293ec824037dc4fcb204c5aae32545f73a79a4d6b5f0d113cc856465f209",
+        "exit": {
+          "code": 0,
+          "signal": null
+        },
+        "stdout_bytes": 101,
+        "stderr_bytes": 65
+      },
+      {
+        "tool": "codesign",
+        "command": [
+          "/usr/bin/codesign",
+          "-d",
+          "--entitlements",
+          ":-",
+          "$ARTIFACT"
+        ],
+        "tool_version": null,
+        "version_reason": "Tool exposes no uniform stable version flag; executable digest identifies it.",
+        "executable_sha256": "c91d293ec824037dc4fcb204c5aae32545f73a79a4d6b5f0d113cc856465f209",
+        "exit": {
+          "code": 0,
+          "signal": null
+        },
+        "stdout_bytes": 0,
+        "stderr_bytes": 153
+      }
+    ],
+    "limitations": [
+      "Entitlements and designated requirements require separate bounded commands."
+    ]
+  },
+  "evidence_id": "ev_ca0815ceaba0cd141e2fdd45760dfaba2015e6603cd32f48f26b080de716c206",
+  "evidence": {
+    "evidence_id": "ev_ca0815ceaba0cd141e2fdd45760dfaba2015e6603cd32f48f26b080de716c206",
+    "subject": {
+      "name": "libPaste.dylib",
+      "digest": {
+        "sha256": "af244236383c875acd5145cb6c8c4a260b40be0190c534d0a50e8450a1307946"
+      },
+      "format": "mach-o",
+      "architecture": "arm64",
+      "local_path": "/Applications/Paste.app/Contents/MacOS/libPaste.dylib"
+    },
+    "provider": {
+      "id": "native-macos",
+      "name": "macOS native inspection utilities",
+      "version": null
+    },
+    "predicate_type": "rea.analysis",
+    "operation": "inspect_signature",
+    "parameters": {},
+    "raw_result": {
+      "provenance": [
+        {
+          "tool": "codesign",
+          "command": [
+            "/usr/bin/codesign",
+            "-d",
+            "--verbose=4",
+            "$ARTIFACT"
+          ],
+          "tool_version": null,
+          "version_reason": "Tool exposes no uniform stable version flag; executable digest identifies it.",
+          "executable_sha256": "c91d293ec824037dc4fcb204c5aae32545f73a79a4d6b5f0d113cc856465f209",
+          "exit": {
+            "code": 0,
+            "signal": null
+          },
+          "stdout_bytes": 0,
+          "stderr_bytes": 876
+        },
+        {
+          "tool": "codesign",
+          "command": [
+            "/usr/bin/codesign",
+            "-d",
+            "-r-",
+            "$ARTIFACT"
+          ],
+          "tool_version": null,
+          "version_reason": "Tool exposes no uniform stable version flag; executable digest identifies it.",
+          "executable_sha256": "c91d293ec824037dc4fcb204c5aae32545f73a79a4d6b5f0d113cc856465f209",
+          "exit": {
+            "code": 0,
+            "signal": null
+          },
+          "stdout_bytes": 101,
+          "stderr_bytes": 65
+        },
+        {
+          "tool": "codesign",
+          "command": [
+            "/usr/bin/codesign",
+            "-d",
+            "--entitlements",
+            ":-",
+            "$ARTIFACT"
+          ],
+          "tool_version": null,
+          "version_reason": "Tool exposes no uniform stable version flag; executable digest identifies it.",
+          "executable_sha256": "c91d293ec824037dc4fcb204c5aae32545f73a79a4d6b5f0d113cc856465f209",
+          "exit": {
+            "code": 0,
+            "signal": null
+          },
+          "stdout_bytes": 0,
+          "stderr_bytes": 153
+        }
+      ]
+    },
+    "normalized_result": {
+      "signed": true,
+      "identifier": "libPaste",
+      "team_identifier": null,
+      "format": "Mach-O universal (x86_64 arm64)",
+      "cdhashes": [
+        "fbb0b3be342e30e1906420f93a9f9e1c9f245735"
+      ],
+      "hash_algorithms": [
+        "sha256"
+      ],
+      "authorities": [
+        "Antibiotics"
+      ],
+      "designated_requirement": "identifier libPaste and certificate root = H\"b231060196247a36c3094ac947ba60e226b848bf\"",
+      "entitlements": null,
+      "timestamp": "6 Oct 2025 at 21:12:08",
+      "hardened_runtime": false,
+      "provenance": [
+        {
+          "tool": "codesign",
+          "command": [
+            "/usr/bin/codesign",
+            "-d",
+            "--verbose=4",
+            "$ARTIFACT"
+          ],
+          "tool_version": null,
+          "version_reason": "Tool exposes no uniform stable version flag; executable digest identifies it.",
+          "executable_sha256": "c91d293ec824037dc4fcb204c5aae32545f73a79a4d6b5f0d113cc856465f209",
+          "exit": {
+            "code": 0,
+            "signal": null
+          },
+          "stdout_bytes": 0,
+          "stderr_bytes": 876
+        },
+        {
+          "tool": "codesign",
+          "command": [
+            "/usr/bin/codesign",
+            "-d",
+            "-r-",
+            "$ARTIFACT"
+          ],
+          "tool_version": null,
+          "version_reason": "Tool exposes no uniform stable version flag; executable digest identifies it.",
+          "executable_sha256": "c91d293ec824037dc4fcb204c5aae32545f73a79a4d6b5f0d113cc856465f209",
+          "exit": {
+            "code": 0,
+            "signal": null
+          },
+          "stdout_bytes": 101,
+          "stderr_bytes": 65
+        },
+        {
+          "tool": "codesign",
+          "command": [
+            "/usr/bin/codesign",
+            "-d",
+            "--entitlements",
+            ":-",
+            "$ARTIFACT"
+          ],
+          "tool_version": null,
+          "version_reason": "Tool exposes no uniform stable version flag; executable digest identifies it.",
+          "executable_sha256": "c91d293ec824037dc4fcb204c5aae32545f73a79a4d6b5f0d113cc856465f209",
+          "exit": {
+            "code": 0,
+            "signal": null
+          },
+          "stdout_bytes": 0,
+          "stderr_bytes": 153
+        }
+      ],
+      "limitations": [
+        "Entitlements and designated requirements require separate bounded commands."
+      ]
+    },
+    "confidence": "observed",
+    "authority": "shipped-artifact",
+    "environment": null,
+    "limitations": [
+      "Entitlements and designated requirements require separate bounded commands."
+    ],
+    "locations": [],
+    "evidence_links": []
+  }
+}

@@ -1,0 +1,1783 @@
+{
+  "result": {
+    "format": "mach-o",
+    "endian": null,
+    "word_size": 64,
+    "file_type": "6",
+    "flags": [
+      "0x00100085"
+    ],
+    "uuid": "64FEF5E9-AB2B-38BB-928E-FBDD7B731981",
+    "entrypoints": {
+      "items": [],
+      "total": 0,
+      "exhaustive": true,
+      "limitations": []
+    },
+    "architectures": {
+      "items": [
+        {
+          "name": "x86_64",
+          "cpu_type": "CPU_TYPE_X86_64",
+          "cpu_subtype": "CPU_SUBTYPE_X86_64_ALL",
+          "file_offset": 16384,
+          "size": 31888,
+          "alignment": 16384
+        },
+        {
+          "name": "arm64",
+          "cpu_type": "CPU_TYPE_ARM64",
+          "cpu_subtype": "CPU_SUBTYPE_ARM64_ALL",
+          "file_offset": 49152,
+          "size": 69040,
+          "alignment": 16384
+        }
+      ],
+      "total": 2,
+      "exhaustive": true,
+      "limitations": []
+    },
+    "build_metadata": {
+      "items": [
+        {
+          "platform": "1",
+          "minimum_os": "13.0",
+          "sdk": "26.0",
+          "tools": [
+            {
+              "name": "3",
+              "version": "1221.4"
+            }
+          ]
+        }
+      ],
+      "total": 1,
+      "exhaustive": true,
+      "limitations": []
+    },
+    "load_commands": {
+      "items": [
+        {
+          "index": 0,
+          "kind": "LC_SEGMENT_64",
+          "fields": {
+            "cmd": "LC_SEGMENT_64",
+            "cmdsize": 472,
+            "segname": "__TEXT",
+            "vmaddr": 0,
+            "vmsize": 16384,
+            "fileoff": 0,
+            "filesize": 16384,
+            "maxprot": 5,
+            "initprot": 5,
+            "nsects": 5,
+            "flags": 0
+          }
+        },
+        {
+          "index": 1,
+          "kind": "LC_SEGMENT_64",
+          "fields": {
+            "cmd": "LC_SEGMENT_64",
+            "cmdsize": 152,
+            "segname": "__DATA_CONST",
+            "vmaddr": 16384,
+            "vmsize": 16384,
+            "fileoff": 16384,
+            "filesize": 16384,
+            "maxprot": 3,
+            "initprot": 3,
+            "nsects": 1,
+            "flags": 16
+          }
+        },
+        {
+          "index": 2,
+          "kind": "LC_SEGMENT_64",
+          "fields": {
+            "cmd": "LC_SEGMENT_64",
+            "cmdsize": 232,
+            "segname": "__DATA",
+            "vmaddr": 32768,
+            "vmsize": 16384,
+            "fileoff": 32768,
+            "filesize": 16384,
+            "maxprot": 3,
+            "initprot": 3,
+            "nsects": 2,
+            "flags": 0
+          }
+        },
+        {
+          "index": 3,
+          "kind": "LC_SEGMENT_64",
+          "fields": {
+            "cmd": "LC_SEGMENT_64",
+            "cmdsize": 72,
+            "segname": "__LINKEDIT",
+            "vmaddr": 49152,
+            "vmsize": 32768,
+            "fileoff": 49152,
+            "filesize": 19888,
+            "maxprot": 1,
+            "initprot": 1,
+            "nsects": 0,
+            "flags": 0
+          }
+        },
+        {
+          "index": 4,
+          "kind": "LC_ID_DYLIB",
+          "fields": {
+            "cmd": "LC_ID_DYLIB",
+            "cmdsize": 40,
+            "name": "libPaste.dylib (offset 24)",
+            "time stamp": "1759756331 Mon Oct  6 21:12:11 2025",
+            "current version": "0.0.0",
+            "compatibility version": "0.0.0"
+          }
+        },
+        {
+          "index": 5,
+          "kind": "LC_DYLD_CHAINED_FIXUPS",
+          "fields": {
+            "cmd": "LC_DYLD_CHAINED_FIXUPS",
+            "cmdsize": 16,
+            "dataoff": 49152,
+            "datasize": 416
+          }
+        },
+        {
+          "index": 6,
+          "kind": "LC_DYLD_EXPORTS_TRIE",
+          "fields": {
+            "cmd": "LC_DYLD_EXPORTS_TRIE",
+            "cmdsize": 16,
+            "dataoff": 49568,
+            "datasize": 152
+          }
+        },
+        {
+          "index": 7,
+          "kind": "LC_SYMTAB",
+          "fields": {
+            "cmd": "LC_SYMTAB",
+            "cmdsize": 24,
+            "symoff": 49736,
+            "nsyms": 13,
+            "stroff": 50040,
+            "strsize": 280
+          }
+        },
+        {
+          "index": 8,
+          "kind": "LC_DYSYMTAB",
+          "fields": {
+            "cmd": "LC_DYSYMTAB",
+            "cmdsize": 80,
+            "ilocalsym": 0,
+            "nlocalsym": 1,
+            "iextdefsym": 1,
+            "nextdefsym": 0,
+            "iundefsym": 1,
+            "nundefsym": 12,
+            "tocoff": 0,
+            "ntoc": 0,
+            "modtaboff": 0,
+            "nmodtab": 0,
+            "extrefsymoff": 0,
+            "nextrefsyms": 0,
+            "indirectsymoff": 49944,
+            "nindirectsyms": 23,
+            "extreloff": 0,
+            "nextrel": 0,
+            "locreloff": 0,
+            "nlocrel": 0
+          }
+        },
+        {
+          "index": 9,
+          "kind": "LC_UUID",
+          "fields": {
+            "cmd": "LC_UUID",
+            "cmdsize": 24,
+            "uuid": "64FEF5E9-AB2B-38BB-928E-FBDD7B731981"
+          }
+        },
+        {
+          "index": 10,
+          "kind": "LC_BUILD_VERSION",
+          "fields": {
+            "cmd": "LC_BUILD_VERSION",
+            "cmdsize": 32,
+            "platform": 1,
+            "minos": "13.0",
+            "sdk": "26.0",
+            "ntools": 1,
+            "tool": 3,
+            "version": "1221.4"
+          }
+        },
+        {
+          "index": 11,
+          "kind": "LC_SOURCE_VERSION",
+          "fields": {
+            "cmd": "LC_SOURCE_VERSION",
+            "cmdsize": 16,
+            "version": "0.0"
+          }
+        },
+        {
+          "index": 12,
+          "kind": "LC_LOAD_DYLIB",
+          "fields": {
+            "cmd": "LC_LOAD_DYLIB",
+            "cmdsize": 56,
+            "name": "/usr/lib/libobjc.A.dylib (offset 24)",
+            "time stamp": "2 Thu Jan  1 07:30:02 1970",
+            "current version": "228.0.0",
+            "compatibility version": "1.0.0"
+          }
+        },
+        {
+          "index": 13,
+          "kind": "LC_LOAD_DYLIB",
+          "fields": {
+            "cmd": "LC_LOAD_DYLIB",
+            "cmdsize": 88,
+            "name": "/System/Library/Frameworks/Combine.framework/Versions/A/Combine (offset 24)",
+            "time stamp": "2 Thu Jan  1 07:30:02 1970",
+            "current version": "3023.0.0",
+            "compatibility version": "1.0.0"
+          }
+        },
+        {
+          "index": 14,
+          "kind": "LC_LOAD_DYLIB",
+          "fields": {
+            "cmd": "LC_LOAD_DYLIB",
+            "cmdsize": 56,
+            "name": "/usr/lib/libSystem.B.dylib (offset 24)",
+            "time stamp": "2 Thu Jan  1 07:30:02 1970",
+            "current version": "1356.0.0",
+            "compatibility version": "1.0.0"
+          }
+        },
+        {
+          "index": 15,
+          "kind": "LC_FUNCTION_STARTS",
+          "fields": {
+            "cmd": "LC_FUNCTION_STARTS",
+            "cmdsize": 16,
+            "dataoff": 49720,
+            "datasize": 16
+          }
+        },
+        {
+          "index": 16,
+          "kind": "LC_DATA_IN_CODE",
+          "fields": {
+            "cmd": "LC_DATA_IN_CODE",
+            "cmdsize": 16,
+            "dataoff": 49736,
+            "datasize": 0
+          }
+        },
+        {
+          "index": 17,
+          "kind": "LC_CODE_SIGNATURE",
+          "fields": {
+            "cmd": "LC_CODE_SIGNATURE",
+            "cmdsize": 16,
+            "dataoff": 50320,
+            "datasize": 18720
+          }
+        }
+      ],
+      "total": 18,
+      "exhaustive": true,
+      "limitations": []
+    },
+    "dependencies": {
+      "items": [
+        {
+          "path": "libPaste.dylib",
+          "kind": "LC_ID_DYLIB",
+          "current_version": "0.0.0",
+          "compatibility_version": "0.0.0"
+        },
+        {
+          "path": "/usr/lib/libobjc.A.dylib",
+          "kind": "LC_LOAD_DYLIB",
+          "current_version": "228.0.0",
+          "compatibility_version": "1.0.0"
+        },
+        {
+          "path": "/System/Library/Frameworks/Combine.framework/Versions/A/Combine",
+          "kind": "LC_LOAD_DYLIB",
+          "current_version": "3023.0.0",
+          "compatibility_version": "1.0.0"
+        },
+        {
+          "path": "/usr/lib/libSystem.B.dylib",
+          "kind": "LC_LOAD_DYLIB",
+          "current_version": "1356.0.0",
+          "compatibility_version": "1.0.0"
+        }
+      ],
+      "total": 4,
+      "exhaustive": true,
+      "limitations": []
+    },
+    "imports": {
+      "items": [
+        {
+          "name": "_class_getClassMethod",
+          "address": null,
+          "weak": null,
+          "reexport": null,
+          "source": "libobjc"
+        },
+        {
+          "name": "_class_getInstanceMethod",
+          "address": null,
+          "weak": null,
+          "reexport": null,
+          "source": "libobjc"
+        },
+        {
+          "name": "_method_exchangeImplementations",
+          "address": null,
+          "weak": null,
+          "reexport": null,
+          "source": "libobjc"
+        },
+        {
+          "name": "_method_getImplementation",
+          "address": null,
+          "weak": null,
+          "reexport": null,
+          "source": "libobjc"
+        },
+        {
+          "name": "_method_setImplementation",
+          "address": null,
+          "weak": null,
+          "reexport": null,
+          "source": "libobjc"
+        },
+        {
+          "name": "_objc_getClass",
+          "address": null,
+          "weak": null,
+          "reexport": null,
+          "source": "libobjc"
+        },
+        {
+          "name": "_object_getClassName",
+          "address": null,
+          "weak": null,
+          "reexport": null,
+          "source": "libobjc"
+        },
+        {
+          "name": "_sel_registerName",
+          "address": null,
+          "weak": null,
+          "reexport": null,
+          "source": "libobjc"
+        },
+        {
+          "name": "_$s7Combine19CurrentValueSubjectC4sendyyxF",
+          "address": null,
+          "weak": null,
+          "reexport": null,
+          "source": "Combine"
+        },
+        {
+          "name": "___stderrp",
+          "address": null,
+          "weak": null,
+          "reexport": null,
+          "source": "libSystem"
+        },
+        {
+          "name": "_fprintf",
+          "address": null,
+          "weak": null,
+          "reexport": null,
+          "source": "libSystem"
+        },
+        {
+          "name": "_strcmp",
+          "address": null,
+          "weak": null,
+          "reexport": null,
+          "source": "libSystem"
+        }
+      ],
+      "total": null,
+      "exhaustive": false,
+      "limitations": [
+        "dyld_info textual imports may omit chained or toolchain-unsupported metadata."
+      ]
+    },
+    "exports": {
+      "items": [],
+      "total": null,
+      "exhaustive": false,
+      "limitations": [
+        "Merged nm/dyld_info results may be incomplete for stripped binaries."
+      ]
+    },
+    "segments": {
+      "items": [
+        {
+          "name": "__TEXT",
+          "vm_address": "0x0",
+          "vm_size": 16384,
+          "file_offset": 0,
+          "file_size": 16384,
+          "maximum_permissions": {
+            "read": true,
+            "write": false,
+            "execute": true,
+            "raw": "5"
+          },
+          "initial_permissions": {
+            "read": true,
+            "write": false,
+            "execute": true,
+            "raw": "5"
+          },
+          "sections": {
+            "items": [
+              {
+                "segment": "__TEXT",
+                "name": "__text",
+                "address": "0x5d8",
+                "size": 968,
+                "file_offset": 1496,
+                "alignment": 4,
+                "flags": [
+                  "2147484672"
+                ]
+              },
+              {
+                "segment": "__TEXT",
+                "name": "__stubs",
+                "address": "0x9a0",
+                "size": 132,
+                "file_offset": 2464,
+                "alignment": 4,
+                "flags": [
+                  "2147484680"
+                ]
+              },
+              {
+                "segment": "__TEXT",
+                "name": "__init_offsets",
+                "address": "0xa24",
+                "size": 4,
+                "file_offset": 2596,
+                "alignment": 4,
+                "flags": [
+                  "22"
+                ]
+              },
+              {
+                "segment": "__TEXT",
+                "name": "__cstring",
+                "address": "0xa28",
+                "size": 264,
+                "file_offset": 2600,
+                "alignment": 1,
+                "flags": [
+                  "2"
+                ]
+              },
+              {
+                "segment": "__TEXT",
+                "name": "__unwind_info",
+                "address": "0xb30",
+                "size": 104,
+                "file_offset": 2864,
+                "alignment": 4,
+                "flags": [
+                  "0"
+                ]
+              }
+            ],
+            "total": 5,
+            "exhaustive": true,
+            "limitations": []
+          }
+        },
+        {
+          "name": "__DATA_CONST",
+          "vm_address": "0x4000",
+          "vm_size": 16384,
+          "file_offset": 16384,
+          "file_size": 16384,
+          "maximum_permissions": {
+            "read": true,
+            "write": true,
+            "execute": false,
+            "raw": "3"
+          },
+          "initial_permissions": {
+            "read": true,
+            "write": true,
+            "execute": false,
+            "raw": "3"
+          },
+          "sections": {
+            "items": [
+              {
+                "segment": "__DATA_CONST",
+                "name": "__got",
+                "address": "0x4000",
+                "size": 96,
+                "file_offset": 16384,
+                "alignment": 8,
+                "flags": [
+                  "6"
+                ]
+              }
+            ],
+            "total": 1,
+            "exhaustive": true,
+            "limitations": []
+          }
+        },
+        {
+          "name": "__DATA",
+          "vm_address": "0x8000",
+          "vm_size": 16384,
+          "file_offset": 32768,
+          "file_size": 16384,
+          "maximum_permissions": {
+            "read": true,
+            "write": true,
+            "execute": false,
+            "raw": "3"
+          },
+          "initial_permissions": {
+            "read": true,
+            "write": true,
+            "execute": false,
+            "raw": "3"
+          },
+          "sections": {
+            "items": [
+              {
+                "segment": "__DATA",
+                "name": "__data",
+                "address": "0x8000",
+                "size": 109,
+                "file_offset": 32768,
+                "alignment": 1,
+                "flags": [
+                  "0"
+                ]
+              },
+              {
+                "segment": "__DATA",
+                "name": "__interpose",
+                "address": "0x8070",
+                "size": 16,
+                "file_offset": 32880,
+                "alignment": 8,
+                "flags": [
+                  "0"
+                ]
+              }
+            ],
+            "total": 2,
+            "exhaustive": true,
+            "limitations": []
+          }
+        },
+        {
+          "name": "__LINKEDIT",
+          "vm_address": "0xc000",
+          "vm_size": 32768,
+          "file_offset": 49152,
+          "file_size": 19888,
+          "maximum_permissions": {
+            "read": true,
+            "write": false,
+            "execute": false,
+            "raw": "1"
+          },
+          "initial_permissions": {
+            "read": true,
+            "write": false,
+            "execute": false,
+            "raw": "1"
+          },
+          "sections": {
+            "items": [],
+            "total": 0,
+            "exhaustive": true,
+            "limitations": []
+          }
+        }
+      ],
+      "total": 4,
+      "exhaustive": true,
+      "limitations": []
+    },
+    "provenance": [
+      {
+        "tool": "file",
+        "command": [
+          "/usr/bin/file",
+          "-b",
+          "$ARTIFACT"
+        ],
+        "tool_version": null,
+        "version_reason": "Tool exposes no uniform stable version flag; executable digest identifies it.",
+        "executable_sha256": "926f3fdd8fefe73b596806f6844a4d62b7c4e6bc5e247f6cbd22e5b6424881dd",
+        "exit": {
+          "code": 0,
+          "signal": null
+        },
+        "stdout_bytes": 442,
+        "stderr_bytes": 0
+      },
+      {
+        "tool": "lipo",
+        "command": [
+          "/Library/Developer/CommandLineTools/usr/bin/lipo",
+          "-detailed_info",
+          "$ARTIFACT"
+        ],
+        "tool_version": null,
+        "version_reason": "Tool exposes no uniform stable version flag; executable digest identifies it.",
+        "executable_sha256": "8cbcbb200dcfa62bc5f709f9cd374b8a5582741217c3d41ffa52d2849e8f24ad",
+        "exit": {
+          "code": 0,
+          "signal": null
+        },
+        "stdout_bytes": 423,
+        "stderr_bytes": 0
+      },
+      {
+        "tool": "otool",
+        "command": [
+          "/Library/Developer/CommandLineTools/usr/bin/llvm-otool",
+          "-h",
+          "-l",
+          "-arch",
+          "arm64",
+          "$ARTIFACT"
+        ],
+        "tool_version": null,
+        "version_reason": "Tool exposes no uniform stable version flag; executable digest identifies it.",
+        "executable_sha256": "9ea8e5cc5dc74779f49d731f5d27b8c23b07f5bab919425eaabe44899bbbffd9",
+        "exit": {
+          "code": 0,
+          "signal": null
+        },
+        "stdout_bytes": 5078,
+        "stderr_bytes": 0
+      },
+      {
+        "tool": "nm",
+        "command": [
+          "/Library/Developer/CommandLineTools/usr/bin/llvm-nm",
+          "-gjU",
+          "-arch",
+          "arm64",
+          "$ARTIFACT"
+        ],
+        "tool_version": null,
+        "version_reason": "Tool exposes no uniform stable version flag; executable digest identifies it.",
+        "executable_sha256": "cfa9a0e784e4195570f224001c9c46893d73023e4278ce6311cb907f8163a51a",
+        "exit": {
+          "code": 0,
+          "signal": null
+        },
+        "stdout_bytes": 0,
+        "stderr_bytes": 0
+      },
+      {
+        "tool": "dyld_info",
+        "command": [
+          "/Library/Developer/CommandLineTools/usr/bin/dyld_info",
+          "-imports",
+          "-arch",
+          "arm64",
+          "$ARTIFACT"
+        ],
+        "tool_version": null,
+        "version_reason": "Tool exposes no uniform stable version flag; executable digest identifies it.",
+        "executable_sha256": "3780630d644d412177d5f30345e01344f241f794aa19a7992d0ebf26e0dfef1d",
+        "exit": {
+          "code": 0,
+          "signal": null
+        },
+        "stdout_bytes": 699,
+        "stderr_bytes": 0
+      },
+      {
+        "tool": "dyld_info",
+        "command": [
+          "/Library/Developer/CommandLineTools/usr/bin/dyld_info",
+          "-exports",
+          "-arch",
+          "arm64",
+          "$ARTIFACT"
+        ],
+        "tool_version": null,
+        "version_reason": "Tool exposes no uniform stable version flag; executable digest identifies it.",
+        "executable_sha256": "3780630d644d412177d5f30345e01344f241f794aa19a7992d0ebf26e0dfef1d",
+        "exit": {
+          "code": 0,
+          "signal": null
+        },
+        "stdout_bytes": 104,
+        "stderr_bytes": 0
+      },
+      {
+        "tool": "dwarfdump",
+        "command": [
+          "/Library/Developer/CommandLineTools/usr/bin/llvm-dwarfdump",
+          "--uuid",
+          "--arch=arm64",
+          "$ARTIFACT"
+        ],
+        "tool_version": null,
+        "version_reason": "Tool exposes no uniform stable version flag; executable digest identifies it.",
+        "executable_sha256": "6faf4eca2225c75c139bd290468d258050cdfc8b1189a3b45ddca8c15962120d",
+        "exit": {
+          "code": 0,
+          "signal": null
+        },
+        "stdout_bytes": 105,
+        "stderr_bytes": 0
+      },
+      {
+        "tool": "vtool",
+        "command": [
+          "/Library/Developer/CommandLineTools/usr/bin/vtool",
+          "-show-build",
+          "-arch",
+          "arm64",
+          "$ARTIFACT"
+        ],
+        "tool_version": null,
+        "version_reason": "Tool exposes no uniform stable version flag; executable digest identifies it.",
+        "executable_sha256": "e47449662c8e737553c08bf9f24d9ff210fff007195ce84723a5edc023147854",
+        "exit": {
+          "code": 0,
+          "signal": null
+        },
+        "stdout_bytes": 220,
+        "stderr_bytes": 0
+      }
+    ],
+    "limitations": [
+      "Imports and exports combine dyld_info and nm; stripped or toolchain-hidden symbols may be absent.",
+      "vtool output is retained as provenance but only otool build metadata is normalized."
+    ]
+  },
+  "evidence_id": "ev_f2350a90ea9648b127f4dd9a57d2617803e3bb674a43ad3373bbd9f4fcbb6fd7",
+  "evidence": {
+    "evidence_id": "ev_f2350a90ea9648b127f4dd9a57d2617803e3bb674a43ad3373bbd9f4fcbb6fd7",
+    "subject": {
+      "name": "libPaste.dylib",
+      "digest": {
+        "sha256": "af244236383c875acd5145cb6c8c4a260b40be0190c534d0a50e8450a1307946"
+      },
+      "format": "mach-o",
+      "architecture": "arm64",
+      "local_path": "/Applications/Paste.app/Contents/MacOS/libPaste.dylib"
+    },
+    "provider": {
+      "id": "native-macos",
+      "name": "macOS native inspection utilities",
+      "version": null
+    },
+    "predicate_type": "rea.analysis",
+    "operation": "inspect_macho",
+    "parameters": {},
+    "raw_result": {
+      "provenance": [
+        {
+          "tool": "file",
+          "command": [
+            "/usr/bin/file",
+            "-b",
+            "$ARTIFACT"
+          ],
+          "tool_version": null,
+          "version_reason": "Tool exposes no uniform stable version flag; executable digest identifies it.",
+          "executable_sha256": "926f3fdd8fefe73b596806f6844a4d62b7c4e6bc5e247f6cbd22e5b6424881dd",
+          "exit": {
+            "code": 0,
+            "signal": null
+          },
+          "stdout_bytes": 442,
+          "stderr_bytes": 0
+        },
+        {
+          "tool": "lipo",
+          "command": [
+            "/Library/Developer/CommandLineTools/usr/bin/lipo",
+            "-detailed_info",
+            "$ARTIFACT"
+          ],
+          "tool_version": null,
+          "version_reason": "Tool exposes no uniform stable version flag; executable digest identifies it.",
+          "executable_sha256": "8cbcbb200dcfa62bc5f709f9cd374b8a5582741217c3d41ffa52d2849e8f24ad",
+          "exit": {
+            "code": 0,
+            "signal": null
+          },
+          "stdout_bytes": 423,
+          "stderr_bytes": 0
+        },
+        {
+          "tool": "otool",
+          "command": [
+            "/Library/Developer/CommandLineTools/usr/bin/llvm-otool",
+            "-h",
+            "-l",
+            "-arch",
+            "arm64",
+            "$ARTIFACT"
+          ],
+          "tool_version": null,
+          "version_reason": "Tool exposes no uniform stable version flag; executable digest identifies it.",
+          "executable_sha256": "9ea8e5cc5dc74779f49d731f5d27b8c23b07f5bab919425eaabe44899bbbffd9",
+          "exit": {
+            "code": 0,
+            "signal": null
+          },
+          "stdout_bytes": 5078,
+          "stderr_bytes": 0
+        },
+        {
+          "tool": "nm",
+          "command": [
+            "/Library/Developer/CommandLineTools/usr/bin/llvm-nm",
+            "-gjU",
+            "-arch",
+            "arm64",
+            "$ARTIFACT"
+          ],
+          "tool_version": null,
+          "version_reason": "Tool exposes no uniform stable version flag; executable digest identifies it.",
+          "executable_sha256": "cfa9a0e784e4195570f224001c9c46893d73023e4278ce6311cb907f8163a51a",
+          "exit": {
+            "code": 0,
+            "signal": null
+          },
+          "stdout_bytes": 0,
+          "stderr_bytes": 0
+        },
+        {
+          "tool": "dyld_info",
+          "command": [
+            "/Library/Developer/CommandLineTools/usr/bin/dyld_info",
+            "-imports",
+            "-arch",
+            "arm64",
+            "$ARTIFACT"
+          ],
+          "tool_version": null,
+          "version_reason": "Tool exposes no uniform stable version flag; executable digest identifies it.",
+          "executable_sha256": "3780630d644d412177d5f30345e01344f241f794aa19a7992d0ebf26e0dfef1d",
+          "exit": {
+            "code": 0,
+            "signal": null
+          },
+          "stdout_bytes": 699,
+          "stderr_bytes": 0
+        },
+        {
+          "tool": "dyld_info",
+          "command": [
+            "/Library/Developer/CommandLineTools/usr/bin/dyld_info",
+            "-exports",
+            "-arch",
+            "arm64",
+            "$ARTIFACT"
+          ],
+          "tool_version": null,
+          "version_reason": "Tool exposes no uniform stable version flag; executable digest identifies it.",
+          "executable_sha256": "3780630d644d412177d5f30345e01344f241f794aa19a7992d0ebf26e0dfef1d",
+          "exit": {
+            "code": 0,
+            "signal": null
+          },
+          "stdout_bytes": 104,
+          "stderr_bytes": 0
+        },
+        {
+          "tool": "dwarfdump",
+          "command": [
+            "/Library/Developer/CommandLineTools/usr/bin/llvm-dwarfdump",
+            "--uuid",
+            "--arch=arm64",
+            "$ARTIFACT"
+          ],
+          "tool_version": null,
+          "version_reason": "Tool exposes no uniform stable version flag; executable digest identifies it.",
+          "executable_sha256": "6faf4eca2225c75c139bd290468d258050cdfc8b1189a3b45ddca8c15962120d",
+          "exit": {
+            "code": 0,
+            "signal": null
+          },
+          "stdout_bytes": 105,
+          "stderr_bytes": 0
+        },
+        {
+          "tool": "vtool",
+          "command": [
+            "/Library/Developer/CommandLineTools/usr/bin/vtool",
+            "-show-build",
+            "-arch",
+            "arm64",
+            "$ARTIFACT"
+          ],
+          "tool_version": null,
+          "version_reason": "Tool exposes no uniform stable version flag; executable digest identifies it.",
+          "executable_sha256": "e47449662c8e737553c08bf9f24d9ff210fff007195ce84723a5edc023147854",
+          "exit": {
+            "code": 0,
+            "signal": null
+          },
+          "stdout_bytes": 220,
+          "stderr_bytes": 0
+        }
+      ]
+    },
+    "normalized_result": {
+      "format": "mach-o",
+      "endian": null,
+      "word_size": 64,
+      "file_type": "6",
+      "flags": [
+        "0x00100085"
+      ],
+      "uuid": "64FEF5E9-AB2B-38BB-928E-FBDD7B731981",
+      "entrypoints": {
+        "items": [],
+        "total": 0,
+        "exhaustive": true,
+        "limitations": []
+      },
+      "architectures": {
+        "items": [
+          {
+            "name": "x86_64",
+            "cpu_type": "CPU_TYPE_X86_64",
+            "cpu_subtype": "CPU_SUBTYPE_X86_64_ALL",
+            "file_offset": 16384,
+            "size": 31888,
+            "alignment": 16384
+          },
+          {
+            "name": "arm64",
+            "cpu_type": "CPU_TYPE_ARM64",
+            "cpu_subtype": "CPU_SUBTYPE_ARM64_ALL",
+            "file_offset": 49152,
+            "size": 69040,
+            "alignment": 16384
+          }
+        ],
+        "total": 2,
+        "exhaustive": true,
+        "limitations": []
+      },
+      "build_metadata": {
+        "items": [
+          {
+            "platform": "1",
+            "minimum_os": "13.0",
+            "sdk": "26.0",
+            "tools": [
+              {
+                "name": "3",
+                "version": "1221.4"
+              }
+            ]
+          }
+        ],
+        "total": 1,
+        "exhaustive": true,
+        "limitations": []
+      },
+      "load_commands": {
+        "items": [
+          {
+            "index": 0,
+            "kind": "LC_SEGMENT_64",
+            "fields": {
+              "cmd": "LC_SEGMENT_64",
+              "cmdsize": 472,
+              "segname": "__TEXT",
+              "vmaddr": 0,
+              "vmsize": 16384,
+              "fileoff": 0,
+              "filesize": 16384,
+              "maxprot": 5,
+              "initprot": 5,
+              "nsects": 5,
+              "flags": 0
+            }
+          },
+          {
+            "index": 1,
+            "kind": "LC_SEGMENT_64",
+            "fields": {
+              "cmd": "LC_SEGMENT_64",
+              "cmdsize": 152,
+              "segname": "__DATA_CONST",
+              "vmaddr": 16384,
+              "vmsize": 16384,
+              "fileoff": 16384,
+              "filesize": 16384,
+              "maxprot": 3,
+              "initprot": 3,
+              "nsects": 1,
+              "flags": 16
+            }
+          },
+          {
+            "index": 2,
+            "kind": "LC_SEGMENT_64",
+            "fields": {
+              "cmd": "LC_SEGMENT_64",
+              "cmdsize": 232,
+              "segname": "__DATA",
+              "vmaddr": 32768,
+              "vmsize": 16384,
+              "fileoff": 32768,
+              "filesize": 16384,
+              "maxprot": 3,
+              "initprot": 3,
+              "nsects": 2,
+              "flags": 0
+            }
+          },
+          {
+            "index": 3,
+            "kind": "LC_SEGMENT_64",
+            "fields": {
+              "cmd": "LC_SEGMENT_64",
+              "cmdsize": 72,
+              "segname": "__LINKEDIT",
+              "vmaddr": 49152,
+              "vmsize": 32768,
+              "fileoff": 49152,
+              "filesize": 19888,
+              "maxprot": 1,
+              "initprot": 1,
+              "nsects": 0,
+              "flags": 0
+            }
+          },
+          {
+            "index": 4,
+            "kind": "LC_ID_DYLIB",
+            "fields": {
+              "cmd": "LC_ID_DYLIB",
+              "cmdsize": 40,
+              "name": "libPaste.dylib (offset 24)",
+              "time stamp": "1759756331 Mon Oct  6 21:12:11 2025",
+              "current version": "0.0.0",
+              "compatibility version": "0.0.0"
+            }
+          },
+          {
+            "index": 5,
+            "kind": "LC_DYLD_CHAINED_FIXUPS",
+            "fields": {
+              "cmd": "LC_DYLD_CHAINED_FIXUPS",
+              "cmdsize": 16,
+              "dataoff": 49152,
+              "datasize": 416
+            }
+          },
+          {
+            "index": 6,
+            "kind": "LC_DYLD_EXPORTS_TRIE",
+            "fields": {
+              "cmd": "LC_DYLD_EXPORTS_TRIE",
+              "cmdsize": 16,
+              "dataoff": 49568,
+              "datasize": 152
+            }
+          },
+          {
+            "index": 7,
+            "kind": "LC_SYMTAB",
+            "fields": {
+              "cmd": "LC_SYMTAB",
+              "cmdsize": 24,
+              "symoff": 49736,
+              "nsyms": 13,
+              "stroff": 50040,
+              "strsize": 280
+            }
+          },
+          {
+            "index": 8,
+            "kind": "LC_DYSYMTAB",
+            "fields": {
+              "cmd": "LC_DYSYMTAB",
+              "cmdsize": 80,
+              "ilocalsym": 0,
+              "nlocalsym": 1,
+              "iextdefsym": 1,
+              "nextdefsym": 0,
+              "iundefsym": 1,
+              "nundefsym": 12,
+              "tocoff": 0,
+              "ntoc": 0,
+              "modtaboff": 0,
+              "nmodtab": 0,
+              "extrefsymoff": 0,
+              "nextrefsyms": 0,
+              "indirectsymoff": 49944,
+              "nindirectsyms": 23,
+              "extreloff": 0,
+              "nextrel": 0,
+              "locreloff": 0,
+              "nlocrel": 0
+            }
+          },
+          {
+            "index": 9,
+            "kind": "LC_UUID",
+            "fields": {
+              "cmd": "LC_UUID",
+              "cmdsize": 24,
+              "uuid": "64FEF5E9-AB2B-38BB-928E-FBDD7B731981"
+            }
+          },
+          {
+            "index": 10,
+            "kind": "LC_BUILD_VERSION",
+            "fields": {
+              "cmd": "LC_BUILD_VERSION",
+              "cmdsize": 32,
+              "platform": 1,
+              "minos": "13.0",
+              "sdk": "26.0",
+              "ntools": 1,
+              "tool": 3,
+              "version": "1221.4"
+            }
+          },
+          {
+            "index": 11,
+            "kind": "LC_SOURCE_VERSION",
+            "fields": {
+              "cmd": "LC_SOURCE_VERSION",
+              "cmdsize": 16,
+              "version": "0.0"
+            }
+          },
+          {
+            "index": 12,
+            "kind": "LC_LOAD_DYLIB",
+            "fields": {
+              "cmd": "LC_LOAD_DYLIB",
+              "cmdsize": 56,
+              "name": "/usr/lib/libobjc.A.dylib (offset 24)",
+              "time stamp": "2 Thu Jan  1 07:30:02 1970",
+              "current version": "228.0.0",
+              "compatibility version": "1.0.0"
+            }
+          },
+          {
+            "index": 13,
+            "kind": "LC_LOAD_DYLIB",
+            "fields": {
+              "cmd": "LC_LOAD_DYLIB",
+              "cmdsize": 88,
+              "name": "/System/Library/Frameworks/Combine.framework/Versions/A/Combine (offset 24)",
+              "time stamp": "2 Thu Jan  1 07:30:02 1970",
+              "current version": "3023.0.0",
+              "compatibility version": "1.0.0"
+            }
+          },
+          {
+            "index": 14,
+            "kind": "LC_LOAD_DYLIB",
+            "fields": {
+              "cmd": "LC_LOAD_DYLIB",
+              "cmdsize": 56,
+              "name": "/usr/lib/libSystem.B.dylib (offset 24)",
+              "time stamp": "2 Thu Jan  1 07:30:02 1970",
+              "current version": "1356.0.0",
+              "compatibility version": "1.0.0"
+            }
+          },
+          {
+            "index": 15,
+            "kind": "LC_FUNCTION_STARTS",
+            "fields": {
+              "cmd": "LC_FUNCTION_STARTS",
+              "cmdsize": 16,
+              "dataoff": 49720,
+              "datasize": 16
+            }
+          },
+          {
+            "index": 16,
+            "kind": "LC_DATA_IN_CODE",
+            "fields": {
+              "cmd": "LC_DATA_IN_CODE",
+              "cmdsize": 16,
+              "dataoff": 49736,
+              "datasize": 0
+            }
+          },
+          {
+            "index": 17,
+            "kind": "LC_CODE_SIGNATURE",
+            "fields": {
+              "cmd": "LC_CODE_SIGNATURE",
+              "cmdsize": 16,
+              "dataoff": 50320,
+              "datasize": 18720
+            }
+          }
+        ],
+        "total": 18,
+        "exhaustive": true,
+        "limitations": []
+      },
+      "dependencies": {
+        "items": [
+          {
+            "path": "libPaste.dylib",
+            "kind": "LC_ID_DYLIB",
+            "current_version": "0.0.0",
+            "compatibility_version": "0.0.0"
+          },
+          {
+            "path": "/usr/lib/libobjc.A.dylib",
+            "kind": "LC_LOAD_DYLIB",
+            "current_version": "228.0.0",
+            "compatibility_version": "1.0.0"
+          },
+          {
+            "path": "/System/Library/Frameworks/Combine.framework/Versions/A/Combine",
+            "kind": "LC_LOAD_DYLIB",
+            "current_version": "3023.0.0",
+            "compatibility_version": "1.0.0"
+          },
+          {
+            "path": "/usr/lib/libSystem.B.dylib",
+            "kind": "LC_LOAD_DYLIB",
+            "current_version": "1356.0.0",
+            "compatibility_version": "1.0.0"
+          }
+        ],
+        "total": 4,
+        "exhaustive": true,
+        "limitations": []
+      },
+      "imports": {
+        "items": [
+          {
+            "name": "_class_getClassMethod",
+            "address": null,
+            "weak": null,
+            "reexport": null,
+            "source": "libobjc"
+          },
+          {
+            "name": "_class_getInstanceMethod",
+            "address": null,
+            "weak": null,
+            "reexport": null,
+            "source": "libobjc"
+          },
+          {
+            "name": "_method_exchangeImplementations",
+            "address": null,
+            "weak": null,
+            "reexport": null,
+            "source": "libobjc"
+          },
+          {
+            "name": "_method_getImplementation",
+            "address": null,
+            "weak": null,
+            "reexport": null,
+            "source": "libobjc"
+          },
+          {
+            "name": "_method_setImplementation",
+            "address": null,
+            "weak": null,
+            "reexport": null,
+            "source": "libobjc"
+          },
+          {
+            "name": "_objc_getClass",
+            "address": null,
+            "weak": null,
+            "reexport": null,
+            "source": "libobjc"
+          },
+          {
+            "name": "_object_getClassName",
+            "address": null,
+            "weak": null,
+            "reexport": null,
+            "source": "libobjc"
+          },
+          {
+            "name": "_sel_registerName",
+            "address": null,
+            "weak": null,
+            "reexport": null,
+            "source": "libobjc"
+          },
+          {
+            "name": "_$s7Combine19CurrentValueSubjectC4sendyyxF",
+            "address": null,
+            "weak": null,
+            "reexport": null,
+            "source": "Combine"
+          },
+          {
+            "name": "___stderrp",
+            "address": null,
+            "weak": null,
+            "reexport": null,
+            "source": "libSystem"
+          },
+          {
+            "name": "_fprintf",
+            "address": null,
+            "weak": null,
+            "reexport": null,
+            "source": "libSystem"
+          },
+          {
+            "name": "_strcmp",
+            "address": null,
+            "weak": null,
+            "reexport": null,
+            "source": "libSystem"
+          }
+        ],
+        "total": null,
+        "exhaustive": false,
+        "limitations": [
+          "dyld_info textual imports may omit chained or toolchain-unsupported metadata."
+        ]
+      },
+      "exports": {
+        "items": [],
+        "total": null,
+        "exhaustive": false,
+        "limitations": [
+          "Merged nm/dyld_info results may be incomplete for stripped binaries."
+        ]
+      },
+      "segments": {
+        "items": [
+          {
+            "name": "__TEXT",
+            "vm_address": "0x0",
+            "vm_size": 16384,
+            "file_offset": 0,
+            "file_size": 16384,
+            "maximum_permissions": {
+              "read": true,
+              "write": false,
+              "execute": true,
+              "raw": "5"
+            },
+            "initial_permissions": {
+              "read": true,
+              "write": false,
+              "execute": true,
+              "raw": "5"
+            },
+            "sections": {
+              "items": [
+                {
+                  "segment": "__TEXT",
+                  "name": "__text",
+                  "address": "0x5d8",
+                  "size": 968,
+                  "file_offset": 1496,
+                  "alignment": 4,
+                  "flags": [
+                    "2147484672"
+                  ]
+                },
+                {
+                  "segment": "__TEXT",
+                  "name": "__stubs",
+                  "address": "0x9a0",
+                  "size": 132,
+                  "file_offset": 2464,
+                  "alignment": 4,
+                  "flags": [
+                    "2147484680"
+                  ]
+                },
+                {
+                  "segment": "__TEXT",
+                  "name": "__init_offsets",
+                  "address": "0xa24",
+                  "size": 4,
+                  "file_offset": 2596,
+                  "alignment": 4,
+                  "flags": [
+                    "22"
+                  ]
+                },
+                {
+                  "segment": "__TEXT",
+                  "name": "__cstring",
+                  "address": "0xa28",
+                  "size": 264,
+                  "file_offset": 2600,
+                  "alignment": 1,
+                  "flags": [
+                    "2"
+                  ]
+                },
+                {
+                  "segment": "__TEXT",
+                  "name": "__unwind_info",
+                  "address": "0xb30",
+                  "size": 104,
+                  "file_offset": 2864,
+                  "alignment": 4,
+                  "flags": [
+                    "0"
+                  ]
+                }
+              ],
+              "total": 5,
+              "exhaustive": true,
+              "limitations": []
+            }
+          },
+          {
+            "name": "__DATA_CONST",
+            "vm_address": "0x4000",
+            "vm_size": 16384,
+            "file_offset": 16384,
+            "file_size": 16384,
+            "maximum_permissions": {
+              "read": true,
+              "write": true,
+              "execute": false,
+              "raw": "3"
+            },
+            "initial_permissions": {
+              "read": true,
+              "write": true,
+              "execute": false,
+              "raw": "3"
+            },
+            "sections": {
+              "items": [
+                {
+                  "segment": "__DATA_CONST",
+                  "name": "__got",
+                  "address": "0x4000",
+                  "size": 96,
+                  "file_offset": 16384,
+                  "alignment": 8,
+                  "flags": [
+                    "6"
+                  ]
+                }
+              ],
+              "total": 1,
+              "exhaustive": true,
+              "limitations": []
+            }
+          },
+          {
+            "name": "__DATA",
+            "vm_address": "0x8000",
+            "vm_size": 16384,
+            "file_offset": 32768,
+            "file_size": 16384,
+            "maximum_permissions": {
+              "read": true,
+              "write": true,
+              "execute": false,
+              "raw": "3"
+            },
+            "initial_permissions": {
+              "read": true,
+              "write": true,
+              "execute": false,
+              "raw": "3"
+            },
+            "sections": {
+              "items": [
+                {
+                  "segment": "__DATA",
+                  "name": "__data",
+                  "address": "0x8000",
+                  "size": 109,
+                  "file_offset": 32768,
+                  "alignment": 1,
+                  "flags": [
+                    "0"
+                  ]
+                },
+                {
+                  "segment": "__DATA",
+                  "name": "__interpose",
+                  "address": "0x8070",
+                  "size": 16,
+                  "file_offset": 32880,
+                  "alignment": 8,
+                  "flags": [
+                    "0"
+                  ]
+                }
+              ],
+              "total": 2,
+              "exhaustive": true,
+              "limitations": []
+            }
+          },
+          {
+            "name": "__LINKEDIT",
+            "vm_address": "0xc000",
+            "vm_size": 32768,
+            "file_offset": 49152,
+            "file_size": 19888,
+            "maximum_permissions": {
+              "read": true,
+              "write": false,
+              "execute": false,
+              "raw": "1"
+            },
+            "initial_permissions": {
+              "read": true,
+              "write": false,
+              "execute": false,
+              "raw": "1"
+            },
+            "sections": {
+              "items": [],
+              "total": 0,
+              "exhaustive": true,
+              "limitations": []
+            }
+          }
+        ],
+        "total": 4,
+        "exhaustive": true,
+        "limitations": []
+      },
+      "provenance": [
+        {
+          "tool": "file",
+          "command": [
+            "/usr/bin/file",
+            "-b",
+            "$ARTIFACT"
+          ],
+          "tool_version": null,
+          "version_reason": "Tool exposes no uniform stable version flag; executable digest identifies it.",
+          "executable_sha256": "926f3fdd8fefe73b596806f6844a4d62b7c4e6bc5e247f6cbd22e5b6424881dd",
+          "exit": {
+            "code": 0,
+            "signal": null
+          },
+          "stdout_bytes": 442,
+          "stderr_bytes": 0
+        },
+        {
+          "tool": "lipo",
+          "command": [
+            "/Library/Developer/CommandLineTools/usr/bin/lipo",
+            "-detailed_info",
+            "$ARTIFACT"
+          ],
+          "tool_version": null,
+          "version_reason": "Tool exposes no uniform stable version flag; executable digest identifies it.",
+          "executable_sha256": "8cbcbb200dcfa62bc5f709f9cd374b8a5582741217c3d41ffa52d2849e8f24ad",
+          "exit": {
+            "code": 0,
+            "signal": null
+          },
+          "stdout_bytes": 423,
+          "stderr_bytes": 0
+        },
+        {
+          "tool": "otool",
+          "command": [
+            "/Library/Developer/CommandLineTools/usr/bin/llvm-otool",
+            "-h",
+            "-l",
+            "-arch",
+            "arm64",
+            "$ARTIFACT"
+          ],
+          "tool_version": null,
+          "version_reason": "Tool exposes no uniform stable version flag; executable digest identifies it.",
+          "executable_sha256": "9ea8e5cc5dc74779f49d731f5d27b8c23b07f5bab919425eaabe44899bbbffd9",
+          "exit": {
+            "code": 0,
+            "signal": null
+          },
+          "stdout_bytes": 5078,
+          "stderr_bytes": 0
+        },
+        {
+          "tool": "nm",
+          "command": [
+            "/Library/Developer/CommandLineTools/usr/bin/llvm-nm",
+            "-gjU",
+            "-arch",
+            "arm64",
+            "$ARTIFACT"
+          ],
+          "tool_version": null,
+          "version_reason": "Tool exposes no uniform stable version flag; executable digest identifies it.",
+          "executable_sha256": "cfa9a0e784e4195570f224001c9c46893d73023e4278ce6311cb907f8163a51a",
+          "exit": {
+            "code": 0,
+            "signal": null
+          },
+          "stdout_bytes": 0,
+          "stderr_bytes": 0
+        },
+        {
+          "tool": "dyld_info",
+          "command": [
+            "/Library/Developer/CommandLineTools/usr/bin/dyld_info",
+            "-imports",
+            "-arch",
+            "arm64",
+            "$ARTIFACT"
+          ],
+          "tool_version": null,
+          "version_reason": "Tool exposes no uniform stable version flag; executable digest identifies it.",
+          "executable_sha256": "3780630d644d412177d5f30345e01344f241f794aa19a7992d0ebf26e0dfef1d",
+          "exit": {
+            "code": 0,
+            "signal": null
+          },
+          "stdout_bytes": 699,
+          "stderr_bytes": 0
+        },
+        {
+          "tool": "dyld_info",
+          "command": [
+            "/Library/Developer/CommandLineTools/usr/bin/dyld_info",
+            "-exports",
+            "-arch",
+            "arm64",
+            "$ARTIFACT"
+          ],
+          "tool_version": null,
+          "version_reason": "Tool exposes no uniform stable version flag; executable digest identifies it.",
+          "executable_sha256": "3780630d644d412177d5f30345e01344f241f794aa19a7992d0ebf26e0dfef1d",
+          "exit": {
+            "code": 0,
+            "signal": null
+          },
+          "stdout_bytes": 104,
+          "stderr_bytes": 0
+        },
+        {
+          "tool": "dwarfdump",
+          "command": [
+            "/Library/Developer/CommandLineTools/usr/bin/llvm-dwarfdump",
+            "--uuid",
+            "--arch=arm64",
+            "$ARTIFACT"
+          ],
+          "tool_version": null,
+          "version_reason": "Tool exposes no uniform stable version flag; executable digest identifies it.",
+          "executable_sha256": "6faf4eca2225c75c139bd290468d258050cdfc8b1189a3b45ddca8c15962120d",
+          "exit": {
+            "code": 0,
+            "signal": null
+          },
+          "stdout_bytes": 105,
+          "stderr_bytes": 0
+        },
+        {
+          "tool": "vtool",
+          "command": [
+            "/Library/Developer/CommandLineTools/usr/bin/vtool",
+            "-show-build",
+            "-arch",
+            "arm64",
+            "$ARTIFACT"
+          ],
+          "tool_version": null,
+          "version_reason": "Tool exposes no uniform stable version flag; executable digest identifies it.",
+          "executable_sha256": "e47449662c8e737553c08bf9f24d9ff210fff007195ce84723a5edc023147854",
+          "exit": {
+            "code": 0,
+            "signal": null
+          },
+          "stdout_bytes": 220,
+          "stderr_bytes": 0
+        }
+      ],
+      "limitations": [
+        "Imports and exports combine dyld_info and nm; stripped or toolchain-hidden symbols may be absent.",
+        "vtool output is retained as provenance but only otool build metadata is normalized."
+      ]
+    },
+    "confidence": "observed",
+    "authority": "shipped-artifact",
+    "environment": null,
+    "limitations": [
+      "Imports and exports combine dyld_info and nm; stripped or toolchain-hidden symbols may be absent.",
+      "vtool output is retained as provenance but only otool build metadata is normalized."
+    ],
+    "locations": [
+      {
+        "kind": "file-offset-range",
+        "start": 16384,
+        "end": 48272
+      },
+      {
+        "kind": "file-offset-range",
+        "start": 49152,
+        "end": 118192
+      },
+      {
+        "kind": "file-offset-range",
+        "start": 49152,
+        "end": 65536
+      },
+      {
+        "kind": "file-offset-range",
+        "start": 65536,
+        "end": 81920
+      },
+      {
+        "kind": "file-offset-range",
+        "start": 81920,
+        "end": 98304
+      },
+      {
+        "kind": "file-offset-range",
+        "start": 98304,
+        "end": 118192
+      }
+    ],
+    "evidence_links": []
+  }
+}

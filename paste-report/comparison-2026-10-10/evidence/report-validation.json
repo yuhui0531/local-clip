@@ -1,0 +1,29 @@
+{
+  "recordedUTC": "2026-10-10T13:18:42.024211+00:00",
+  "type": "仅报告一致性与翻译检查；未执行产品测试或运行验收",
+  "reportLanguage": "zh-CN",
+  "matrixRows": 76,
+  "uniqueIDs": 76,
+  "columnsValid": true,
+  "undefinedReferences": [],
+  "missingLocalReferenceFiles": [],
+  "changedAuditedFiles": [],
+  "auditedFileCount": 37,
+  "runtimeExecuted": false,
+  "testsExecuted": false,
+  "originalIndependentSourceReview": {
+    "agent": "localclip_gap_audit",
+    "result": "No substantive source-fact or evidence-boundary error; responsive-header compact wording refined",
+    "productExecution": false
+  },
+  "translationValidation": {
+    "matrixIDsAndOrderPreserved": true,
+    "referenceDefinitionsPreserved": true,
+    "rowNumericDifferences": [],
+    "note": "原始独立审查针对英文报告的源码结论；本次中文转换未另行执行独立审查或产品测试"
+  },
+  "previousEnglishReportSHA256": "63a071edebf44fa57eb9bdecfc890bb969f1f5b9b426b3b29afc5aa47744c786",
+  "previousEnglishCSV_SHA256": "b3a1908a7ffb0cf6981d6a44d182da68e11b43a394a3a15a6f1063d06ca19115",
+  "reportSHA256": "1add5866a2509eed1f7ca3d1ed66b0bae2ba500eff232e0dbc28bd4e76f30ac3",
+  "csvSHA256": "2c6c7d4c3b9e929e76f90adf1524877655683cea4b096069763df551c775a68d"
+}

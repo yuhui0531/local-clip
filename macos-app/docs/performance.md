@@ -1,0 +1,139 @@
+# 性能实测与未达标项
+
+> 当前交付0.1.14（构建15）：历史卡片可拖到自定义分类标签，拖入高亮，复用持久化归属。保留同行类型分类/＋编辑及380pt底部布局；无升级兼容代码。本轮仅Release构建/严格签名检查，未启动应用或执行功能、GUI、SQLite、性能测试。
+
+实际环境macOS15.7.5(24G624)/M2 Max12核/32GB/Swift6.2.4，Release优化编译，200ms采集周期。单调ContinuousClock；P95=排序第ceil(0.95×n)项。保存原始样本、失败和慢样本，不删离群值。
+
+## 预读优化后的服务层（最新已完成测量）
+
+[原始样本](../evidence/performance/20261010T021901Z-prefetch/service-results.json)、[完整日志](../evidence/performance/20261010T021901Z-prefetch/benchmark.log)、[固定数据](../evidence/performance/20261010T021901Z-prefetch/fixture-manifest.json)、[新图](../evidence/performance/20261010T021901Z-prefetch/new-image-manifest.json)、[配额](../evidence/performance/20261010T021901Z-prefetch/quota-manifest.json)。Release生产服务测试与包装退出0，45.157秒；同一个v2基准，全部样本保留。计时不含轮询、输入、防抖和界面绘制。
+
+| 实际计时边界 | 样本 | P95 ms | 最大 ms | PRD端到端证明 |
+|---|---:|---:|---:|---|
+| search调用到返回 | 200 | 26.055917 | 104.161667 | 否 |
+| 第一页查询到返回 | 200 | 1.655458 | 3.096166 | 否 |
+| 新文本到持久提交返回 | 200 | 122.093375 | 167.926000 | 否 |
+| 真正新编码图片到持久提交返回 | 20 | 141.462542 | 142.499875 | 否 |
+| 独立近配额新增到替换返回 | 30 | 550.153458 | 647.568708 | 否 |
+
+诊断发现新APFS克隆inode的完整quick_check逐页冷读成本。[只读诊断及新clone原样本](../evidence/performance/mmap-validation-20261010/result.json)中，新clone mmap192MiB P95为442.237125ms；增到512MiB仍为425.399958ms；保持192MiB并在计时内顺序预读后为74.382250ms。生产仅对32MiB及以上的克隆候选以O_RDONLY顺序预读，用户态固定1MiB缓冲，内核缓存另外计量；仍完整执行quick_check/FK、FULL同步、物理配额检查和原子替换，没有启用未经证明的普通事务路径。诊断计时不能代替生产样本。
+
+与预读前相同v2服务样本相比，文本P95从488.822541降至122.093375ms，新图从494.903875降至141.462542ms，近配额从1038.943458降至550.153458ms。服务瓶颈已改善，**复制到可见P95仍未完成实测，AC16不标通过**；近配额服务P95本身大于500ms，若采用统一500ms预算则该路径仍超限。后续仅移动空fault检查至预读前并增加目标提示；最新功能回归52发现/50功能通过/2条件性能跳过，[真实EACCES失败保旧证据](../evidence/automated/20261010-102835-kQvtAz/swift-test.log)及[独立审查](../evidence/independent/20261010-prefetch-access-failure/report.md)保留。此性能二进制是预读优化运行时版本，后续变更不冒充已重测。
+
+当前源码Release命名板压力与10分钟空闲复测已完成，详见下方最新系统结果。用户已解锁，Safari目标与接收已补证，历史UI可重开恢复。尚未执行符合次数/起止定义的GUI计时；设置绑定失败及其他工具超时如实单列，不能将服务时间或自动化往返时间冒充绘制时间。
+
+## 预读前服务层（保留历史测量）
+
+[20261010T014419Z-final-new-images原始结果](../evidence/performance/20261010T014419Z-final-new-images/service-results.json)、[完整日志](../evidence/performance/20261010T014419Z-final-new-images/benchmark.log)、[固定数据manifest](../evidence/performance/20261010T014419Z-final-new-images/fixture-manifest.json)、[新图片manifest](../evidence/performance/20261010T014419Z-final-new-images/new-image-manifest.json)、[配额manifest](../evidence/performance/20261010T014419Z-final-new-images/quota-manifest.json)。Release，测试及包装退出0，138.749秒。为预读优化前的生产源码快照，`.build-bench-postfix`独立scratch；不是GUI进程。
+
+| 实际计时边界 | 样本 | P95 ms | 最大 ms | 是否证明PRD端到端达标 |
+|---|---:|---:|---:|---|
+| store.search调用→返回 | 200 | 26.841125 | 113.096625 | 否，未含60ms防抖/输入/绘制 |
+| store空查询→第一页返回 | 200 | 2.016333 | 2.342416 | 否，不是快捷键→可交互 |
+| 新文本ingest→持久候选提交返回 | 200 | 488.822541 | 2765.068375 | 否，未含200ms轮询/读取/显示 |
+| 新真实编码图片ingest→持久提交返回 | 20 | 494.903875 | 498.539709 | 否，确为新图片，仍未含轮询/显示 |
+| 独立近配额新增→候选替换返回 | 30 | 1038.943458 | 1703.057625 | 否，未含UI，保留所有慢样本 |
+
+基准fixture v2 seed0xC11F：10000文本、9000/900/100长度分布，原字节21831290；100张不同1920×1080图片PNG20/TIFF10/JPEG70，实际编码149514415字节（142.59MiB），SQLite237158400字节。比约100MiB目标更大，明确记录偏差。数据hash `572cd3b9847c8272b7b860b38f410d7930a09f44341b754f055f1c4b72a2f1b5`；fixture-store未修改，工作在复制的working-store。
+
+本次20图样本确为新插入：不同seed，PNG/TIFF/JPEG都有，1920×1080，原始合计30296626字节；编码在计时前完成，逐次assert inserted，不把去重复采作为新图。生成器 `localclip-new-image-samples-v1` 和逐张hash见manifest。
+
+独立500MiB quota-store起始504512512字节=96.228125%，收藏原载荷209715200字节；5收藏+7普通各40MiB不同合成BLOB，新增30×20MiB。这些配额BLOB不是可解码图像，不冒充图片负载。
+
+此历史版本普通安全提交约489ms/新图495ms，200ms采集轮询与UI绘制还需额外时间，**复制到可见预算未解决，AC16未通过**。文本最大慢样本2765ms保留。近配额P95约1039ms影响响应。没有跳过完整quick_check/FK、FULL同步或先删旧历史以满足指标。真实GUI热打开200/冷启动10、搜索可见200、文本到可见200/新图片20尚未执行；Mac已解锁，更新后二进制重新授权曾阻塞；现LaunchServices探针true，原生工具再次断连及前台核对仍阻塞。这些服务样本不能替代GUI样本。
+
+### 本轮修复及历史结果
+
+[分段诊断](../evidence/performance/commit-profile-20261010/stages.json)使用已有fault回调测10个生产Release写入，不是正式GUI基准。原candidateWritten阶段均值187.303ms，candidateValidated（含COMMIT/完整检查）257.841ms；不能把后者全部归因某一个SQL。孤儿查询[原/首次digest优化计划](../evidence/performance/commit-profile-20261010/gc-query-results.json)、[最终rowid计划](../evidence/performance/commit-profile-20261010/gc-rowid-query-results.json)确认使用覆盖索引；顺序冷/热样本不同，不把其均值比作受控整体加速。最终rowid保留NULL孤儿和共享引用语义，未启用未经预算证明的普通事务快路径。
+
+- [20261010T013052Z-postfix](../evidence/performance/20261010T013052Z-postfix/service-results.json)：修复行为后、GC优化前，文本548.396875ms，子区间已超500ms；图片535.581084ms为旧图复采，近配额1086.109209ms。
+- [20261010T013856Z-indexed-gc](../evidence/performance/20261010T013856Z-indexed-gc/service-results.json)：digest首次查询优化，文本482.493917ms、旧图复采1046.961709ms、近配额2798.020125ms；源已进一步改为rowid，样本不删除。
+- [20261010T014146Z-final-rowid](../evidence/performance/20261010T014146Z-final-rowid/service-results.json)：最终生产rowid，文本487.693334ms、旧图复采505.445917ms、近配额978.011750ms；与当前新图样本分别报告。
+- [20261009T182206Z-delivery](../evidence/performance/20261009T182206Z-delivery/service-results.json)：早期源码；文本479.872375ms、旧图复采499.166542ms、搜索27.551209ms、近配额1030.942625ms。不是当前源码版本。
+
+系统未独占；部分早期诊断、自动回归、Release编译与服务样本运行重叠，其他用户活动也存在，不把这些变化宣称严格受控因果改善。当前新图片服务测试期间没有并行构建或其他本任务测试；随后才启动当前源码压力/空闲复测。
+
+## 原生命名剪贴板压力与空闲
+
+### 预读优化后源码复测（最新）
+
+[压力原样本](../evidence/performance/20261010T024249Z-system/stress.json)、[120空闲样本](../evidence/performance/20261010T024249Z-system/idle-resources.json)、[汇总](../evidence/performance/20261010T024249Z-system/summary.json)、[完整日志](../evidence/performance/20261010T024249Z-system/benchmark.log)、[实际退出状态](../evidence/performance/20261010T024249Z-system/wrapper-status.json)、[源码与边界](../evidence/performance/20261010T024249Z-system/source-provenance.json)。测试和包装退出0，808.641秒。Release Swift Testing宿主执行生产采集/SQLite，专用命名NSPasteboard；不是正式GUI进程。
+
+| 输入间隔ms | 输入 | 保存 | 去重 | 明确跳过 | 未观察变化 |
+|---:|---:|---:|---:|---:|---:|
+| 1000 | 100 | 100 | 0 | 0 | 0 |
+| 500 | 100 | 100 | 0 | 0 | 0 |
+| 200 | 100 | 100 | 0 | 0 | 0 |
+| 50 | 100 | 27 | 0 | 0 | 73 |
+
+10秒预热后120个5秒采样，实际607.314427秒；单核心CPU均值0.145651%、P95 0.185802%。进程生命周期峰值resident382156800字节（364.45MiB），包括先前压力阶段，不能当稳定空闲RSS。energy/wakeups unavailable，上下文切换不当唤醒。空闲段没有本任务重型构建或测试并行，轻量文档/读取及用户其他应用活动不受控；LocalClip GUI采集暂停。此结果不证明GUI资源或端到端目标通过；50ms未观察变化完整保留，不预设零丢失。
+
+### 预读前源码复测（历史）
+
+[20261010T014705Z-system压力](../evidence/performance/20261010T014705Z-system/stress.json)、[空闲原样本](../evidence/performance/20261010T014705Z-system/idle-resources.json)、[完整日志](../evidence/performance/20261010T014705Z-system/benchmark.log)、[包装/测试状态](../evidence/performance/20261010T014705Z-system/wrapper-status.json)、[运行边界](../evidence/performance/20261010T014705Z-system/run-provenance.json)。预读优化前的Release测试宿主，真实命名NSPasteboard、200ms采集、真实SQLite；未触碰general，未执行GUI绘制。测试及包装均退出0，815.771秒。
+
+| 输入间隔ms | 输入 | 保存 | 去重 | 明确busy跳过 | 未观察变化 |
+|---:|---:|---:|---:|---:|---:|
+| 1000 | 100 | 100 | 0 | 0 | 0 |
+| 500 | 100 | 100 | 0 | 0 | 0 |
+| 200 | 100 | 52 | 0 | 48 | 0 |
+| 50 | 100 | 20 | 0 | 7 | 73 |
+
+10秒预热后120×5秒实际采样606.556973秒：CPU均值0.130277%、P950.161379%（按一个核心）；进程峰值resident378912768字节（361.36MiB，含之前压力阶段，不是稳定空闲RSS）。此段无本任务并行构建或测试，仅轻量文档与文件检查；其他用户应用不受控。energy与wakeups仍unavailable，上下文切换不冒充唤醒。宿主采样不证明正式GUI进程资源目标通过，系统单剪贴板被覆盖的未观察变化如实保留。
+
+### 早期源码与失败包装记录
+
+[20261009T180735Z-system压力原样本](../evidence/performance/20261009T180735Z-system/stress.json)、[空闲120样本](../evidence/performance/20261009T180735Z-system/idle-resources.json)、[测试输出](../evidence/performance/20261009T180735Z-system/benchmark.log)。实际NSPasteboard服务器+生产200ms采集/真实SQLite，Release Swift Testing宿主，无GUI；general未触碰。
+
+| 输入间隔ms | 输入 | 保存 | 去重 | 明确busy跳过 | 未观察变化 |
+|---:|---:|---:|---:|---:|---:|
+| 1000 | 100 | 100 | 0 | 0 | 0 |
+| 500 | 100 | 100 | 0 | 0 | 0 |
+| 200 | 100 | 52 | 0 | 42 | 6 |
+| 50 | 100 | 21 | 0 | 8 | 71 |
+
+系统单一剪贴板在下一次轮询前被覆盖的变化无法恢复；明确丢弃队列报告busy。没有预设50ms零丢失，也没有隐藏未观察数量。源码版本为此次运行启动时（Data搜索/mmap192/身份重开已存在），晚于启动新增的块分配计量和UI暂停门/失败恢复不在该测试二进制中；最终功能回归已覆盖这些修改，系统压力不是最终GUI性能证明。
+
+10秒预热后120×5秒实际采样610.139秒：CPU均值0.117280%、P950.142743%（按一个核心），进程峰值resident378208256字节（约360.69MiB；峰值包括先前压力，不是稳定空闲RSS）。energy和wakeups工具不可用，记录unavailable；上下文切换不是唤醒次数。并发构建/其他测试期间采样，非整机独占空闲环境。没有凭该宿主内存/CPU宣称正式UI应用资源通过。
+
+**早期包装脚本最终退出2**：测试本身退出0、819.480秒完成；运行过程中修改脚本尾部参数转发使正在执行的bash读到引号EOF。完整原始测试输出保留；脚本已修正，当前源码另行完成整段复测；没有把早期包装失败改写为通过。状态细分见同目录wrapper-status.json。
+
+## 优化历史保留
+
+baseline(10样本，fixture v1更大)服务搜索P956679.6ms；后续SQL预筛/上下文分页、按revision内存索引、UTF8 Data匹配改善。最终27.55ms为200样本，不能把不同数据/次数作为严格同条件百分比。APFS clone优先、192MiB mmap、完整候选检查后按revision/operationID重开减少提交成本。
+
+所有历史实验目录保持：172612Z-baseline、173000Z-optimized、174406Z-final（名称final是当时阶段，非最终交付）、175046Z-data-mmap、175522Z-identity-reopen、173756Z-system。早期部分fixture-store混入写入，最终复用的是175046Z的未修改fixture-store。历史失败/配置不完整172452Z、172502Z记录保留，不计作成功测量。
+
+补充诊断：系统实际链接/usr/lib/libsqlite3.dylib读回mmap_size=201326592，见../evidence/performance/system-sqlite-mmap.json。独立Python只读检查实验与生产库实现不同，mmap-experiment.json仅作探索，不替代上述生产计时；未因该实验更改生产192MiB配置。
+
+本轮补齐真实PNG1920×1080接收且像素全等与文本/富文本接收，见[实际记录](../evidence/manual/20261010-safari-ready/observations.json)，这些不是性能样本。仍未新增P层达标结论。
+
+
+## 2026-10-10 追加交互与文件对象
+
+用户追加要求已进入本轮源码：双击原格式复制、屏幕全宽底部固定、真实文件URL引用与Finder目录副本复制。原记录保留为先前版本证据，不代表新版本回归通过。用户要求自行测试，本轮未执行功能、真实应用或性能测试；对应新行为均待用户自测。变更说明见[追加需求](../../paste-report/development-plan/interaction-files-delta.md)，构建记录见[本轮构建](../evidence/automated/20261010-interaction-files/build-result.json)。
+
+
+## 0.1.2 双击自动粘贴
+
+实现原输入控件AX身份/可编辑性检查及紧邻事件的剪贴板收据复查。双击自动返回原应用并尝试原生粘贴；明确复制按钮只复制；Finder文件沿用副本复制。未知控件/权限/焦点不满足时回退手动。构建记录见[本轮构建](../evidence/automated/20261010-doubleclick-paste/build-result.json)。用户要求自行测试，本轮未做真实目标接收、回归或性能验证。
+
+## 0.1.3 粘贴排查
+
+[排查记录](../../paste-report/development-plan/debug-log-2026-10-10-paste.md)记录AXValue错误门槛、焦点恢复时序与隐藏反馈修复。仅Release构建与严格签名检查；单元、SQLite、真实目标及性能均未重跑。原AC未提升为通过。
+
+## 0.1.5 通用原生粘贴
+
+不再按文本角色判断目标，保留原焦点和安全检查，由目标应用处理原生Command-V。[排查与截图](../../paste-report/development-plan/debug-log-2026-10-10-generic-paste-target.md)。仅源码检查/构建，不提高未验证的AC状态或性能结论。
+
+## 0.1.6 历史浏览
+
+[滚轮/触控板、分页、Esc修复记录](../../paste-report/development-plan/debug-log-2026-10-10-history-scroll-escape.md)。保持LazyHStack与原分页失效检查。普通垂直滚轮转换横移；横向手势保留系统处理。当前未验证实际设备、组合输入、多页旧记录选择或性能，不提高原AC通过状态。
+
+## 0.1.7 失焦关闭
+
+[失焦关闭实现与边界](../../paste-report/development-plan/debug-log-2026-10-10-focus-dismissal.md)。仅构建验证；外部点击/切换、搜索/菜单/详情/确认对话框、重新打开等实际行为未执行，不改变原AC和性能结论。
+
+## 0.1.12 浏览性能增量（未量测）
+
+源码确认旧select每次调用store.detail读取/哈希完整原始内容，并随后请求图片缩略图；卡片观察整个HistoryViewModel，完整详情/metadata发布都影响所有卡片。本轮改为即时高亮、25ms合并轻量metadata、详情展开才读取正文、Equatable卡片与仅越界滚动；缩略图复查不再加载原始载荷，去除VM重复采集刷新。数据库提交/真实恢复仍完整校验。不提供未经执行的前后耗时、FPS或P95；没有本轮性能原始样本，历史样本不认证本版选择/布局路径。

@@ -1,0 +1,261 @@
+{
+  "result": {
+    "open": true,
+    "analysis_provider_binding": null,
+    "analysis_provider_candidates": [
+      {
+        "provider": {
+          "id": "ghidra",
+          "name": "Ghidra",
+          "version": null
+        },
+        "availability": {
+          "status": "unavailable",
+          "code": "not_configured",
+          "reason": "Set GHIDRA_INSTALL_DIR to an extracted Ghidra 12.1.x release directory.",
+          "diagnostics": {
+            "install_dir": null,
+            "analyze_headless_path": null,
+            "native_decompiler_path": null,
+            "application_properties_path": null,
+            "provider_version": null,
+            "java_command": "java",
+            "java_home": "/Users/ronny/Library/Java/JavaVirtualMachines/azul-1.8.0_502/Contents/Home/jre",
+            "java_version": "1.8.0_502",
+            "platform": "darwin",
+            "architecture": "arm64",
+            "checks": [
+              {
+                "name": "configuration",
+                "ok": false,
+                "code": "not_configured",
+                "detail": "GHIDRA_INSTALL_DIR is not set"
+              },
+              {
+                "name": "platform",
+                "ok": true,
+                "code": null,
+                "detail": "darwin"
+              },
+              {
+                "name": "architecture",
+                "ok": true,
+                "code": null,
+                "detail": "arm64"
+              },
+              {
+                "name": "installation",
+                "ok": false,
+                "code": "executable_missing",
+                "detail": "Ghidra application properties unavailable"
+              },
+              {
+                "name": "version",
+                "ok": false,
+                "code": "version_unresolved",
+                "detail": "unknown"
+              },
+              {
+                "name": "headless",
+                "ok": false,
+                "code": "executable_missing",
+                "detail": "analyzeHeadless unavailable"
+              },
+              {
+                "name": "native_decompiler",
+                "ok": false,
+                "code": "executable_missing",
+                "detail": "matching macOS native decompiler was not found"
+              },
+              {
+                "name": "java",
+                "ok": false,
+                "code": "unsupported_version",
+                "detail": "1.8.0_502; 64-bit; runtime only; /Users/ronny/Library/Java/JavaVirtualMachines/azul-1.8.0_502/Contents/Home/jre; accepted a 64-bit full JDK 21 or newer"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "provider": {
+          "id": "hopper",
+          "name": "Hopper Disassembler",
+          "version": null
+        },
+        "availability": {
+          "status": "unavailable",
+          "code": "executable_missing",
+          "reason": "Hopper launcher is missing or not executable: /Applications/Hopper Disassembler.app/Contents/MacOS/hopper",
+          "diagnostics": {
+            "launcher_path": "/Applications/Hopper Disassembler.app/Contents/MacOS/hopper",
+            "platform": "darwin"
+          }
+        }
+      },
+      {
+        "provider": {
+          "id": "ida",
+          "name": "IDA Pro MCP adapter",
+          "version": "1"
+        },
+        "availability": {
+          "status": "unavailable",
+          "code": "not_configured",
+          "reason": "Set REA_IDA_MCP_CONFIG to an upstream IDA MCP JSON registration; see docs/ida-provider.md.",
+          "diagnostics": {
+            "configured": false,
+            "live_connection_probed": false
+          }
+        }
+      }
+    ],
+    "tool_availability": [
+      {
+        "name": "analyze_function",
+        "surface": "enhanced",
+        "client_requirements": {
+          "required": [],
+          "optional": [],
+          "missing_required": [],
+          "missing_optional": []
+        },
+        "effects": {
+          "mutatesTarget": false,
+          "mutatesSession": true,
+          "writesFilesystem": false,
+          "launchesProcess": false,
+          "accessesNetwork": false,
+          "changesUiState": false,
+          "mayDiscardData": false,
+          "idempotent": true
+        },
+        "annotations": {
+          "read_only": false,
+          "destructive": false,
+          "idempotent": true,
+          "open_world": false
+        },
+        "available": false,
+        "reason": "provider_missing",
+        "remediation": "Configure a provider for required operation analyze_function."
+      },
+      {
+        "name": "analyze_swift_types",
+        "surface": "enhanced",
+        "client_requirements": {
+          "required": [],
+          "optional": [],
+          "missing_required": [],
+          "missing_optional": []
+        },
+        "effects": {
+          "mutatesTarget": false,
+          "mutatesSession": true,
+          "writesFilesystem": false,
+          "launchesProcess": false,
+          "accessesNetwork": false,
+          "changesUiState": false,
+          "mayDiscardData": false,
+          "idempotent": true
+        },
+        "annotations": {
+          "read_only": false,
+          "destructive": false,
+          "idempotent": true,
+          "open_world": false
+        },
+        "available": false,
+        "reason": "provider_missing",
+        "remediation": "Configure a provider for required operation list_procedures."
+      },
+      {
+        "name": "get_objc_classes",
+        "surface": "enhanced",
+        "client_requirements": {
+          "required": [],
+          "optional": [],
+          "missing_required": [],
+          "missing_optional": []
+        },
+        "effects": {
+          "mutatesTarget": false,
+          "mutatesSession": true,
+          "writesFilesystem": false,
+          "launchesProcess": false,
+          "accessesNetwork": false,
+          "changesUiState": false,
+          "mayDiscardData": false,
+          "idempotent": true
+        },
+        "annotations": {
+          "read_only": false,
+          "destructive": false,
+          "idempotent": true,
+          "open_world": false
+        },
+        "available": false,
+        "reason": "provider_missing",
+        "remediation": "Configure a provider for required operation list_names."
+      },
+      {
+        "name": "list_strings",
+        "surface": "official-proxy",
+        "client_requirements": {
+          "required": [],
+          "optional": [],
+          "missing_required": [],
+          "missing_optional": []
+        },
+        "effects": {
+          "mutatesTarget": false,
+          "mutatesSession": true,
+          "writesFilesystem": false,
+          "launchesProcess": false,
+          "accessesNetwork": false,
+          "changesUiState": false,
+          "mayDiscardData": false,
+          "idempotent": true
+        },
+        "annotations": {
+          "read_only": false,
+          "destructive": false,
+          "idempotent": true,
+          "open_world": false
+        },
+        "available": false,
+        "reason": "provider_missing",
+        "remediation": "Install or configure a provider that declares this operation."
+      },
+      {
+        "name": "search_strings",
+        "surface": "official-proxy",
+        "client_requirements": {
+          "required": [],
+          "optional": [],
+          "missing_required": [],
+          "missing_optional": []
+        },
+        "effects": {
+          "mutatesTarget": false,
+          "mutatesSession": true,
+          "writesFilesystem": false,
+          "launchesProcess": false,
+          "accessesNetwork": false,
+          "changesUiState": false,
+          "mayDiscardData": false,
+          "idempotent": true
+        },
+        "annotations": {
+          "read_only": false,
+          "destructive": false,
+          "idempotent": true,
+          "open_world": false
+        },
+        "available": false,
+        "reason": "provider_missing",
+        "remediation": "Install or configure a provider that declares this operation."
+      }
+    ]
+  }
+}

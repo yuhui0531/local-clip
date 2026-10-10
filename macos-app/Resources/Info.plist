@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleExecutable</key><string>LocalClip</string>
+<key>CFBundleIdentifier</key><string>local.localclip.dev</string>
+<key>CFBundleName</key><string>LocalClip</string>
+<key>CFBundleIconFile</key><string>LocalClip.icns</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+<key>CFBundleShortVersionString</key><string>0.1.14</string>
+<key>CFBundleVersion</key><string>15</string>
+<key>LSMinimumSystemVersion</key><string>15.0</string>
+<key>LSUIElement</key><true/>
+<key>NSHighResolutionCapable</key><true/>
+<key>UTExportedTypeDeclarations</key><array><dict>
+<key>UTTypeIdentifier</key><string>local.localclip.history-item</string>
+<key>UTTypeDescription</key><string>LocalClip 内部历史记录</string>
+<key>UTTypeConformsTo</key><array><string>public.data</string></array>
+</dict></array>
+<key>NSAppleEventsUsageDescription</key><string>在您双击文件历史时，读取Finder当前文件夹，将文件副本复制到该目录。</string>
+</dict></plist>

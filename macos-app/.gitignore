@@ -1,0 +1,46 @@
+# Swift & SPM Build Artifacts
+.build/
+.build-*/
+.swiftpm/
+.cache/
+dist/
+build/
+DerivedData/
+
+# Xcode User Data
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+*.xcworkspace/xcshareddata/
+*.xcuserdatad/
+
+# macOS System Files
+.DS_Store
+._*
+
+# Application Bundles & Archives
+*.app/
+*.app
+*.dmg
+*.tar.gz
+*.zip
+
+# Probe Binaries
+probe
+sql-probe
+rowid-probe
+
+# Test SQLite Databases & Store Directories
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite-journal
+fixture-store/
+working-store/
+quota-store/
+store/
+isolated-data/
+**/fixture-store/
+**/working-store/
+**/quota-store/
+**/store/
+**/isolated-data/

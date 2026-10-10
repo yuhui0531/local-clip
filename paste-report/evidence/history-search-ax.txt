@@ -1,0 +1,22 @@
+Window: "", App: Paste.
+0 系统对话框 Secondary Actions: Raise
+	1 图像 搜索
+	2 文本栏 (settable) Value: PASTE-RESEARCH-20261009, Placeholder: 搜索
+	3 按钮 关闭
+	4 按钮 搜索 (⌘F)
+	5 滚动区
+		6 text 剪贴板 搞笑截图 常用提示词 常用密码 常用链接
+	7 按钮
+	8 滚动区
+		9 text PASTE-RESEARCH-20261009-B 25 个字符
+		10 图像
+		11 text Value: 文本 1分钟前 PASTE-RESEARCH-20261009-A 25 个字符, Placeholder: 文本
+		12 图像
+		13 text Value: 文本 45秒前, Placeholder: 文本
+14 menu bar
+	15 Paste, ID: performActionFor:
+	16 File, ID: performActionFor:
+	17 Edit, ID: performActionFor:
+	18 Window, ID: performActionFor:
+
+The focused UI element is 2 文本栏 (settable) Value: PASTE-RESEARCH-20261009, Placeholder: 搜索

@@ -1,0 +1,487 @@
+{
+  "source_evidence_id": "ev_68ef56cdde77ea52119da39a6e391d1873b4bd73c9f5938e0884c7727c1dfa69",
+  "total_objects": 194,
+  "truncated": false,
+  "limitations": [
+    "Archive classes are never instantiated. Class names and serialized fields are observed; class-specific semantics are unknown.",
+    "Conditional references serialized as UID 0 cannot be distinguished from ordinary nil references. Missing fields remain absent in the raw serialized value.",
+    "Root selection selects the named $top entry; object pagination retains original indices and does not recursively expand references."
+  ],
+  "entities": [
+    {
+      "object_id": 14,
+      "name": "DeviceEntity",
+      "class": "PasteCore.DeviceEntity",
+      "properties": [
+        {
+          "name": "items",
+          "kind": "NSRelationshipDescription",
+          "target_entity": "ItemEntity"
+        },
+        {
+          "name": "rawType",
+          "kind": "NSAttributeDescription",
+          "attribute_type": 300,
+          "raw_flags": 0
+        },
+        {
+          "name": "updatedAt",
+          "kind": "NSAttributeDescription",
+          "attribute_type": 900,
+          "raw_flags": 0
+        },
+        {
+          "name": "name",
+          "kind": "NSAttributeDescription",
+          "attribute_type": 700,
+          "raw_flags": 0
+        },
+        {
+          "name": "identifier",
+          "kind": "NSAttributeDescription",
+          "attribute_type": 700,
+          "raw_flags": 0
+        },
+        {
+          "name": "createdAt",
+          "kind": "NSAttributeDescription",
+          "attribute_type": 900,
+          "raw_flags": 0
+        }
+      ]
+    },
+    {
+      "object_id": 26,
+      "name": "ItemEntity",
+      "class": "PasteCore.ItemEntity",
+      "properties": [
+        {
+          "name": "updatedAt",
+          "kind": "NSAttributeDescription",
+          "attribute_type": 900,
+          "raw_flags": 0
+        },
+        {
+          "name": "rawPreview",
+          "kind": "NSAttributeDescription",
+          "attribute_type": 1000,
+          "raw_flags": 0
+        },
+        {
+          "name": "timestamp",
+          "kind": "NSAttributeDescription",
+          "attribute_type": 900,
+          "raw_flags": 0
+        },
+        {
+          "name": "rawType",
+          "kind": "NSAttributeDescription",
+          "attribute_type": 300,
+          "raw_flags": 0
+        },
+        {
+          "name": "checksum",
+          "kind": "NSAttributeDescription",
+          "attribute_type": 700,
+          "raw_flags": 0
+        },
+        {
+          "name": "title",
+          "kind": "NSAttributeDescription",
+          "attribute_type": 700,
+          "raw_flags": 0
+        },
+        {
+          "name": "identifier",
+          "kind": "NSAttributeDescription",
+          "attribute_type": 700,
+          "raw_flags": 0
+        },
+        {
+          "name": "data",
+          "kind": "NSRelationshipDescription",
+          "target_entity": "ItemDataEntity"
+        },
+        {
+          "name": "sourceApplication",
+          "kind": "NSRelationshipDescription",
+          "target_entity": "ApplicationEntity"
+        },
+        {
+          "name": "displayOrderInPinboard",
+          "kind": "NSAttributeDescription",
+          "attribute_type": 300,
+          "raw_flags": 0
+        },
+        {
+          "name": "list",
+          "kind": "NSRelationshipDescription",
+          "target_entity": "ListEntity"
+        },
+        {
+          "name": "device",
+          "kind": "NSRelationshipDescription",
+          "target_entity": "DeviceEntity"
+        },
+        {
+          "name": "createdAt",
+          "kind": "NSAttributeDescription",
+          "attribute_type": 900,
+          "raw_flags": 0
+        }
+      ],
+      "indexes": {
+        "NS.objects": [
+          {
+            "UID": 185
+          }
+        ],
+        "$class": {
+          "UID": 98
+        }
+      },
+      "compound_indexes": {
+        "NS.objects": [],
+        "$class": {
+          "UID": 98
+        }
+      }
+    },
+    {
+      "object_id": 43,
+      "name": "ObjectShare",
+      "class": "PasteCore.ObjectShare",
+      "properties": [
+        {
+          "name": "shareRecordName",
+          "kind": "NSAttributeDescription",
+          "attribute_type": 700,
+          "raw_flags": 0
+        },
+        {
+          "name": "shareRecordOwner",
+          "kind": "NSAttributeDescription",
+          "attribute_type": 700,
+          "raw_flags": 0
+        },
+        {
+          "name": "rootRecordName",
+          "kind": "NSAttributeDescription",
+          "attribute_type": 700,
+          "raw_flags": 0
+        },
+        {
+          "name": "rootRecordType",
+          "kind": "NSAttributeDescription",
+          "attribute_type": 700,
+          "raw_flags": 0
+        },
+        {
+          "name": "shareRecordData",
+          "kind": "NSAttributeDescription",
+          "attribute_type": 1000,
+          "raw_flags": 0
+        }
+      ]
+    },
+    {
+      "object_id": 58,
+      "name": "ListMetadataEntity",
+      "class": "PasteCore.ListMetadataEntity",
+      "properties": [
+        {
+          "name": "index",
+          "kind": "NSAttributeDescription",
+          "attribute_type": 300,
+          "raw_flags": 0
+        },
+        {
+          "name": "updatedAt",
+          "kind": "NSAttributeDescription",
+          "attribute_type": 900,
+          "raw_flags": 0
+        },
+        {
+          "name": "identifier",
+          "kind": "NSAttributeDescription",
+          "attribute_type": 700,
+          "raw_flags": 0
+        },
+        {
+          "name": "list",
+          "kind": "NSRelationshipDescription",
+          "target_entity": "ListEntity"
+        },
+        {
+          "name": "createdAt",
+          "kind": "NSAttributeDescription",
+          "attribute_type": 900,
+          "raw_flags": 0
+        }
+      ]
+    },
+    {
+      "object_id": 68,
+      "name": "ListEntity",
+      "class": "PasteCore.ListEntity",
+      "properties": [
+        {
+          "name": "rawAttributes",
+          "kind": "NSAttributeDescription",
+          "attribute_type": 1000,
+          "raw_flags": 0
+        },
+        {
+          "name": "rawShareRecord",
+          "kind": "NSAttributeDescription",
+          "attribute_type": 1000,
+          "raw_flags": 0
+        },
+        {
+          "name": "rawType",
+          "kind": "NSAttributeDescription",
+          "attribute_type": 300,
+          "raw_flags": 0
+        },
+        {
+          "name": "identifier",
+          "kind": "NSAttributeDescription",
+          "attribute_type": 700,
+          "raw_flags": 0
+        },
+        {
+          "name": "updatedAt",
+          "kind": "NSAttributeDescription",
+          "attribute_type": 900,
+          "raw_flags": 0
+        },
+        {
+          "name": "createdAt",
+          "kind": "NSAttributeDescription",
+          "attribute_type": 900,
+          "raw_flags": 0
+        },
+        {
+          "name": "metadata",
+          "kind": "NSRelationshipDescription",
+          "target_entity": "ListMetadataEntity"
+        },
+        {
+          "name": "name",
+          "kind": "NSAttributeDescription",
+          "attribute_type": 700,
+          "raw_flags": 0
+        },
+        {
+          "name": "items",
+          "kind": "NSRelationshipDescription",
+          "target_entity": "ItemEntity"
+        }
+      ]
+    },
+    {
+      "object_id": 72,
+      "name": "ObjectMetadata",
+      "class": "PasteCore.ObjectMetadata",
+      "properties": [
+        {
+          "name": "cloudKitZoneOwnerName",
+          "kind": "NSAttributeDescription",
+          "attribute_type": 700,
+          "raw_flags": 0
+        },
+        {
+          "name": "objectURI",
+          "kind": "NSAttributeDescription",
+          "attribute_type": 700,
+          "raw_flags": 0
+        },
+        {
+          "name": "cloudKitRecordData",
+          "kind": "NSAttributeDescription",
+          "attribute_type": 1000,
+          "raw_flags": 0
+        },
+        {
+          "name": "cloudKitRecordName",
+          "kind": "NSAttributeDescription",
+          "attribute_type": 700,
+          "raw_flags": 0
+        },
+        {
+          "name": "cloudKitZoneName",
+          "kind": "NSAttributeDescription",
+          "attribute_type": 700,
+          "raw_flags": 0
+        },
+        {
+          "name": "change",
+          "kind": "NSRelationshipDescription",
+          "target_entity": "ObjectChange"
+        }
+      ],
+      "indexes": {
+        "NS.objects": [
+          {
+            "UID": 91
+          }
+        ],
+        "$class": {
+          "UID": 98
+        }
+      },
+      "compound_indexes": {
+        "NS.objects": [],
+        "$class": {
+          "UID": 98
+        }
+      }
+    },
+    {
+      "object_id": 88,
+      "name": "ObjectChange",
+      "class": "PasteCore.ObjectChange",
+      "properties": [
+        {
+          "name": "metadata",
+          "kind": "NSRelationshipDescription",
+          "target_entity": "ObjectMetadata"
+        },
+        {
+          "name": "changeType",
+          "kind": "NSAttributeDescription",
+          "attribute_type": 300,
+          "raw_flags": 0
+        },
+        {
+          "name": "priority",
+          "kind": "NSAttributeDescription",
+          "attribute_type": 300,
+          "raw_flags": 0
+        },
+        {
+          "name": "changedProperties",
+          "kind": "NSAttributeDescription",
+          "attribute_type": 700,
+          "raw_flags": 0
+        }
+      ]
+    },
+    {
+      "object_id": 100,
+      "name": "ApplicationEntity",
+      "class": "PasteCore.ApplicationEntity",
+      "properties": [
+        {
+          "name": "items",
+          "kind": "NSRelationshipDescription",
+          "target_entity": "ItemEntity"
+        },
+        {
+          "name": "rawColor",
+          "kind": "NSAttributeDescription",
+          "attribute_type": 300,
+          "raw_flags": 0
+        },
+        {
+          "name": "bundleIdentifier",
+          "kind": "NSAttributeDescription",
+          "attribute_type": 700,
+          "raw_flags": 0
+        },
+        {
+          "name": "updatedAt",
+          "kind": "NSAttributeDescription",
+          "attribute_type": 900,
+          "raw_flags": 0
+        },
+        {
+          "name": "createdAt",
+          "kind": "NSAttributeDescription",
+          "attribute_type": 900,
+          "raw_flags": 0
+        },
+        {
+          "name": "name",
+          "kind": "NSAttributeDescription",
+          "attribute_type": 700,
+          "raw_flags": 0
+        },
+        {
+          "name": "rawIcon",
+          "kind": "NSAttributeDescription",
+          "attribute_type": 1000,
+          "raw_flags": 0
+        }
+      ]
+    },
+    {
+      "object_id": 116,
+      "name": "ChangeToken",
+      "class": "PasteCore.ChangeToken",
+      "properties": [
+        {
+          "name": "zoneName",
+          "kind": "NSAttributeDescription",
+          "attribute_type": 700,
+          "raw_flags": 0
+        },
+        {
+          "name": "zoneOwnerName",
+          "kind": "NSAttributeDescription",
+          "attribute_type": 700,
+          "raw_flags": 0
+        },
+        {
+          "name": "tokenData",
+          "kind": "NSAttributeDescription",
+          "attribute_type": 1000,
+          "raw_flags": 0
+        }
+      ]
+    },
+    {
+      "object_id": 126,
+      "name": "ItemDataEntity",
+      "class": "PasteCore.ItemDataEntity",
+      "properties": [
+        {
+          "name": "item",
+          "kind": "NSRelationshipDescription",
+          "target_entity": "ItemEntity"
+        },
+        {
+          "name": "rawPasteboardItems",
+          "kind": "NSAttributeDescription",
+          "attribute_type": 1000,
+          "raw_flags": 4
+        }
+      ]
+    },
+    {
+      "object_id": 159,
+      "name": "ObjectPendingMapping",
+      "class": "PasteCore.ObjectPendingMapping",
+      "properties": [
+        {
+          "name": "pendingMappings",
+          "kind": "NSAttributeDescription",
+          "attribute_type": 700,
+          "raw_flags": 0
+        },
+        {
+          "name": "objectURI",
+          "kind": "NSAttributeDescription",
+          "attribute_type": 700,
+          "raw_flags": 0
+        },
+        {
+          "name": "cloudKitRecordData",
+          "kind": "NSAttributeDescription",
+          "attribute_type": 1000,
+          "raw_flags": 0
+        }
+      ]
+    }
+  ]
+}

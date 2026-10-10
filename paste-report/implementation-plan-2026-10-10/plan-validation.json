@@ -1,0 +1,23 @@
+{
+  "recordedUTC": "2026-10-10T14:39:51.642275+00:00",
+  "kind": "计划文件一致性检查，不是应用开发或产品测试",
+  "reportComparisonPoints": 76,
+  "mappedPoints": 76,
+  "implementationTasks": 22,
+  "completedImplementationTasks": 0,
+  "dependenciesOrdered": true,
+  "localLinksValid": true,
+  "compatibilityAndMigrationProhibited": true,
+  "freshDataDirectory": "Application Support/LocalClip-LocalEdition",
+  "oldDataDirectoryUntouched": "Application Support/LocalClip-Development",
+  "userTestingOnly": true,
+  "productBuildExecuted": false,
+  "productTestsExecuted": false,
+  "appLaunched": false,
+  "changedAuditedSourceFiles": [],
+  "files": {
+    "README.md": "b88c6dbc550c8fb98185eeb0da51a1365a78e28ac780e5ffc4cedfb4e447532a",
+    "tasks.md": "54eb2116e8bc542b2b26ae516b0031b122e518fb01ee06e90f116545fdb33711",
+    "report-coverage.csv": "8635b9d4e449e82deb799a2b093488a1641bac58d918f4a199957eaf68e1a3fc"
+  }
+}

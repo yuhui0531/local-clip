@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; form-action 'none'; base-uri 'none'">
+<title>LocalClip 本地验收 Fixtures</title>
+<style>body{font:16px system-ui;margin:36px;max-width:960px;color:#20312b}section{padding:20px;border:1px solid #ccd4ce;border-radius:14px;margin:18px 0}textarea,[contenteditable]{box-sizing:border-box;width:100%;min-height:130px;padding:16px;border:1px solid #bcc6c0;border-radius:10px;white-space:pre-wrap}pre{white-space:pre-wrap;background:#f2f5f3;padding:18px}img{max-width:320px}</style>
+<h1>LocalClip 本地验收</h1><p>合成内容，无外部资源、账号或提交动作。需记录源应用复制→历史可见→恢复→目标实际接收，不能只检查事件发送。</p>
+<section><h2>纯文本接收 textarea</h2><textarea aria-label="纯文本接收区" placeholder="恢复内容后核对完整文字、换行、代码符号"></textarea></section>
+<section><h2>简单富文本接收 contenteditable</h2><div contenteditable="true" aria-label="富文本接收区"></div></section>
+<section><h2>TXT / ZH / CODE / URL</h2><pre>LOCALCLIP-TEST-A
+LOCALCLIP-TEST-B
+LOCALCLIP-TEST-C
+今天整理需求，明天处理代码。
+let foo_bar = 50%; a->b;
+"value"  'quote'  path\test
+  保留缩进与换行
+https://example.invalid/path?a=1&amp;b=2#section</pre></section>
+<section><h2>RICH（文字可选择复制）</h2><p><b>今天整理需求</b>，<i>明天处理代码</i>。<br><a href="https://example.invalid/path?a=1&amp;b=2#section">合成链接</a><br>第二行文字。</p><p>链接地址为fixture；验收过程中不打开网络链接。</p></section>
+<section><h2>IMG</h2><p>同目录sample.png/sample.tiff/sample.jpg来自固定fixture SQLite的实际编码字节；哈希、1920×1080尺寸和类型见manifest.json。浏览器不承诺TIFF显示，使用TextEdit/Pages图片接收矩阵。</p><img src="sample.png" alt="固定种子合成PNG"></section>
+</html>

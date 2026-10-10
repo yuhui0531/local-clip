@@ -1,0 +1,113 @@
+// 采集队列、独立暂停状态与精确自写过滤，by AI.Coding。
+import AppKit
+import LocalClipCore
+@MainActor public final class CaptureCoordinator {
+    private let board: any PasteboardClient
+    private let store: any HistoryRepository
+    private let clock: any ClipClock
+    public private(set) var policy = SettingsSnapshot()
+    public private(set) var state = "准备中"
+    public private(set) var lastIgnored: (SkipReason, Instant)?
+    public private(set) var capacityBlocked = false
+    private var baseline: Int
+    private var ownReceipt: WriteReceipt?
+    private var polling: Task<Void, Never>?
+    private var draining: Task<Void, Never>?
+    private var queue: [ClipboardSnapshot] = []
+    private var queueBytes: Int64 = 0
+    private var timedPauseActive = false
+    private var pausePending = false
+    public var onState: ((String) -> Void)?
+    public var onCommit: (() -> Void)?
+    public init(board: any PasteboardClient, store: any HistoryRepository, clock: any ClipClock = SystemClock()) {
+        self.board = board; self.store = store; self.clock = clock; baseline = board.changeCount
+    }
+    /// 恢复和到期清理结束后才从当前计数建立启动基线。
+    public func start() async throws {
+        _ = try await store.recover(); policy = try await store.settings(); _ = try await store.expire(at: clock.now())
+        capacityBlocked = try await !store.canCapture()
+        baseline = board.changeCount; setState(!policy.captureEnabled ? "用户暂停" : capacityBlocked ? "容量已满" : "正常")
+        polling?.cancel()
+        polling = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(200))
+                guard let self, !Task.isCancelled else { break }
+                self.tick()
+            }
+        }
+    }
+    /// 停止轮询不主动替换系统剪贴板。
+    public func stop() { polling?.cancel(); polling = nil; draining?.cancel(); draining = nil }
+    /// 改配置或恢复容量从新基线开始，不补采暂停期间的内容。
+    public func updatePolicy(_ policy: SettingsSnapshot) {
+        self.policy = policy; pausePending = false; baseline = board.changeCount; queue.removeAll(); queueBytes = 0
+        setState(!policy.captureEnabled ? "用户暂停" : capacityBlocked ? "容量已满" : "正常")
+    }
+    /// 用户请求暂停即阻止在途快照，持久化完成前不假装配置已经保存。
+    public func requestPause() { pausePending = true; baseline = board.changeCount; queue.removeAll(); queueBytes = 0; setState("正在暂停") }
+    /// 写入阶段同步在 MainActor 内完成，计数与指纹是精确收据。
+    public func recordOwnWrite(_ receipt: WriteReceipt) { ownReceipt = receipt }
+    /// 容量恢复不覆盖主动暂停；不会重采旧剪贴板。
+    public func refreshCapacity() async {
+        do {
+            let blocked = try await !store.canCapture()
+            if blocked != capacityBlocked { capacityBlocked = blocked; baseline = board.changeCount }
+            setState(!policy.captureEnabled ? "用户暂停" : capacityBlocked ? "容量已满" : "正常")
+        } catch { setState("存储异常") }
+    }
+    /// 每轮仅观察一次变化，有界队列不吞掉已排队内容。
+    public func tick() {
+        let timed = (policy.pauseUntil ?? 0) > clock.now()
+        if timed != timedPauseActive { timedPauseActive = timed; baseline = board.changeCount; queue.removeAll(); queueBytes = 0; setState(timed ? "定时暂停" : "正常"); return }
+        if timed || pausePending || !policy.captureEnabled || capacityBlocked { baseline = board.changeCount; return }
+        switch board.capture(after: baseline, policy: policy) {
+        case .noChange: return
+        case .skipped(let reason, let count):
+            baseline = count
+            if let receipt = ownReceipt, receipt.count == count { ownReceipt = nil; ignored(.selfWrite); return }
+            ownReceipt = nil; if reason == .excluded && policy.pauseWhenExcludedFrontmost { setState("排除应用在前台，未采集") }; ignored(reason)
+        case .snapshot(let snapshot):
+            baseline = snapshot.changeCount
+            guard !pausePending, policy.captureEnabled, policy.revision == snapshot.policyRevision else { ignored(.paused); return }
+            if let receipt = ownReceipt, receipt.count == snapshot.changeCount, board.matches(receipt) { ownReceipt = nil; ignored(.selfWrite); return }
+            // 失败写入造成的空/半份也只忽略该精确计数，随后用户计数立即有效。
+            if let receipt = ownReceipt, !receipt.successful, receipt.count == snapshot.changeCount { ownReceipt = nil; ignored(.selfWrite); return }
+            ownReceipt = nil
+            guard queue.count < 8, queueBytes + snapshot.payload.byteCount <= 64 * MiB else { ignored(.busy); return }
+            queue.append(snapshot); queueBytes += snapshot.payload.byteCount
+            if draining == nil { draining = Task { [weak self] in await self?.drain() } }
+        }
+    }
+    /// 入库前后台解码后复查当前策略及版本；不在主线程解析图片或哈希。
+    private func drain() async {
+        while !queue.isEmpty && !Task.isCancelled {
+            let raw = queue.removeFirst(); queueBytes -= raw.payload.byteCount
+            let snapshot = await Task.detached(priority: .utility) { ContentDecoder.decode(raw) }.value
+            guard !pausePending, policy.captureEnabled, policy.revision == snapshot.policyRevision else { ignored(.paused); continue }
+            do {
+                let result = try await store.ingest(snapshot, at: snapshot.capturedAt)
+                switch result {
+                case .inserted, .deduplicated:
+                    setState("正常"); if policy.captureSounds { NSSound(named: "Pop")?.play() }; onCommit?()
+                    do { _ = try await store.expire(at: clock.now()) }
+                    catch { setState("已记录；期限清理失败，未报告释放") }
+                case .skipped(let reason): ignored(reason)
+                }
+            } catch StoreError.policyChanged { ignored(.paused) }
+            catch StoreError.quotaExceeded {
+                do {
+                    capacityBlocked = try await !store.canCapture()
+                    if capacityBlocked { baseline = board.changeCount; queue.removeAll(); queueBytes = 0 }
+                    setState(capacityBlocked ? "容量已满，未记录新内容" : "容量不足，本条未记录")
+                } catch { setState("容量状态读取失败，未记录") }
+            }
+            catch StoreError.diskFull { setState("磁盘空间不足，未记录") }
+            catch { setState("存储异常，未记录") }
+        }
+        draining = nil
+    }
+    /// 忽略状态只有类别与时间，不包含正文或 URL。
+    private func ignored(_ reason: SkipReason) { lastIgnored = (reason, clock.now()); onState?(state) }
+    /// 暂停优先展示，独立容量状态仍保留。
+    private func setState(_ value: String) { state = pausePending ? "正在暂停" : (policy.pauseUntil ?? 0) > clock.now() ? "定时暂停" : policy.captureEnabled ? value : "用户暂停"; onState?(state) }
+}

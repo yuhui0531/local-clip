@@ -1,0 +1,264 @@
+{
+  "result": {
+    "signed": true,
+    "identifier": "com.wiheads.paste",
+    "team_identifier": null,
+    "format": "app bundle with Mach-O universal (x86_64 arm64)",
+    "cdhashes": [
+      "8a4612160862a423a52cb6912805cb9de6cc49b2"
+    ],
+    "hash_algorithms": [
+      "sha256"
+    ],
+    "authorities": [
+      "Antibiotics"
+    ],
+    "designated_requirement": "identifier \"com.wiheads.paste\" and certificate root = H\"b231060196247a36c3094ac947ba60e226b848bf\"",
+    "entitlements": {
+      "com.apple.application-identifier": "4788TTJ39Y.com.wiheads.paste",
+      "com.apple.security.app-sandbox": true,
+      "com.apple.security.application-groups": [
+        "group.com.wiheads.paste"
+      ],
+      "com.apple.security.files.user-selected.read-only": true,
+      "com.apple.security.network.client": true
+    },
+    "timestamp": "6 Oct 2025 at 21:12:08",
+    "hardened_runtime": false,
+    "provenance": [
+      {
+        "tool": "codesign",
+        "command": [
+          "/usr/bin/codesign",
+          "-d",
+          "--verbose=4",
+          "$ARTIFACT"
+        ],
+        "tool_version": null,
+        "version_reason": "Tool exposes no uniform stable version flag; executable digest identifies it.",
+        "executable_sha256": "c91d293ec824037dc4fcb204c5aae32545f73a79a4d6b5f0d113cc856465f209",
+        "exit": {
+          "code": 0,
+          "signal": null
+        },
+        "stdout_bytes": 0,
+        "stderr_bytes": 922
+      },
+      {
+        "tool": "codesign",
+        "command": [
+          "/usr/bin/codesign",
+          "-d",
+          "-r-",
+          "$ARTIFACT"
+        ],
+        "tool_version": null,
+        "version_reason": "Tool exposes no uniform stable version flag; executable digest identifies it.",
+        "executable_sha256": "c91d293ec824037dc4fcb204c5aae32545f73a79a4d6b5f0d113cc856465f209",
+        "exit": {
+          "code": 0,
+          "signal": null
+        },
+        "stdout_bytes": 112,
+        "stderr_bytes": 56
+      },
+      {
+        "tool": "codesign",
+        "command": [
+          "/usr/bin/codesign",
+          "-d",
+          "--entitlements",
+          ":-",
+          "$ARTIFACT"
+        ],
+        "tool_version": null,
+        "version_reason": "Tool exposes no uniform stable version flag; executable digest identifies it.",
+        "executable_sha256": "c91d293ec824037dc4fcb204c5aae32545f73a79a4d6b5f0d113cc856465f209",
+        "exit": {
+          "code": 0,
+          "signal": null
+        },
+        "stdout_bytes": 540,
+        "stderr_bytes": 144
+      }
+    ],
+    "limitations": [
+      "Entitlements and designated requirements require separate bounded commands."
+    ]
+  },
+  "evidence_id": "ev_6ea590ddfd6acbb67731b0d8ea1f4b1172a17fc1a7e19f4468d311e1140e4eef",
+  "evidence": {
+    "evidence_id": "ev_6ea590ddfd6acbb67731b0d8ea1f4b1172a17fc1a7e19f4468d311e1140e4eef",
+    "subject": {
+      "name": "Paste",
+      "digest": {
+        "sha256": "e0b96d48ee4027dccacded16dd3c738878496ef005b913580b34bfc89d31b2e7"
+      },
+      "format": "mach-o",
+      "architecture": "arm64",
+      "local_path": "/Applications/Paste.app/Contents/MacOS/Paste"
+    },
+    "provider": {
+      "id": "native-macos",
+      "name": "macOS native inspection utilities",
+      "version": null
+    },
+    "predicate_type": "rea.analysis",
+    "operation": "inspect_signature",
+    "parameters": {},
+    "raw_result": {
+      "provenance": [
+        {
+          "tool": "codesign",
+          "command": [
+            "/usr/bin/codesign",
+            "-d",
+            "--verbose=4",
+            "$ARTIFACT"
+          ],
+          "tool_version": null,
+          "version_reason": "Tool exposes no uniform stable version flag; executable digest identifies it.",
+          "executable_sha256": "c91d293ec824037dc4fcb204c5aae32545f73a79a4d6b5f0d113cc856465f209",
+          "exit": {
+            "code": 0,
+            "signal": null
+          },
+          "stdout_bytes": 0,
+          "stderr_bytes": 922
+        },
+        {
+          "tool": "codesign",
+          "command": [
+            "/usr/bin/codesign",
+            "-d",
+            "-r-",
+            "$ARTIFACT"
+          ],
+          "tool_version": null,
+          "version_reason": "Tool exposes no uniform stable version flag; executable digest identifies it.",
+          "executable_sha256": "c91d293ec824037dc4fcb204c5aae32545f73a79a4d6b5f0d113cc856465f209",
+          "exit": {
+            "code": 0,
+            "signal": null
+          },
+          "stdout_bytes": 112,
+          "stderr_bytes": 56
+        },
+        {
+          "tool": "codesign",
+          "command": [
+            "/usr/bin/codesign",
+            "-d",
+            "--entitlements",
+            ":-",
+            "$ARTIFACT"
+          ],
+          "tool_version": null,
+          "version_reason": "Tool exposes no uniform stable version flag; executable digest identifies it.",
+          "executable_sha256": "c91d293ec824037dc4fcb204c5aae32545f73a79a4d6b5f0d113cc856465f209",
+          "exit": {
+            "code": 0,
+            "signal": null
+          },
+          "stdout_bytes": 540,
+          "stderr_bytes": 144
+        }
+      ]
+    },
+    "normalized_result": {
+      "signed": true,
+      "identifier": "com.wiheads.paste",
+      "team_identifier": null,
+      "format": "app bundle with Mach-O universal (x86_64 arm64)",
+      "cdhashes": [
+        "8a4612160862a423a52cb6912805cb9de6cc49b2"
+      ],
+      "hash_algorithms": [
+        "sha256"
+      ],
+      "authorities": [
+        "Antibiotics"
+      ],
+      "designated_requirement": "identifier \"com.wiheads.paste\" and certificate root = H\"b231060196247a36c3094ac947ba60e226b848bf\"",
+      "entitlements": {
+        "com.apple.application-identifier": "4788TTJ39Y.com.wiheads.paste",
+        "com.apple.security.app-sandbox": true,
+        "com.apple.security.application-groups": [
+          "group.com.wiheads.paste"
+        ],
+        "com.apple.security.files.user-selected.read-only": true,
+        "com.apple.security.network.client": true
+      },
+      "timestamp": "6 Oct 2025 at 21:12:08",
+      "hardened_runtime": false,
+      "provenance": [
+        {
+          "tool": "codesign",
+          "command": [
+            "/usr/bin/codesign",
+            "-d",
+            "--verbose=4",
+            "$ARTIFACT"
+          ],
+          "tool_version": null,
+          "version_reason": "Tool exposes no uniform stable version flag; executable digest identifies it.",
+          "executable_sha256": "c91d293ec824037dc4fcb204c5aae32545f73a79a4d6b5f0d113cc856465f209",
+          "exit": {
+            "code": 0,
+            "signal": null
+          },
+          "stdout_bytes": 0,
+          "stderr_bytes": 922
+        },
+        {
+          "tool": "codesign",
+          "command": [
+            "/usr/bin/codesign",
+            "-d",
+            "-r-",
+            "$ARTIFACT"
+          ],
+          "tool_version": null,
+          "version_reason": "Tool exposes no uniform stable version flag; executable digest identifies it.",
+          "executable_sha256": "c91d293ec824037dc4fcb204c5aae32545f73a79a4d6b5f0d113cc856465f209",
+          "exit": {
+            "code": 0,
+            "signal": null
+          },
+          "stdout_bytes": 112,
+          "stderr_bytes": 56
+        },
+        {
+          "tool": "codesign",
+          "command": [
+            "/usr/bin/codesign",
+            "-d",
+            "--entitlements",
+            ":-",
+            "$ARTIFACT"
+          ],
+          "tool_version": null,
+          "version_reason": "Tool exposes no uniform stable version flag; executable digest identifies it.",
+          "executable_sha256": "c91d293ec824037dc4fcb204c5aae32545f73a79a4d6b5f0d113cc856465f209",
+          "exit": {
+            "code": 0,
+            "signal": null
+          },
+          "stdout_bytes": 540,
+          "stderr_bytes": 144
+        }
+      ],
+      "limitations": [
+        "Entitlements and designated requirements require separate bounded commands."
+      ]
+    },
+    "confidence": "observed",
+    "authority": "shipped-artifact",
+    "environment": null,
+    "limitations": [
+      "Entitlements and designated requirements require separate bounded commands."
+    ],
+    "locations": [],
+    "evidence_links": []
+  }
+}

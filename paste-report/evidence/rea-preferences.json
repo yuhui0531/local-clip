@@ -1,0 +1,325 @@
+{
+  "result": {
+    "format": "binary",
+    "value": {
+      "NSStatusItem Preferred Position Item-0": 6130,
+      "NSWindow Frame PasteAppMainWindow_NSWindowFrameAutosaveName": "0 0 2048 333 0 0 2048 1127 ",
+      "NSWindow Frame com.wiheads.paste.paste-stack-frame": "325 674 264 76 0 0 2048 1127 ",
+      "enable-sync": true,
+      "feedbackPromptState": {
+        "$plist_type": "data",
+        "base64": "eyJuZXh0U2NoZWR1bGVkRGF0ZSI6Nzg3MjEyMTQyLjI0MjI5OCwibnVtYmVyT2ZEaXNtaXNzYWxzIjowLCJudW1iZXJPZkFjdGl2YXRpb25zIjowfQ=="
+      },
+      "in-app-notifications": {
+        "$plist_type": "data",
+        "base64": "W10="
+      },
+      "kPSTPreferencesActivationShortcut": {
+        "$plist_type": "data",
+        "base64": "eyJpbnRlcm5hbE1vZGlmaWVycyI6MTE3OTY0OCwia2V5Q29kZSI6OX0="
+      },
+      "kPSTPreferencesBlackAppsBundles": [
+        "com.apple.keychainaccess",
+        "com.apple.Passwords"
+      ],
+      "kPSTPreferencesEnableSoundEffects": false,
+      "lastLaunchedVersion": {
+        "$plist_type": "data",
+        "base64": "eyJtYWpvciI6NiwibWlub3IiOjAsInBhdGNoIjozfQ=="
+      },
+      "paste-stack-shortcut": {
+        "$plist_type": "data",
+        "base64": ""
+      },
+      "pasteboard-change-token": 319,
+      "pasteboardSyncCount": 49289,
+      "selectedListIdentifier": {
+        "$plist_type": "data",
+        "base64": "InNoYXJlZFBhc3RlYm9hcmRIaXN0b3J5Ig=="
+      }
+    },
+    "bundle": {
+      "identifier": null,
+      "executable": null,
+      "name": null,
+      "version": null,
+      "short_version": null
+    },
+    "source_path": "/Users/ronny/Library/Containers/com.wiheads.paste/Data/Library/Preferences/com.wiheads.paste.plist",
+    "provenance": [
+      {
+        "tool": "file",
+        "command": [
+          "/usr/bin/file",
+          "-b",
+          "$PLIST"
+        ],
+        "tool_version": null,
+        "version_reason": "Tool exposes no uniform stable version flag; executable digest identifies it.",
+        "executable_sha256": "926f3fdd8fefe73b596806f6844a4d62b7c4e6bc5e247f6cbd22e5b6424881dd",
+        "exit": {
+          "code": 0,
+          "signal": null
+        },
+        "stdout_bytes": 27,
+        "stderr_bytes": 0
+      },
+      {
+        "tool": "plutil",
+        "command": [
+          "/usr/bin/plutil",
+          "-convert",
+          "json",
+          "-o",
+          "-",
+          "--",
+          "$PLIST"
+        ],
+        "tool_version": null,
+        "version_reason": "Tool exposes no uniform stable version flag; executable digest identifies it.",
+        "executable_sha256": "2d4518b33072df72264a6980d5f139ea733fd80926d540bc4e19102725407471",
+        "exit": {
+          "code": 1,
+          "signal": null
+        },
+        "stdout_bytes": 147,
+        "stderr_bytes": 0
+      },
+      {
+        "tool": "plutil",
+        "command": [
+          "/usr/bin/plutil",
+          "-convert",
+          "xml1",
+          "-o",
+          "-",
+          "--",
+          "$PLIST"
+        ],
+        "tool_version": null,
+        "version_reason": "Tool exposes no uniform stable version flag; executable digest identifies it.",
+        "executable_sha256": "2d4518b33072df72264a6980d5f139ea733fd80926d540bc4e19102725407471",
+        "exit": {
+          "code": 0,
+          "signal": null
+        },
+        "stdout_bytes": 1421,
+        "stderr_bytes": 0
+      }
+    ],
+    "limitations": [
+      "plutil cannot express this plist as JSON, so it was decoded from plutil's XML conversion; data and date values are typed objects such as { \"$plist_type\": \"data\", \"base64\": ... }."
+    ]
+  },
+  "evidence_id": "ev_e938ac630b4d9ca078f9c37b40e679a3b2f6ec091f7a172a14e23c98410cbb2b",
+  "evidence": {
+    "evidence_id": "ev_e938ac630b4d9ca078f9c37b40e679a3b2f6ec091f7a172a14e23c98410cbb2b",
+    "subject": {
+      "name": "Paste",
+      "digest": {
+        "sha256": "e0b96d48ee4027dccacded16dd3c738878496ef005b913580b34bfc89d31b2e7"
+      },
+      "format": "mach-o",
+      "architecture": "arm64",
+      "local_path": "/Applications/Paste.app/Contents/MacOS/Paste"
+    },
+    "provider": {
+      "id": "native-macos",
+      "name": "macOS native inspection utilities",
+      "version": null
+    },
+    "predicate_type": "rea.analysis",
+    "operation": "inspect_plist",
+    "parameters": {
+      "path": "/Users/ronny/Library/Containers/com.wiheads.paste/Data/Library/Preferences/com.wiheads.paste.plist"
+    },
+    "raw_result": {
+      "provenance": [
+        {
+          "tool": "file",
+          "command": [
+            "/usr/bin/file",
+            "-b",
+            "$PLIST"
+          ],
+          "tool_version": null,
+          "version_reason": "Tool exposes no uniform stable version flag; executable digest identifies it.",
+          "executable_sha256": "926f3fdd8fefe73b596806f6844a4d62b7c4e6bc5e247f6cbd22e5b6424881dd",
+          "exit": {
+            "code": 0,
+            "signal": null
+          },
+          "stdout_bytes": 27,
+          "stderr_bytes": 0
+        },
+        {
+          "tool": "plutil",
+          "command": [
+            "/usr/bin/plutil",
+            "-convert",
+            "json",
+            "-o",
+            "-",
+            "--",
+            "$PLIST"
+          ],
+          "tool_version": null,
+          "version_reason": "Tool exposes no uniform stable version flag; executable digest identifies it.",
+          "executable_sha256": "2d4518b33072df72264a6980d5f139ea733fd80926d540bc4e19102725407471",
+          "exit": {
+            "code": 1,
+            "signal": null
+          },
+          "stdout_bytes": 147,
+          "stderr_bytes": 0
+        },
+        {
+          "tool": "plutil",
+          "command": [
+            "/usr/bin/plutil",
+            "-convert",
+            "xml1",
+            "-o",
+            "-",
+            "--",
+            "$PLIST"
+          ],
+          "tool_version": null,
+          "version_reason": "Tool exposes no uniform stable version flag; executable digest identifies it.",
+          "executable_sha256": "2d4518b33072df72264a6980d5f139ea733fd80926d540bc4e19102725407471",
+          "exit": {
+            "code": 0,
+            "signal": null
+          },
+          "stdout_bytes": 1421,
+          "stderr_bytes": 0
+        }
+      ]
+    },
+    "normalized_result": {
+      "format": "binary",
+      "value": {
+        "NSStatusItem Preferred Position Item-0": 6130,
+        "NSWindow Frame PasteAppMainWindow_NSWindowFrameAutosaveName": "0 0 2048 333 0 0 2048 1127 ",
+        "NSWindow Frame com.wiheads.paste.paste-stack-frame": "325 674 264 76 0 0 2048 1127 ",
+        "enable-sync": true,
+        "feedbackPromptState": {
+          "$plist_type": "data",
+          "base64": "eyJuZXh0U2NoZWR1bGVkRGF0ZSI6Nzg3MjEyMTQyLjI0MjI5OCwibnVtYmVyT2ZEaXNtaXNzYWxzIjowLCJudW1iZXJPZkFjdGl2YXRpb25zIjowfQ=="
+        },
+        "in-app-notifications": {
+          "$plist_type": "data",
+          "base64": "W10="
+        },
+        "kPSTPreferencesActivationShortcut": {
+          "$plist_type": "data",
+          "base64": "eyJpbnRlcm5hbE1vZGlmaWVycyI6MTE3OTY0OCwia2V5Q29kZSI6OX0="
+        },
+        "kPSTPreferencesBlackAppsBundles": [
+          "com.apple.keychainaccess",
+          "com.apple.Passwords"
+        ],
+        "kPSTPreferencesEnableSoundEffects": false,
+        "lastLaunchedVersion": {
+          "$plist_type": "data",
+          "base64": "eyJtYWpvciI6NiwibWlub3IiOjAsInBhdGNoIjozfQ=="
+        },
+        "paste-stack-shortcut": {
+          "$plist_type": "data",
+          "base64": ""
+        },
+        "pasteboard-change-token": 319,
+        "pasteboardSyncCount": 49289,
+        "selectedListIdentifier": {
+          "$plist_type": "data",
+          "base64": "InNoYXJlZFBhc3RlYm9hcmRIaXN0b3J5Ig=="
+        }
+      },
+      "bundle": {
+        "identifier": null,
+        "executable": null,
+        "name": null,
+        "version": null,
+        "short_version": null
+      },
+      "source_path": "/Users/ronny/Library/Containers/com.wiheads.paste/Data/Library/Preferences/com.wiheads.paste.plist",
+      "provenance": [
+        {
+          "tool": "file",
+          "command": [
+            "/usr/bin/file",
+            "-b",
+            "$PLIST"
+          ],
+          "tool_version": null,
+          "version_reason": "Tool exposes no uniform stable version flag; executable digest identifies it.",
+          "executable_sha256": "926f3fdd8fefe73b596806f6844a4d62b7c4e6bc5e247f6cbd22e5b6424881dd",
+          "exit": {
+            "code": 0,
+            "signal": null
+          },
+          "stdout_bytes": 27,
+          "stderr_bytes": 0
+        },
+        {
+          "tool": "plutil",
+          "command": [
+            "/usr/bin/plutil",
+            "-convert",
+            "json",
+            "-o",
+            "-",
+            "--",
+            "$PLIST"
+          ],
+          "tool_version": null,
+          "version_reason": "Tool exposes no uniform stable version flag; executable digest identifies it.",
+          "executable_sha256": "2d4518b33072df72264a6980d5f139ea733fd80926d540bc4e19102725407471",
+          "exit": {
+            "code": 1,
+            "signal": null
+          },
+          "stdout_bytes": 147,
+          "stderr_bytes": 0
+        },
+        {
+          "tool": "plutil",
+          "command": [
+            "/usr/bin/plutil",
+            "-convert",
+            "xml1",
+            "-o",
+            "-",
+            "--",
+            "$PLIST"
+          ],
+          "tool_version": null,
+          "version_reason": "Tool exposes no uniform stable version flag; executable digest identifies it.",
+          "executable_sha256": "2d4518b33072df72264a6980d5f139ea733fd80926d540bc4e19102725407471",
+          "exit": {
+            "code": 0,
+            "signal": null
+          },
+          "stdout_bytes": 1421,
+          "stderr_bytes": 0
+        }
+      ],
+      "limitations": [
+        "plutil cannot express this plist as JSON, so it was decoded from plutil's XML conversion; data and date values are typed objects such as { \"$plist_type\": \"data\", \"base64\": ... }."
+      ]
+    },
+    "confidence": "observed",
+    "authority": "shipped-artifact",
+    "environment": null,
+    "limitations": [
+      "plutil cannot express this plist as JSON, so it was decoded from plutil's XML conversion; data and date values are typed objects such as { \"$plist_type\": \"data\", \"base64\": ... }."
+    ],
+    "locations": [
+      {
+        "kind": "artifact-path",
+        "path": "/Users/ronny/Library/Containers/com.wiheads.paste/Data/Library/Preferences/com.wiheads.paste.plist"
+      }
+    ],
+    "evidence_links": []
+  }
+}

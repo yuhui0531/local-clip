@@ -1,0 +1,24 @@
+Executable=/Applications/Paste.app/Contents/MacOS/Paste
+Identifier=com.wiheads.paste
+Format=app bundle with Mach-O universal (x86_64 arm64)
+CodeDirectory v=20400 size=51466 flags=0x0(none) hashes=1598+7 location=embedded
+VersionPlatform=1
+VersionMin=851968
+VersionSDK=1703936
+Hash type=sha256 size=32
+CandidateCDHash sha256=8a4612160862a423a52cb6912805cb9de6cc49b2
+CandidateCDHashFull sha256=8a4612160862a423a52cb6912805cb9de6cc49b2ccb615ae85c3ef2867548382
+Hash choices=sha256
+CMSDigest=8a4612160862a423a52cb6912805cb9de6cc49b2ccb615ae85c3ef2867548382
+CMSDigestType=2
+Executable Segment base=0
+Executable Segment limit=5160960
+Executable Segment flags=0x1
+Page size=4096
+CDHash=8a4612160862a423a52cb6912805cb9de6cc49b2
+Signature size=5421
+Authority=(unavailable)
+Info.plist=not bound
+TeamIdentifier=not set
+Sealed Resources version=2 rules=13 files=78
+Internal requirements count=1 size=96

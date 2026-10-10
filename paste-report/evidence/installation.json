@@ -1,0 +1,10 @@
+{
+  "CFBundleIdentifier": "com.wiheads.paste",
+  "CFBundleShortVersionString": "6.0.3",
+  "CFBundleVersion": "14117",
+  "LSUIElement": true,
+  "LSMinimumSystemVersion": "13.0",
+  "CFBundleExecutable": "Paste",
+  "bundle_path": "/Applications/Paste.app",
+  "helper_identifier": "com.wiheads.paste.mac-helper"
+}

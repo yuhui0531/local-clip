@@ -1,0 +1,66 @@
+# ====================================================================
+# Git Ignore Configuration for rea (LocalClip & Documentation)
+# ====================================================================
+
+# macOS System & Metadata
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+
+# Swift & Swift Package Manager (SPM)
+.build/
+.build-*/
+.swiftpm/
+.cache/
+dist/
+build/
+DerivedData/
+
+# Xcode Project & Workspace User State
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+*.xcworkspace/xcshareddata/
+*.xcuserdatad/
+
+# Application Bundles & Packaged Archives
+*.app/
+*.app
+*.dmg
+*.pkg
+*.tar.gz
+*.zip
+
+# Benchmark & Probe Binaries
+probe
+sql-probe
+rowid-probe
+
+# SQLite Databases & Journal / WAL files (Runtime & Test generated)
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite-journal
+
+# Test & Benchmark Runtime Store Directories
+**/fixture-store/
+**/working-store/
+**/quota-store/
+**/store/
+**/isolated-data/
+
+# IDE & Editor Settings
+.idea/
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+*.swp
+*~
+
+# Python cache & virtual environments
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/

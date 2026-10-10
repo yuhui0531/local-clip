@@ -1,0 +1,107 @@
+// 目标身份、权限与粘贴事件的唯一系统边界，by AI.Coding。
+import AppKit
+// C SDK把只读使用的AX提示常量导入为共享变量；兼容其并发标注，实际调用仍限定主线程。
+@preconcurrency import ApplicationServices
+import OSLog
+import LocalClipCore
+@MainActor public final class MacApplicationClient: ApplicationClient {
+    private var focusTarget: TargetToken?
+    private var rememberedFocus: AXUIElement?
+    private let logger = Logger(subsystem: "local.localclip.dev", category: "Paste")
+    public private(set) var pasteFailureReason: String?
+    public init() {}
+    public var permitted: Bool { AXIsProcessTrusted() }
+    /// 用户点击粘贴时只请求系统显示授权提示，不修改系统权限数据库。
+    public func requestPastePermission() {
+        let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+        _ = AXIsProcessTrustedWithOptions(options)
+        logger.notice("stage=permission_required")
+    }
+    /// 显示已记住的目标，便于用户确认恢复对象；过期身份不借用同 PID 的新进程名，by AI.Coding。
+    public static func targetName(_ target: TargetToken?) -> String {
+        guard let target, let app = NSRunningApplication(processIdentifier: target.pid), !app.isTerminated,
+              app.bundleIdentifier == target.bundleID, app.launchDate?.timeIntervalSince1970 == target.launchedAt else { return "未指定有效目标" }
+        return app.localizedName ?? target.bundleID
+    }
+    /// 面板打开前保存 PID + bundle + 启动身份，不依赖 PID 单独匹配。
+    public func target() -> TargetToken? {
+        guard let app = NSWorkspace.shared.frontmostApplication, app.processIdentifier != ProcessInfo.processInfo.processIdentifier,
+              let bundle = app.bundleIdentifier, let date = app.launchDate else { return nil }
+        return .init(pid: app.processIdentifier, bundleID: bundle, launchedAt: date.timeIntervalSince1970)
+    }
+    /// PID 重用和已退出均拒绝。
+    public func isAlive(_ target: TargetToken) -> Bool {
+        guard let app = NSRunningApplication(processIdentifier: target.pid), !app.isTerminated else { return false }
+        return app.bundleIdentifier == target.bundleID && app.launchDate?.timeIntervalSince1970 == target.launchedAt
+    }
+    /// 发送前必须确认为记住的应用。
+    public func isFrontmost(_ target: TargetToken) -> Bool { isAlive(target) && NSWorkspace.shared.frontmostApplication?.processIdentifier == target.pid }
+    /// 打开面板前只记住目标焦点身份，不读取控件内容；无授权时保留复制回退。
+    public func rememberFocus(for target: TargetToken?) {
+        focusTarget = target; rememberedFocus = nil; pasteFailureReason = nil
+        guard let target, permitted, isFrontmost(target) else {
+            reject(permitted ? "未记住目标焦点，请在目标应用重新打开历史" : "当前LocalClip尚未获得辅助功能权限")
+            return
+        }
+        rememberedFocus = focusedElement(in: target)
+        logger.notice("stage=remember_focus pid=\(target.pid) captured=\(self.rememberedFocus != nil)")
+    }
+    /// 核对原焦点即可；编辑器、文档、画布等由目标应用处理原生粘贴。
+    public func isPasteFocusReady(_ target: TargetToken) -> Bool {
+        guard focusTarget == target, let rememberedFocus else { return reject("未记住目标焦点，请在目标应用重新打开历史") }
+        guard let focused = focusedElement(in: target), CFEqual(rememberedFocus, focused) else { return reject("原目标焦点尚未恢复或已经改变") }
+        let enabled = attribute(kAXEnabledAttribute, of: focused) as? Bool
+        // 原生粘贴不要求文本角色/AXIsEditable/AXValue setter；这些条件会误拒自绘编辑器及非文本目标。
+        // 仍保留原控件身份和明确禁用状态检查，未知可选属性不当作禁用。
+        guard enabled != false else { return reject("目标焦点控件已禁用") }
+        pasteFailureReason = nil
+        return true
+    }
+    /// 日志仅含固定原因与状态，无输入框内容、剪贴板正文、文件路径或URL。
+    @discardableResult private func reject(_ reason: String) -> Bool {
+        if pasteFailureReason != reason { logger.notice("stage=focus_rejected reason=\(reason, privacy: .public)") }
+        pasteFailureReason = reason
+        return false
+    }
+    /// 给无响应应用设置短超时，避免原生查询长时间卡住面板。
+    private func focusedElement(in target: TargetToken) -> AXUIElement? {
+        let application = AXUIElementCreateApplication(target.pid)
+        AXUIElementSetMessagingTimeout(application, 0.1)
+        guard let value = attribute(kAXFocusedUIElementAttribute, of: application),
+              CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
+        let element = value as! AXUIElement
+        AXUIElementSetMessagingTimeout(element, 0.1)
+        var pid: pid_t = 0
+        guard AXUIElementGetPid(element, &pid) == .success, pid == target.pid else { return nil }
+        return element
+    }
+    /// 统一读取身份/角色元数据，失败时不给未知目标发送输入。
+    private func attribute(_ name: String, of element: AXUIElement) -> CFTypeRef? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, name as CFString, &value) == .success else { return nil }
+        return value
+    }
+    /// 最多一次激活，后续由协调层观察，不循环抢焦点。
+    public func activate(_ target: TargetToken) -> Bool {
+        guard isAlive(target), let app = NSRunningApplication(processIdentifier: target.pid) else { return false }
+        return app.activate(options: [])
+    }
+    /// 紧邻发送核对原焦点身份与前台，Command-V由目标应用处理格式和插入行为。
+    /// AX检查可能耗时，必须在检查结束之后紧邻事件再次核对剪贴板收据。
+    public func sendPaste(_ target: TargetToken, ifClipboardUnchanged stillValid: () -> Bool) -> Bool {
+        guard permitted, isFrontmost(target), isPasteFocusReady(target),
+              permitted, isFrontmost(target), let source = CGEventSource(stateID: .privateState),
+              let down = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: true),
+              let up = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: false) else { return false }
+        down.flags = .maskCommand; up.flags = .maskCommand
+        guard stillValid(), permitted, isFrontmost(target) else { return false }
+        // 向已核对的应用进程投递一次按键，避免全局HID路由仍指向刚关闭的面板。
+        down.postToPid(target.pid); up.postToPid(target.pid)
+        logger.notice("stage=command_sent pid=\(target.pid)")
+        return true
+    }
+    /// 仅打开权限页面；授权由用户操作。
+    public static func openAccessibilitySettings() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") { NSWorkspace.shared.open(url) }
+    }
+}
