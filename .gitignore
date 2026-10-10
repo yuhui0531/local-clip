@@ -9,6 +9,9 @@
 .Spotlight-V100
 .Trashes
 
+# Logs & Debug Output
+*.log
+
 # Swift & Swift Package Manager (SPM)
 .build/
 .build-*/
@@ -49,6 +52,10 @@ rowid-probe
 **/quota-store/
 **/store/
 **/isolated-data/
+
+# Local Experience Delivery & Intermediate Validation Artifacts
+evidence/delivery/
+**/evidence/delivery/
 
 # IDE & Editor Settings
 .idea/

@@ -189,7 +189,10 @@ import LocalClipCore
             panel.animationBehavior = .none
             // 底部覆盖Dock所在区域，避免按钮被Dock遮挡；关闭面板即恢复原桌面。
             panel.isReleasedWhenClosed = false; panel.level = .statusBar; panel.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
-            panel.contentView = NSHostingView(rootView: HistoryView(model: model)); panel.minSize = NSSize(width: 680, height: 220)
+            // 窗口尺寸由屏幕和高度设置唯一决定，不让SwiftUI固有尺寸改变内容视口。
+            let host = NSHostingView(rootView: HistoryView(model: model))
+            host.sizingOptions = []
+            panel.contentView = host; panel.minSize = NSSize(width: 680, height: 220)
             self.panel = panel
         }
         if let panel {

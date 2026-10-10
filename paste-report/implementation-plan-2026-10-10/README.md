@@ -8,6 +8,12 @@
 
 本文件制定实施范围和具体行为；[tasks.md](/Users/ronny/VscodeProjects/rea/paste-report/implementation-plan-2026-10-10/tasks.md)负责执行状态；[报告覆盖表](/Users/ronny/VscodeProjects/rea/paste-report/implementation-plan-2026-10-10/report-coverage.csv)逐项处理报告中的76个对比点。本轮M00–M21开发与打包交付完成；功能、真实接收及性能由用户自测。任务与产物状态以tasks.md和当前交付说明为准。
 
+## 2026-10-11 用户确认的行为修正
+
+当前类型与自定义分类改为互斥浏览范围：类型点击退出所有自定义分类；分类点击／新建／快捷切换清除类型；全部清除两者，保留搜索词。分类仍可Command并选取并集，来源与日期作用于当前范围。此规则替代下文原M11中类型与分类叠加的约定。
+
+分类与类型同行整组居中，新建“＋”紧跟最后一个分类，溢出时整组滚动。卡片参考用户截图采用类型／时间、来源图标、清晰正文、全文字符统计及蓝色选中描边。分类拖放目标改为AppKit原生同步令牌接收；不得以编译通过声称实际交互已验收。
+
 ## 1. 执行与交付规则
 
 1. 使用中文沟通。shell 命令以 `rtk` 开头；需要原样执行时用 `rtk proxy`。
@@ -244,3 +250,7 @@ rtk proxy lipo -archs /Users/ronny/VscodeProjects/rea/macos-app/dist/LocalClip.a
 ### 用户补充：全新开发
 
 2026-10-10实施期间用户明确：旧剪贴板历史无需保留。旧历史不再是兼容或保留目标；新目录与schema3继续作为本轮唯一事实。没有旧数据读取、迁移或字段回填。
+
+### 2026-10-11局部验证补充
+
+用户最新要求实际检查UI与图片拖动闪退，允许本次限定隔离合成fixture验证；此前只打包／自测限制对其他功能保持。0.2.3（19）交付可运行Release；实际渲染和AppKit图片writer／delegate验证通过，系统鼠标拖放仍受自动化未投递drag事件阻塞，不能声明通过。禁止兼容／迁移继续适用。详细状态见U06–U08及ui-023/verification.md。

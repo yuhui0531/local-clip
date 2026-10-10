@@ -1,5 +1,43 @@
 # LocalClip 本地体验任务清单
 
+## 2026-10-11 界面与分类修正
+
+- [x] U09 卡片正文与图标比例：普通标题58→40pt、来源图标46→26pt、底栏27→22pt；默认方形卡片正文94→117pt，文件图标缩小且长文件名可展示三行。实际修改HistoryView.swift、VisualProbe.swift的合成长文件名、Info.plist及交付资料；无兼容／迁移／历史存储变化。
+  - 验证：现有Debug渲染入口，以私有临时库合成fixture生成1400×340浅色、1400×400深色、900×220浅色图像；均退出0并目视检查标题、图标、正文与完整边界。证据`macos-app/evidence/delivery/local-experience/ui-024/`。
+  - 交付0.2.4（20）：rtk proxy bash macos-app/scripts/build-app.sh release退出0，27.17秒；git diff --check退出0；签名、arm64、版本、图标及SwiftPM／应用UUID检查。源码打包白名单复查；当前没有重新执行真实拖放、目标接收、性能或完整验收，U07未验证状态保持。
+
+- [x] U06 图片拖动闪退：依据三份0.2.2崩溃报告修正ImageWriter指定初始化路径，验证实际AppKit writer、原始图片和文件promise；不引入兼容或迁移。
+- [ ] U07 实现及渲染验证完成；系统鼠标拖放验收受阻。分类居中／＋紧随、正方形卡片、完整边界与背景遮蔽已经在实际视图检查；CUA没有投递拖动事件，不能认证原生拖放。用户最新要求覆盖此前“只打包、不验证”在本次修复范围内的限制。
+- [x] U08 交付0.2.3（19）Release、当前源码包、实际证据与未验证边界。
+
+U06：实际修改ContentExportProvider.swift；通过super.init()指定路径修正图片provider初始化trap，保留原始格式、PNG promise与delegate生命周期。依据三份0.2.2崩溃报告及SDK指定初始化声明。VisualProbe.swift、main.swift增加Debug专用隔离AppKit回归入口；6种合成记录writer创建、PNG原始格式读取、真实delegate兑现及字节相等通过。证据`macos-app/evidence/delivery/local-experience/ui-023/native-drag-api.json`。私有NSFilePromiseReceiver尝试未回调，不认证真实接收。
+
+U07：实际修改HistoryView.swift、HistoryScrollWheel.swift；整组分类固有宽度居中、＋紧随、方形卡片按真实窗口高度收缩、最低高度精简排版、76%背景底色遮蔽、时间按分钟更新及键盘滚动适配卡片宽度。Debug实际HistoryView在1400×340浅色、1400×400深色、900×220浅色像素渲染和目视检查通过，证据ui-023/light-1400-340.png、dark-1400-400.png、light-900-220.png。隔离窗口分类点击有效。鼠标拖放受阻：CUA.drag投递仅down/up、没有leftMouseDragged且buttons=0，证据pointer-events.log，不改生产检查迎合fake事件。因此本项保留未勾选的鼠标验收部分，不声称全通过。
+
+U08：实际修改Info.plist、README、当前交付说明、实施计划／任务与诊断日志。rtk proxy bash macos-app/scripts/build-app.sh release退出0，27.38秒；签名、arm64、版本0.2.3（19）、图标、SwiftPM和应用Mach-O UUID一致，git diff --check退出0。源码归档使用rtk proxy python3 macos-app/scripts/package-source.py，白名单与编译输入hash复查。证据ui-023/release-build.log、artifacts.json、source-archive.json、verification.md。Release运行尝试误用Debug限定的数据目录变量，UI读取超时，已经停止，不能认证隔离Release界面或目标接收；没有复制或修改Paste数据。交付可运行应用不因该验收受阻扣留，无兼容／迁移／schema变更。
+
+- [x] U05 修正用户截图中的文件卡片裁切、分类偏右和背景文字透出：面板严格受实际窗口尺寸约束，正文不能挤压标题，分类按固有宽度居中，移除重复提示。交付0.2.2（18）；仅编译与静态检查，实际视觉和交互仍由用户自测。
+  - 实际修改：HistoryView.swift、HistoryBackdrop.swift、AppDelegate.swift、Info.plist、build-app.sh、README与当前交付说明；没有改库或迁移。
+  - 验证：rtk proxy bash macos-app/scripts/build-app.sh release 退出0，26.81秒；签名／arm64／Info.plist／图标／编译与应用UUID检查通过，git diff --check退出0。证据ui-022-build.log、ui-022-artifacts.json、ui-022-source-archive.json。
+  - 布局行为：根几何使用窗口实际尺寸；各行高度固定，卡片正文独立裁切；分类标签固有宽度居中；系统popover完整磨砂并叠加少量底色；删除重复提示，窄屏使用图标操作。
+  - 本轮未运行产品、GUI或性能测试。只按用户已授权打开交付应用供自测，不主动操作剪贴板或读取用户／Paste数据。
+
+用户确认：类型与自定义分类互斥切换，保留搜索词；全部清除类型和分类。分类同行整组居中，“＋”紧跟最后一个分类，超宽时整组横向滚动。卡片采用类型／时间标题、来源图标、清晰正文、字符统计与蓝色选中描边。新增要求：原生拖动卡片即可加入自定义分类，不依赖右键。
+
+- [x] U01 统一分类切换入口，清除残留的类型／分类交集；覆盖点击、快捷切换、新建分类与筛选编辑器。
+- [x] U02 分类整组居中及紧随的创建按钮；按截图调整卡片，保留现有多选、点击、预览和拖出功能。
+- [x] U03 分类标签直接接收本进程原生拖放令牌，悬停高亮，放下后提交分类归属；保留多选与其他归属。
+- [x] U04 构建0.2.1（17）Release应用、检查签名与资源、重新打包源码；功能验收由用户自测。
+
+禁止兼容与迁移代码，不访问用户或Paste历史，不运行产品测试或自动启动应用。本节完成记录仅代表开发／编译／静态产物检查。
+
+U01：实际修改HistoryViewModel.swift、HistoryView.swift，统一类型／分类／快捷切换／新建／筛选编辑器入口；保留字面搜索。Release编译通过，功能用户待自测。
+U02：实际修改HistoryView.swift、HistoryScrollWheel.swift、HistoryStore.swift，分类整组居中与＋同行；大圆角卡片、类型／时间／来源图标、全文字符计数按需缓存128条，未改变schema或目录。Release编译通过，视觉和性能用户待自测。
+U03：新增CategoryDropTarget.swift，修改HistoryViewModel.swift、ContentExportProvider.swift、HistoryView.swift。替换NSItemProvider异步接收为NSButton注册原生拖放类型、同步校验并认领会话令牌；补齐拖动区域尺寸、裁剪命中和提交后的目标名称反馈；不读取正文做分类。Release编译通过，真实拖放用户待自测。
+U04：实际修改Resources/Info.plist、README.md、当前交付说明和计划，产物为macos-app/dist/LocalClip.app（0.2.1，17）。最终Release构建退出0，23.14秒；codesign完整校验、Info.plist、arm64架构、图标及SwiftPM／应用Mach-O UUID检查通过。记录ui-021-build.log、ui-021-artifacts.json；源码归档命令rtk proxy python3 macos-app/scripts/package-source.py，结果记录ui-021-source-archive.json；功能／真实应用／性能均用户待自测。
+
+U01–U03编译命令：rtk proxy bash macos-app/scripts/build-app.sh release；首次编译因AppKit同名selector歧义退出1，已更名并完成后续编译；最终构建与静态证据见ui-021-build.log、ui-021-artifacts.json。本轮不运行测试、不打开Paste或LocalClip面板。
+
 日期：2026-10-10。基线：0.1.14（构建15）。状态：**开发与交付22/22；全部功能验收由用户自测**。
 
 必须遵守[实施计划](/Users/ronny/VscodeProjects/rea/paste-report/implementation-plan-2026-10-10/README.md)。**禁止兼容与迁移代码。完成后直接交付Release `.app`，不等待产品测试或用户验收。**
@@ -115,7 +153,7 @@
   - 依赖：M01、M05。
   - 目标：类型／来源／日期／多分类组合、可移除标签、本地元数据建议和Cmd-F／Tab／Return流程。
   - 文件：Domain.swift、HistoryStore.swift、HistoryViewModel.swift、HistoryView.swift、SearchField.swift。
-  - 完成条件：类型不再清分类；字面搜索保留；分页签名覆盖所有条件；无OCR、标题或AI查询。
+  - 完成条件：原“类型不再清分类”约定已由2026-10-11 U01替换为互斥切换；字面搜索保留；分页签名覆盖所有条件；无OCR、标题或AI查询。
 
   - 执行：Codex；实现完成。实际修改：Domain.swift、HistoryStore.swift、HistoryViewModel.swift、HistoryView.swift、SearchField.swift。
   - 编译／证据：Release增量构建已通过；统一最终命令、退出结果与文件身份在M20记录，证据目录`macos-app/evidence/delivery/local-experience/`。功能、真实应用及性能：用户待自测（本轮未执行）。

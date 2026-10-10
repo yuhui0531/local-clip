@@ -19,10 +19,10 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[1] == "--prepare-te
         print("isolated test store initialized paused"); exit(0)
     } catch { exit(3) }
 }
-if CommandLine.arguments.count == 4 && CommandLine.arguments[1] == "--render-ui" {
+if CommandLine.arguments.count == 4 && ["--render-ui", "--interaction-ui"].contains(CommandLine.arguments[1]) {
     let application = NSApplication.shared
     Task { @MainActor in
-        do { try await VisualProbe.render(at: URL(fileURLWithPath: CommandLine.arguments[2]), dark: CommandLine.arguments[3] == "dark", width: Double(ProcessInfo.processInfo.environment["LOCALCLIP_VISUAL_WIDTH"] ?? "1400") ?? 1400); exit(0) }
+        do { try await VisualProbe.render(at: URL(fileURLWithPath: CommandLine.arguments[2]), dark: CommandLine.arguments[3] == "dark", width: Double(ProcessInfo.processInfo.environment["LOCALCLIP_VISUAL_WIDTH"] ?? "1400") ?? 1400, height: Double(ProcessInfo.processInfo.environment["LOCALCLIP_VISUAL_HEIGHT"] ?? "400") ?? 400, keepOpen: CommandLine.arguments[1] == "--interaction-ui"); if CommandLine.arguments[1] == "--render-ui" { exit(0) } }
         catch { print("visual-render-failed: \(error)"); exit(3) }
     }
     application.run()

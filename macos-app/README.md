@@ -1,6 +1,6 @@
-# LocalClip 0.2.0（构建16）
+# LocalClip 0.2.4（构建20）
 
-本轮M00–M21实现与本地Release交付完成。全新schema3与`LocalClip-LocalEdition`数据目录；禁止兼容、迁移和旧接口包装。功能、真实目标接收及性能由用户自测，本轮未启动应用或执行产品测试。
+本次压缩卡片标题、来源图标和底部统计，扩大正文与长文件名区域；正方形卡片及分类布局继续保留。三组隔离合成数据的实际SwiftUI像素已检查，证据`evidence/delivery/local-experience/ui-024/`。完整功能、目标接收、性能与此前未完成的真实鼠标拖放仍由用户自测。无兼容、迁移或历史数据更改。
 
 - 应用：`dist/LocalClip.app`
 - 源码：`dist/LocalClip-source.tar.gz`
@@ -16,7 +16,7 @@ rtk proxy bash macos-app/scripts/build-app.sh release
 
 ---
 
-以下是0.1.14及之前版本的历史README，保留已有工程记录。旧格式、目录、行为、通过数及样本不代表0.2.0；当前说明以上方链接为准。
+以下是0.1.14及之前版本的历史README，保留已有工程记录。旧格式、目录、行为、通过数及样本不代表0.2.4；当前说明以上方链接为准。
 
 # LocalClip 0.1.14
 

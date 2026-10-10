@@ -43,10 +43,11 @@ struct HistoryScrollMetrics: Equatable {
         fileprivate var metrics = HistoryScrollMetrics()
         fileprivate var pendingOffset: CGFloat?
         /// 已完整可见的选中卡片不再次滚动，避免连续方向键制造重叠滚动动画。
-        func needsReveal(index: Int) -> Bool {
+        func needsReveal(index: Int, cardWidth: CGFloat) -> Bool {
             guard metrics.viewport > 0 else { return false }
-            let left = 24 + CGFloat(index) * 266
-            return left < metrics.offset || left + 250 > metrics.offset + metrics.viewport
+            // 正方形卡片随视口高度变化；定位与实际渲染使用相同边长。
+            let left = 24 + CGFloat(index) * (cardWidth + 16)
+            return left < metrics.offset || left + cardWidth > metrics.offset + metrics.viewport
         }
 
         /// 到达请求位置后回到实际偏移；内容变短时不能继续使用旧边界。

@@ -51,7 +51,11 @@ private final class ClipWriter: NSObject, NSPasteboardWriting {
     nonisolated let token: String
     init(access: ClipExportAccess, index: Int, types: [String], token: String, owner: ImagePromise) {
         self.access = access; self.index = index; self.types = types; self.token = token; self.owner = owner
-        super.init(fileType: UTType.png.identifier, delegate: owner)
+        // initWithFileType:delegate:会动态调用子类init；Swift合成的未实现init会直接trap。
+        // 使用AppKit头文件标记的指定初始化器，然后设置文件类型与弱delegate；owner保持强引用。
+        super.init()
+        fileType = UTType.png.identifier
+        delegate = owner
     }
     override func writableTypes(for pasteboard: NSPasteboard) -> [NSPasteboard.PasteboardType] { super.writableTypes(for: pasteboard) + (types + [HistoryViewModel.categoryDragType]).map { NSPasteboard.PasteboardType($0) } }
     override func writingOptions(forType type: NSPasteboard.PasteboardType, pasteboard: NSPasteboard) -> NSPasteboard.WritingOptions { types.contains(type.rawValue) || type.rawValue == HistoryViewModel.categoryDragType ? .promised : super.writingOptions(forType: type, pasteboard: pasteboard) }
@@ -101,6 +105,10 @@ struct HistoryDragBridge: NSViewRepresentable {
     let id: ClipID
     func makeNSView(context: Context) -> DragView { let view = DragView(); view.model = model; view.id = id; view.install(); return view }
     func updateNSView(_ view: DragView, context: Context) { view.model = model; view.id = id }
+    /// 背景桥覆盖整张卡片的实际区域，不依赖无固有尺寸NSView的默认布局。
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: DragView, context: Context) -> CGSize? {
+        CGSize(width: proposal.width ?? 0, height: proposal.height ?? 0)
+    }
     @MainActor final class DragView: NSView, NSDraggingSource {
         weak var model: HistoryViewModel?
         var id: ClipID = ""
@@ -108,11 +116,13 @@ struct HistoryDragBridge: NSViewRepresentable {
         private var start: NSPoint?
         private var preparing = false
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
+        /// 阈值前保留原生点击；开始拖动后由AppKit完整接管源和目标会话。
         func install() {
             monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown,.leftMouseDragged,.leftMouseUp]) { [weak self] event in
                 guard let self, event.window === self.window, let model = self.model else { return event }
                 let point = self.convert(event.locationInWindow, from: nil)
-                if event.type == .leftMouseDown { self.start = self.bounds.contains(point) ? point : nil; return event }
+                // 滚动裁剪之外的卡片不能抢到相邻控件的按下事件。
+                if event.type == .leftMouseDown { self.start = self.visibleRect.contains(point) ? point : nil; return event }
                 if event.type == .leftMouseUp { self.start = nil; return event }
                 guard let start = self.start, !self.preparing, hypot(point.x-start.x,point.y-start.y) > 4 else { return event }
                 self.preparing = true; self.start = nil

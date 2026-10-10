@@ -310,7 +310,13 @@ import LocalClipCore
                 await capture.refreshCapacity(); usage = try await store.usage()
                 let undo = await store.undoAvailable()
                 let deleted = { if case .delete = change { return true }; return false }()
-                message = (undo ? "可按⌘Z撤销（30秒） · " : deleted ? "本次删除不可撤销（超过内存预算或无可恢复内容） · " : "") + "已保存变更，删除\(result.removed)条，实际释放\(Self.bytes(result.reclaimedBytes))"
+                // 分类归属成功后明确目标名称；只有提交完成才报告加入成功。
+                if case .category(let ids, let categoryID, true) = change {
+                    let name = categories.first(where: { $0.id == categoryID })?.name ?? "分类"
+                    message = "已将\(ids.count)条记录加入“\(name)”"
+                } else {
+                    message = (undo ? "可按⌘Z撤销（30秒） · " : deleted ? "本次删除不可撤销（超过内存预算或无可恢复内容） · " : "") + "已保存变更，删除\(result.removed)条，实际释放\(Self.bytes(result.reclaimedBytes))"
+                }
                 refresh()
             } catch StoreError.stalePreview { pendingDeletion.removeAll(); message = "历史已变化，请重新预览并确认"; refresh() }
             catch { pendingDeletion.removeAll(); message = "变更未完成，旧内容保持或存储不可用，请检查状态"; refresh() }
@@ -339,7 +345,7 @@ import LocalClipCore
                     categories = try await store.categories(); message = "分类已重命名"
                 } else {
                     let created = try await store.createCategory(name: name, colorHex: categoryColor)
-                    categories = try await store.categories(); categoryFilters = [created.id]; categoryID = created.id
+                    categories = try await store.categories(); selectCategories([created.id])
                     message = "分类已创建；把历史卡片拖到分类标签即可加入"
                 }
                 showingCategoryEditor = false
@@ -360,25 +366,20 @@ import LocalClipCore
         categoryDrag = (token, orderedSelection, clock.now() + 60_000)
         dragActive = true; panelInteractionChanged?(); return token
     }
-    /// 接受拖放不代表持久化成功；加载令牌后再次校验记录与目标，复用分类提交。
-    public func dropIntoCategory(_ providers: [NSItemProvider], categoryID: String) -> Bool {
-        guard !providers.isEmpty, let provider = providers.first,
-              provider.hasItemConformingToTypeIdentifier(Self.categoryDragType),
-              categories.contains(where: { $0.id == categoryID }), let drag = categoryDrag,
-              clock.now() <= drag.expiresAt, !showingCategoryEditor else { return false }
-        provider.loadDataRepresentation(forTypeIdentifier: Self.categoryDragType) { [weak self] data, _ in
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                guard let data, data.count == 36, String(data: data, encoding: .utf8) == drag.token,
-                      categoryDrag?.token == drag.token, clock.now() <= drag.expiresAt,
-                      drag.ids.allSatisfy({ id in items.contains(where: { $0.id == id }) && !pendingDeletion.contains(id) }),
-                      categories.contains(where: { $0.id == categoryID }) else {
-                    message = "拖入未完成，请重新拖动仍在历史中的记录"; return
-                }
-                categoryDrag = nil
-                change(.category(drag.ids, categoryID, true))
-            }
+    /// 原生拖放目标同步校验令牌，不读取正文，不接受其他应用伪造的归属ID。
+    public func canDropIntoCategory(_ token: String, categoryID: String) -> Bool {
+        guard dragActive, !changingHistory, let drag = categoryDrag, token == drag.token,
+              clock.now() <= drag.expiresAt, !showingCategoryEditor,
+              categories.contains(where: { $0.id == categoryID }) else { return false }
+        return !drag.ids.isEmpty && drag.ids.allSatisfy { id in
+            items.contains(where: { $0.id == id }) && !pendingDeletion.contains(id)
         }
+    }
+    /// 放下时先认领令牌，再结束拖动；提交失败仍由统一变更入口报告，不把接收当保存成功。
+    public func dropIntoCategory(_ token: String, categoryID: String) -> Bool {
+        guard canDropIntoCategory(token, categoryID: categoryID), let drag = categoryDrag else { return false }
+        categoryDrag = nil
+        change(.category(drag.ids, categoryID, true))
         return true
     }
     /// 分类变更只影响归属，成功后刷新查询版本，旧分页结果不能混入新分类。
@@ -502,15 +503,27 @@ import LocalClipCore
         }
         if let id = (last ? items.last : items.first)?.id { choose(id, modifiers: extend ? .shift : []) }
     }
+    /// 类型入口切换到整个历史，清除自定义分类及收藏范围，保留字面搜索和显式来源／日期条件。
+    public func selectKind(_ value: ClipKind?) {
+        categoryID = nil; categoryFilters = []; favorites = false; kind = value
+    }
+    /// 自定义分类是独立浏览范围，任何入口都不能携带先前的内容类型。
+    public func selectCategories(_ values: Set<String>) {
+        kind = nil; favorites = false; categoryFilters = values
+        categoryID = values.count == 1 ? values.first : nil
+    }
+    /// 普通点击切换单分类，Command允许分类并集；两种方式都退出类型筛选。
     public func toggleCategory(_ id: String) {
         var next = activeCategories
         if next.contains(id) { next.remove(id) } else if NSEvent.modifierFlags.contains(.command) { next.insert(id) } else { next = [id] }
-        categoryFilters = next; categoryID = next.count == 1 ? next.first : nil
+        selectCategories(next)
     }
+    /// 快捷键切换与分类点击使用同一范围契约。
     public func switchBoard(_ delta: Int) {
         let boards: [String?] = [nil] + categories.map { Optional($0.id) }
         let index = boards.firstIndex(of: categoryID) ?? 0
-        categoryID = boards[(index + delta + boards.count) % boards.count]; categoryFilters = Set(categoryID.map { [$0] } ?? [])
+        let board = boards[(index + delta + boards.count) % boards.count]
+        selectCategories(Set(board.map { [$0] } ?? []))
     }
     public func moveCategory(_ category: ClipCategory, delta: Int) {
         Task { do { try await store.moveCategory(id: category.id, delta: delta); categories = try await store.categories() } catch { message = "分类排序未保存" } }

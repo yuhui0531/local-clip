@@ -15,6 +15,8 @@ public actor HistoryStore: HistoryRepository {
     }
     private var searchRevision: Int64 = -1
     private var searchDocuments: [SearchDocument] = []
+    // 仅缓存有限数量的字符统计，不保留正文；记录ID／指纹和可见性仍每次复查。
+    private var characterCounts: [ClipID: (hash: String, count: Int)] = [:]
     /// 高版本检查先于 pragma、恢复与任何写操作。
     public init(location: URL, clock: any ClipClock = SystemClock(), faults: any StorageFaultInjector = NoStorageFault(), initialSettings: SettingsSnapshot = .init(), extractor: @escaping @Sendable (Representation) -> String? = BasicTextDecoder.extract) throws {
         self.clock = clock; self.extractor = extractor
@@ -240,6 +242,43 @@ public actor HistoryStore: HistoryRepository {
     }
     /// 接口分离避免列表批量读取图片。
     public func loadPayload(id: ClipID, at: Instant) throws -> ClipboardPayload { try detail(id: id, at: at).payload }
+    /// 可见文本卡片按需统计完整文字，不把180字符摘要当全文，不批量读取图片或文件载荷。
+    public func textCharacterCount(id: ClipID, at: Instant) throws -> Int? {
+        let settings = try settings()
+        return try strategy.read { db in
+            guard let row = try db.rows("SELECT *, (isFavorite=1 OR EXISTS(SELECT 1 FROM clip_categories WHERE clipID=clips.id)) AS isProtected FROM clips WHERE id=?", [.text(id)]).first,
+                  visible(row, at: at, settings: settings) else { throw StoreError.notFound }
+            let hash = row.text("contentHash")
+            if let cached = characterCounts[id], cached.hash == hash { return cached.count }
+            let types = [SupportedType.string, SupportedType.url, SupportedType.rtf, SupportedType.html]
+            let placeholders = types.map { _ in "?" }.joined(separator: ",")
+            let parameters: [SQLValue] = [.text(id)] + types.map(SQLValue.text)
+            let indices = try db.rows("SELECT DISTINCT itemIndex FROM representations WHERE clipID=? AND type IN(" + placeholders + ") ORDER BY itemIndex", parameters)
+            guard !indices.isEmpty else { return nil }
+            let indexed = try db.rows("SELECT itemIndex,plainText FROM text_content WHERE clipID=? ORDER BY itemIndex", [.text(id)])
+            var texts: [String] = []
+            for index in indices {
+                let itemIndex = index.int("itemIndex")
+                if let text = indexed.first(where: { $0.int("itemIndex") == itemIndex }) {
+                    texts.append(text.text("plainText")); continue
+                }
+                // 派生索引可能被容量策略回收；只恢复文字表示，绝不读取同项目的图片字节。
+                let values = try db.rows("SELECT type,blobDigest,payload,byteCount FROM representations JOIN blobs ON digest=blobDigest WHERE clipID=? AND type IN(" + placeholders + ") AND itemIndex=?", parameters + [.integer(itemIndex)])
+                var representations: [Representation] = []
+                for value in values {
+                    let data = value.data("payload")
+                    guard Int64(data.count) == value.int("byteCount"), ContentFingerprint.hash(data) == value.text("blobDigest") else { throw StoreError.corruptPayload }
+                    representations.append(.init(value.text("type"), data))
+                }
+                if let text = extractedText(.init(representations)) { texts.append(text) }
+            }
+            guard !texts.isEmpty else { return nil }
+            let count = texts.joined(separator: "\n").count
+            if characterCounts.count >= 128 { characterCounts.removeAll(keepingCapacity: true) }
+            characterCounts[id] = (hash, count)
+            return count
+        }
+    }
     /// 摘要只包含轻量元数据；未知来源不沿用旧来源。
     private func summary(_ row: [String: SQLValue], context: String? = nil) -> ClipSummary {
         let bundle = row.text("sourceBundleID")

@@ -9,14 +9,14 @@ struct HistoryBackdrop: NSViewRepresentable {
     func makeNSView(context: Context) -> NSVisualEffectView {
         let view = BackdropView()
         view.blendingMode = .behindWindow
-        view.material = .underWindowBackground
+        view.material = .popover
         view.state = .active
         updateNSView(view, context: context)
         return view
     }
-    /// 只减弱背景，不降低整个窗口alpha；尊重系统降低透明度选项。
+    /// 保持系统模糊完整强度；降低整块材质alpha会让背后正文直接透出。
     func updateNSView(_ view: NSVisualEffectView, context: Context) {
-        view.alphaValue = NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency ? 1 : 0.78
+        view.alphaValue = 1
     }
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSVisualEffectView, context: Context) -> CGSize? {
         CGSize(width: proposal.width ?? 0, height: proposal.height ?? 0)

@@ -17,6 +17,9 @@ DerivedData/
 .DS_Store
 ._*
 
+# Logs & Debug Output
+*.log
+
 # Application Bundles & Archives
 *.app/
 *.app
@@ -44,3 +47,7 @@ isolated-data/
 **/quota-store/
 **/store/
 **/isolated-data/
+
+# Intermediate Delivery & Validation Artifacts
+evidence/delivery/
+**/evidence/delivery/

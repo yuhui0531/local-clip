@@ -18,7 +18,7 @@ def main() -> None:
                      and not any(part.startswith(".") for part in path.relative_to(APP).parts)
                      and path.suffix not in {".sqlite", ".db", ".pyc"})
     plan = PROJECT / "paste-report/implementation-plan-2026-10-10"
-    files.extend(plan / name for name in ("README.md", "tasks.md", "report-coverage.csv", "user-checklist.md"))
+    files.extend(plan / name for name in ("README.md", "tasks.md", "report-coverage.csv", "user-checklist.md", "debug-image-drag-2026-10-11.md"))
     DESTINATION.parent.mkdir(exist_ok=True)
     with tarfile.open(DESTINATION, "w:gz") as archive:
         for path in sorted(set(files)):

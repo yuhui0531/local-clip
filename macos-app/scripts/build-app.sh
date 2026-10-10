@@ -11,7 +11,9 @@ swift build --disable-sandbox --cache-path "$root/.cache/packages" --package-pat
 bin="$(swift build --disable-sandbox --cache-path "$root/.cache/packages" --package-path "$root" --scratch-path "$scratch" -c "$configuration" --show-bin-path)"
 bundle="$root/dist/LocalClip.app"
 mkdir -p "$bundle/Contents/MacOS" "$bundle/Contents/Resources"
-cp "$bin/LocalClip" "$bundle/Contents/MacOS/LocalClip"
+# 用新inode替换主程序，避免用户仍在运行上一版时覆盖其已映射的执行文件。
+cp "$bin/LocalClip" "$bundle/Contents/MacOS/LocalClip.new"
+mv -f "$bundle/Contents/MacOS/LocalClip.new" "$bundle/Contents/MacOS/LocalClip"
 cp "$root/Resources/Info.plist" "$bundle/Contents/Info.plist"
 cp "$root/Resources/LocalClip.icns" "$bundle/Contents/Resources/LocalClip.icns"
 for resource in "$bin"/*.bundle; do
