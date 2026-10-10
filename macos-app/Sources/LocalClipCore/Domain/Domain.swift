@@ -131,6 +131,12 @@ public struct SettingsSnapshot: Codable, Equatable, Sendable {
     public var pauseUntil: Instant?
     public var pauseWhenExcludedFrontmost = false
     public var panelHeight = 340.0
+    // 可选存储字段通过默认值关闭功能，无历史迁移或自定义解码，by AI.Coding。
+    private var codeFilePasteEnabled: Bool?
+    public var smartCodeFilePaste: Bool {
+        get { codeFilePasteEnabled == true }
+        set { codeFilePasteEnabled = newValue }
+    }
     public var captureSounds = false
     public var showMenuIcon = true
     public var hideContents = false
@@ -292,11 +298,13 @@ public struct WriteReceipt: Sendable, Equatable { public var count: Int; public 
     func write(_ payload: ClipboardPayload, fingerprint: String) -> WriteReceipt
     func matches(_ receipt: WriteReceipt) -> Bool
 }
+public enum PasteTargetKind: Sendable { case text, files, unknown }
 @MainActor public protocol ApplicationClient: AnyObject {
     var permitted: Bool { get }
     var pasteFailureReason: String? { get }
     func requestPastePermission()
     func target() -> TargetToken?
+    func pasteTargetKind(_ target: TargetToken) -> PasteTargetKind
     func isAlive(_ target: TargetToken) -> Bool
     func isFrontmost(_ target: TargetToken) -> Bool
     func activate(_ target: TargetToken) -> Bool

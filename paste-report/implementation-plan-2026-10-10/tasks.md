@@ -1,5 +1,38 @@
 # LocalClip 本地体验任务清单
 
+## 2026-10-11 代码文件粘贴故障修复
+
+- [x] CF01 确認Swift/JSON文件与双击操作链路；实际观察Zed仅暴露窗口焦点，复现面板unknown在焦点恢复后不转换。修改MacApplicationClient.swift、PasteCoordinator.swift、FakeApplications及CodeFeaturesTests.swift；red-focus.log四个断言失败后，新增开关开/关及两种文件原文断言通过。
+- [x] CF02 保留VS Code原焦点。首轮真实目标测试vscode-swift-ready.json发现AXManualAccessibility导致控件身份重建和安全回退，移除该状态修改，不改变编辑器设置、不放宽任意应用/非文本控件。最终回归66个测试/19个suite，8.549秒（regression-native-fix.log）。包括真实临时SQLite、私有命名板、12个SIGKILL故障断点及500MiB不丢失旧内容。
+- [x] CF03 实际接收验证：VS Code 1.141.0、Zed 1.23.2各收到Swift/JSON完整正文，四份通过真实编辑器另存的文件与fixture逐字节一致；Zed关闭开关保持原文件路径行为。证据actual-receipt.json、vscode/zed-*-received.png、*-final/ready.json。使用真正MacApplicationClient/PasteCoordinator及系统剪贴板，Debug隔离库不启动采集。macOS 15.7.5 arm64。完整鼠标双击链路及其他目标未重验，额外手动Command–V被前台身份检查阻止，见排查记录；不以commandSent代替接收。
+- [x] CF04 构建Release 0.3.1（22）并检查签名、arm64、代码节与资源；更新源码包、README、交付报告、排查记录。命令`rtk proxy bash macos-app/scripts/build-app.sh release`、`rtk proxy python3 macos-app/scripts/package-source.py`；证据目录macos-app/evidence/delivery/code-smart-paste-fix。禁止兼容/迁移代码，开关仍默认关闭，高亮始终独立启用。产物macos-app/dist/LocalClip.app。
+
+排查详情：[debug-log-2026-10-11-code-file-paste.md](debug-log-2026-10-11-code-file-paste.md)。失败尝试保留；完整回归与真实目标接收分开记录。
+
+## 代码高亮与代码文件智能粘贴（本次用户需求）
+
+PROJECT_ROOT：/Users/ronny/VscodeProjects/rea；CHANGE_DIR：/Users/ronny/VscodeProjects/rea/paste-report/implementation-plan-2026-10-10。基于明确用户行为直接实施，不重建工程；读现有Domain／Schema／HistoryView／SettingsView／PasteCoordinator／MacApplicationClient及测试。没有单独本次design.md，采用下述接口契约；历史设计沿用现有SQLite与候选提交路径。新开关默认关闭，旧文件行为保持；不迁移历史或schema。
+
+- [x] C01 独立接口与故障边界：新增可选设置值（有效默认false）、文本目标种类；先写默认／持久化／目标与文件读取／高亮测试。
+- [x] C02 离线highlight.js11.11.1＋JavaScriptCore后台串行解析，复用同一组件用于卡片和详情；始终启用、有限缓存与输入边界，不执行剪贴板代码。
+- [x] C03 代码文件读取：扩展名白名单、严格UTF8／BOM UTF16／UTF32、二进制／目录／非普通文件拒绝、大小／身份复查，多文件按序换行，全组失败保留原文件。
+- [x] C04 智能输出与设置：文本编辑场景使用文件文字；Finder及未知保持文件；设置运行时／发送前复查，目标与焦点变化停止或保留原格式，不改变历史或格式去重。
+- [ ] C05 新功能／SQLite／原有回归、真实命名剪贴板、实际UI渲染及性能已完成；后续CF03已验证Zed/VS Code的Swift/JSON实际接收；Safari/Chrome、TextEdit、Finder目录接收尚未重验，故本项仍未勾选。原权限受阻证据属于0.3.0历史记录。
+- [x] C06 交付Release.app、当前源码与验证报告，更新任务。禁止新增历史迁移；此次向后行为要求以默认关闭满足，不新增兼容框架。
+
+接口契约：SyntaxHighlighter.highlight(text, languageHint)返回Sendable语言与UTF16着色范围（失败纯文本）；CodeFileReader.read(urls)返回完整有序文本或明确拒绝（4MiB每文件／8MiB整组，原始文件不改）；ApplicationClient.pasteTargetKind(target)返回text／files／unknown，只读目标焦点元信息，不读正文；PasteCoordinator仅对确认text且有效开关开启的文件集尝试转换，未知与失败原文件。普通复制也基于已记住目标进行选择；文件Finder路径继续复用。
+
+
+本轮实际完成记录（证据统一为`macos-app/evidence/delivery/code-smart-paste/`）：
+
+- C01：修改Domain.swift、测试FakeApplications及CodeFeaturesTests.swift；有效默认false，真实SQLite重开后true/false保持。命令`rtk proxy bash macos-app/scripts/test.sh --filter SmartPasteTests`先行行为失败记录red-smart.log；最终`rtk proxy env LOCALCLIP_NAMED_TEST=1 bash macos-app/scripts/test.sh`启用65个测试全部通过（regression-packaged-final.log，8.384秒）。未新增schema、历史迁移或自定义兼容解码。
+- C02：新增SyntaxHighlighter.swift、SyntaxPreview.swift及highlight.js 11.11.1/许可证资源，修改Package.swift、HistoryView.swift、VisualProbe.swift与Debug main入口。JavaScriptCore在后台串行执行官方纯文字高亮API，XML范围解析逐字核对，CRLF及Unicode支持；8192 UTF16单位边界、64项摘要键缓存、详情保留全文；修正封装.app直接从Contents/Resources读取JS，真正PackagedDebug.app隔离渲染通过（packaged-resources-light.png），不依赖构建目录的module路径。JSON/Java/Python/JS/TS/YAML/XML/HTML/CSS/Shell、转义、巨型组合字符测试通过。实际HistoryView卡片及共用详情组件开关off/on、light/dark渲染通过，cards-off-light/cards-on-dark/detail-off-light/detail-on-dark.png逐张检查。不是HTML/模拟设计稿，不声明Release正常启动验收。
+- C03：新增CodeFileReader.swift；真临时文件验证顺序、严格UTF8与BOM UTF16/32、中文/emoji/缩进/CRLF、缺文件/二进制/目录/符号链接/FIFO/4与8MiB上限/替换身份复查。任一文件失败整组保留原始引用，原件不修改。证据regression-packaged-final.log及CodeFeaturesTests.swift。
+- C04：修改PasteCoordinator.swift、MacApplicationClient.swift、SettingsView.swift。实际设置开关保存复用原路径；分类只读AX角色/可编辑性/选区元数据。开关关闭沿用旧格式组合（纯文本文件复制路径），开启仅确认文本目标读取正文；Finder与未知/只读/安全控件保留文件。运行时关闭、原件变化、目标变化、剪贴板用户新复制、权限与格式边界通过；历史原始表示字节不变。真实私有NSPasteboard新开关类型转换测试通过（named-board.log及最终全回归）。fake事件不等同第三方接收。
+- C05：最终全回归65个测试/19个suite通过，含3个命名板、真实SQLite、12个子进程SIGKILL故障断点及500MiB保护验证。发现容量下调提交与预演不一致，修改HistoryStore.swift使保护内容超额仍保留；原有CrashRecovery/StorageProbe/配额fixture改为当前schema真实磁盘预算，详情测试主动打开懒加载，fake激活竞争测试重置前台目标以真正触发回调；未删除断言或跳过失败。regression.log保留失败，regression-packaged-final.log为最终通过。当前实际系统API权限false见system-api.json及packaged-system-api.json，TextEdit/IDE/浏览器/Finder接收未认证，没有改TCC或用户数据。
+- C05性能：`rtk proxy env LOCALCLIP_CODE_PERF=1 LOCALCLIP_CODE_PERF_OUTPUT=/Users/ronny/VscodeProjects/rea/macos-app/evidence/delivery/code-smart-paste/performance-release-final.json bash macos-app/scripts/test.sh -c release --filter CodePerformanceTests`通过；1次冷启动51.542ms、30次未缓存高亮P95 11.849ms/缓存P95 0.114ms、10次4MiB读取P95 9.286ms。原始样本及summary均保留，不替代端到端复制到可见或第三方接收性能。
+- C06：修改Info.plist、README、docs/code-features-delivery.md、package-source.py及本清单；交付0.3.0（21）。`rtk proxy bash macos-app/scripts/build-app.sh release`最终退出0、26.52秒（release-packaged-final.log）；首次输入在编译期间修改被Swift拒绝，保留失败日志并冻结源码重建。签名/arm64/版本/SwiftPM与.app程序UUID及__text代码节哈希/内置JS与许可证资源/Release无Debug探针检查通过（artifacts.json）。`rtk proxy python3 macos-app/scripts/package-source.py`交付白名单源码；源码快照hash及git diff --check通过（source-archive.json、source-verification.json）。只交付，不自动启动正式数据路径，不上传内容。第三方接收阻塞不扣留应用，也不宣布全部验收完成。
+
 ## 2026-10-11 界面与分类修正
 
 - [x] U09 卡片正文与图标比例：普通标题58→40pt、来源图标46→26pt、底栏27→22pt；默认方形卡片正文94→117pt，文件图标缩小且长文件名可展示三行。实际修改HistoryView.swift、VisualProbe.swift的合成长文件名、Info.plist及交付资料；无兼容／迁移／历史存储变化。

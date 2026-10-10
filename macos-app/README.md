@@ -1,12 +1,17 @@
-# LocalClip 0.2.4（构建20）
+# LocalClip 0.3.1（构建22）
 
-本次压缩卡片标题、来源图标和底部统计，扩大正文与长文件名区域；正方形卡片及分类布局继续保留。三组隔离合成数据的实际SwiftUI像素已检查，证据`evidence/delivery/local-experience/ui-024/`。完整功能、目标接收、性能与此前未完成的真实鼠标拖放仍由用户自测。无兼容、迁移或历史数据更改。
+本次修复：补足Zed窗口焦点识别、VS Code原焦点保持及原焦点恢复后的代码文件转换。66个回归测试通过；实际第三方接收记录见[排查与验证报告](../paste-report/implementation-plan-2026-10-10/debug-log-2026-10-11-code-file-paste.md)。设置中「代码文件智能粘贴」仍默认关闭，用户主动开启；语法高亮始终开启。Finder及未知目标保持文件。
+
+## 0.2.4（20）的既有界面基础
+
+此前压缩卡片标题、来源图标和底部统计，扩大正文与长文件名区域；正方形卡片及分类布局继续保留。三组隔离合成数据的实际SwiftUI像素已检查，证据`evidence/delivery/local-experience/ui-024/`。完整功能、目标接收、性能与此前未完成的真实鼠标拖放仍由用户自测。无兼容、迁移或历史数据更改。
 
 - 应用：`dist/LocalClip.app`
 - 源码：`dist/LocalClip-source.tar.gz`
 - [当前使用说明、权限、自测与限制](docs/local-experience-delivery.md)
 - [本轮任务](../paste-report/implementation-plan-2026-10-10/tasks.md)
-- 当前构建及产物身份：`evidence/delivery/local-experience/`
+- 当前修复证据：`evidence/delivery/code-smart-paste-fix/`；高亮与组件性能基线：`evidence/delivery/code-smart-paste/`
+- 既有界面证据：`evidence/delivery/local-experience/`
 
 ```sh
 rtk proxy bash macos-app/scripts/build-app.sh release
@@ -16,7 +21,7 @@ rtk proxy bash macos-app/scripts/build-app.sh release
 
 ---
 
-以下是0.1.14及之前版本的历史README，保留已有工程记录。旧格式、目录、行为、通过数及样本不代表0.2.4；当前说明以上方链接为准。
+以下是0.1.14及之前版本的历史README，保留已有工程记录。旧格式、目录、行为、通过数及样本不代表0.3.1；当前说明以上方链接为准。
 
 # LocalClip 0.1.14
 

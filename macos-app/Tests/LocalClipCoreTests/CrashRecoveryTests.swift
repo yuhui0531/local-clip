@@ -26,7 +26,7 @@ struct CrashRecoveryTests {
             #expect(try db.scalarText("PRAGMA integrity_check") == "ok"); #expect(try db.rows("PRAGMA foreign_key_check").isEmpty)
             #expect(try db.scalarInt("SELECT COUNT(*) FROM blobs WHERE NOT EXISTS(SELECT 1 FROM representations WHERE blobDigest=blobs.digest)") == 0); try db.close()
             if !committed { #expect(ContentFingerprint.hash(try Data(contentsOf: root.appendingPathComponent("History/history.sqlite"))) == String(decoding: try Data(contentsOf: root.appendingPathComponent("before.sha256")),as:UTF8.self)) }
-            #expect(try await store.usage().measuredTotal <= 400_000)
+            #expect(try await store.usage().measuredTotal <= store.settings().quotaBytes)
             print("AC26 production SIGKILL \(point.rawValue) => bytes \(contents.sorted()) integrity/FK/hash/quota ok")
         }
     }

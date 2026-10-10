@@ -4,12 +4,15 @@ import Testing
 import LocalClipCore
 @testable import LocalClipMac
 @MainActor final class FakeApplications: ApplicationClient {
+    var targetKind: PasteTargetKind = .unknown
+    func pasteTargetKind(_ target: TargetToken) -> PasteTargetKind { targetKind }
     var permitted = true
     let remembered = TargetToken(pid: 123, bundleID: "local.target", launchedAt: 100)
     var current: TargetToken?
     var alive = true
     var activationOK = true
     var onActivate: (() -> Void)?
+    var onRestore: (() -> Void)?
     var events = 0
     var activations = 0
     /// 目标 identity 保存完整 token。
@@ -21,7 +24,7 @@ import LocalClipCore
     var pasteFailureReason: String? { nil }
     func requestPastePermission() {}
     func isPasteFocusReady(_ target: TargetToken) -> Bool { isFrontmost(target) }
-    func restorePasteFocus(_ target: TargetToken) -> Bool { isFrontmost(target) }
+    func restorePasteFocus(_ target: TargetToken) -> Bool { onRestore?(); return isFrontmost(target) }
     func sendPaste(_ target: TargetToken, ifClipboardUnchanged stillValid: () -> Bool) -> Bool { guard stillValid(), permitted, isFrontmost(target) else { return false }; events += 1; return true }
 }
 @MainActor struct EndToEndTests {
@@ -119,14 +122,14 @@ import LocalClipCore
         if case .fallback = await paste.perform(request) {} else { Issue.record("缺权限未回退") }; #expect(apps.events == 1)
         apps.permitted = true; apps.alive = false
         if case .fallback = await paste.perform(request) {} else { Issue.record("退出未回退") }; #expect(apps.events == 1)
-        apps.alive = true; apps.activationOK = false
+        apps.alive = true; apps.current = nil; apps.activationOK = false
         if case .fallback = await paste.perform(request) {} else { Issue.record("激活失败未回退") }
         apps.activationOK = true; apps.onActivate = { apps.current = .init(pid: 456, bundleID: "local.other", launchedAt: 200) }
         if case .fallback = await paste.perform(request) {} else { Issue.record("焦点变化未回退") }; #expect(apps.events == 1)
-        apps.onActivate = { raw.user("USER-B") }
+        apps.current = nil; apps.onActivate = { raw.user("USER-B") }
         #expect(await paste.perform(request) == .failed("剪贴板已变化，请重新选择")); #expect(apps.events == 1)
         #expect(raw.items[0][SupportedType.string] == Data("USER-B".utf8))
-        apps.onActivate = {
+        apps.current = nil; apps.onActivate = {
             apps.current = .init(pid: 456, bundleID: "local.other", launchedAt: 200)
             raw.user("USER-B-COMBINED")
         }

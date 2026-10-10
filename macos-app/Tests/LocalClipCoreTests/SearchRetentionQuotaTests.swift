@@ -88,13 +88,15 @@ struct SearchRetentionQuotaTests {
     @Test func AC13_AC17_AC26_impossibleSaveKeepsOldContent() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
-        var settings = SettingsSnapshot(); settings.quotaBytes = 400_000
+        var settings = SettingsSnapshot(); settings.quotaBytes = MiB
         let clock = TestClock(); let store = try HistoryStore(location: root, clock: clock, initialSettings: settings)
         func image(_ byte: UInt8, _ size: Int) -> ClipboardSnapshot { .init(payload: .init([.init([.init(SupportedType.png, Data(repeating: byte, count: size))])])) }
         let favorite = insertedID(try await store.ingest(image(1, 180_000), at: clock.now()))
         _ = try await store.apply(store.preview(.favorite(favorite, true)).token)
         clock.advance(1)
         let ordinary = insertedID(try await store.ingest(image(2, 70_000), at: clock.now()))
+        settings = try await store.settings(); settings.quotaBytes = try await store.usage().measuredTotal + 64 * 1024
+        let db = try SQLiteConnection(root.appendingPathComponent("History/history.sqlite")); try db.configure(); try Schema.writeSettings(db, settings); try db.close()
         let old = try Data(contentsOf: root.appendingPathComponent("History/history.sqlite"))
         do { _ = try await store.ingest(image(3, 300_000), at: clock.now()); Issue.record("不可能容量仍成功") } catch { #expect(error as? StoreError == .quotaExceeded) }
         #expect(try Data(contentsOf: root.appendingPathComponent("History/history.sqlite")) == old)

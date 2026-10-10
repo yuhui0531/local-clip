@@ -57,7 +57,7 @@ struct ImageFixtures {
         try await model.start(); capture.stop()
         let ready = ContinuousClock.now + .seconds(3)
         while model.items.count != 2, ContinuousClock.now < ready { try await Task.sleep(for: .milliseconds(10)) }
-        model.select(id)
+        model.select(id); model.showingDetail = true; model.detailVisibilityChanged()
         while model.detail?.summary.id != id, ContinuousClock.now < ready { try await Task.sleep(for: .milliseconds(10)) }
         #expect(model.detail?.summary.id == id)
         clock.advance(150)

@@ -428,7 +428,8 @@ public actor HistoryStore: HistoryRepository {
         if case .retention(let days) = preview.operation { settings.retentionDays = days }
         let undoCandidate = try makeUndo(preview.operation)
         let trim: Bool = { if case .quota = preview.operation { true } else { false } }()
-        try mutate(quota: settings.quotaBytes, allowOverQuota: !trim, trim: trim) { db in
+        // 下调容量的预演与提交都保留保护内容；超额时停止新增，by AI.Coding。
+        try mutate(quota: settings.quotaBytes, allowOverQuota: true, trim: trim) { db in
             switch preview.operation {
             case .favorite(let id, let value):
                 try db.run("UPDATE clips SET isFavorite=? WHERE id=?", [.integer(value ? 1 : 0), .text(id)])

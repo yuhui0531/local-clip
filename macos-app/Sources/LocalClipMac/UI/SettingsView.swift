@@ -26,6 +26,8 @@ public struct SettingsView: View {
                         Picker("默认输出格式", selection: Binding(get: { model.settings.defaultFormat }, set: { value in model.updateSettings { $0.defaultFormat = value } })) { Text("原格式").tag(OutputFormat.original); Text("纯文本").tag(OutputFormat.plainText) }
                         HStack { Button("暂停15分钟") { model.updateSettings { $0.pauseUntil = SystemClock().now() + 15 * 60_000 } }; Button("暂停1小时") { model.updateSettings { $0.pauseUntil = SystemClock().now() + 60 * 60_000 } }; Button("取消定时暂停") { model.updateSettings { $0.pauseUntil = nil } } }
                         if let deadline = model.settings.pauseUntil, deadline > SystemClock().now() { Text("暂停至 " + Date(timeIntervalSince1970: Double(deadline)/1000).formatted()).font(.caption) }
+                        Toggle("代码文件智能粘贴", isOn: Binding(get: { model.settings.smartCodeFilePaste }, set: { value in model.updateSettings { $0.smartCodeFilePaste = value } }))
+                        Text("默认关闭。开启后，确认是文本编辑目标时粘贴代码文件正文；Finder、未知目标或读取失败仍保留原文件。代码片段语法高亮始终启用。多文件按顺序用换行分隔；每文件最多4MiB，合计8MiB。").font(.caption).foregroundStyle(.secondary)
                         Toggle("记录时播放提示音", isOn: Binding(get: { model.settings.captureSounds }, set: { value in model.updateSettings { $0.captureSounds = value } }))
                         Toggle("显示菜单栏图标", isOn: Binding(get: { model.settings.showMenuIcon }, set: { value in model.updateSettings { $0.showMenuIcon = value } }))
                         Picker("数字1–9快捷粘贴修饰键", selection: Binding(get: { model.settings.quickModifiers }, set: { value in model.updateSettings { $0.quickModifiers = value } })) { Text("⌘").tag(UInt32(256)); Text("⌥").tag(UInt32(2048)); Text("⌃").tag(UInt32(4096)); Text("⌘⇧").tag(UInt32(768)) }

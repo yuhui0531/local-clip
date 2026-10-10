@@ -10,6 +10,32 @@ import LocalClipCore
     private let logger = Logger(subsystem: "local.localclip.dev", category: "Paste")
     public private(set) var pasteFailureReason: String?
     public init() {}
+    /// 只为智能文件转换分类，不收紧原生粘贴焦点检查；不读取输入框正文，by AI.Coding。
+    public func pasteTargetKind(_ target: TargetToken) -> PasteTargetKind {
+        guard isAlive(target) else { return .unknown }
+        if target.bundleID == "com.apple.finder" { return .files }
+        guard permitted, focusTarget == target, let rememberedFocus,
+              let focused = focusedElement(in: target), CFEqual(focused, rememberedFocus),
+              attribute(kAXEnabledAttribute, of: focused) as? Bool != false else { return .unknown }
+        let role = attribute(kAXRoleAttribute, of: focused) as? String ?? ""
+        let subrole = attribute(kAXSubroleAttribute, of: focused) as? String ?? ""
+        let editable = attribute("AXEditable", of: focused) as? Bool
+        var settable: DarwinBoolean = false
+        if ["AXGroup", "AXDocument", "AXWebArea"].contains(role), editable == nil {
+            _ = AXUIElementIsAttributeSettable(focused, kAXSelectedTextRangeAttribute as CFString, &settable)
+        }
+        return Self.classifyTextMetadata(role: role, subrole: subrole, editable: editable, selectedRangeSettable: settable.boolValue, bundleID: target.bundleID)
+    }
+    /// 文本角色与明确编辑能力是转换依据；安全文本、只读及未知画布都保持原文件，by AI.Coding。
+    static func classifyTextMetadata(role: String, subrole: String, editable: Bool?, selectedRangeSettable: Bool, bundleID: String = "") -> PasteTargetKind {
+        guard subrole != "AXSecureTextField", editable != false else { return .unknown }
+        if ["AXTextArea", "AXTextField", "AXSearchField"].contains(role) { return .text }
+        if ["AXGroup", "AXDocument", "AXWebArea"].contains(role), editable == true || selectedRangeSettable { return .text }
+        // Zed的自绘编辑器当前只暴露窗口焦点。仅为该已知编辑器补足能力识别，
+        // 仍要求原窗口身份、前台及权限；不把任意应用窗口或已识别的非文本控件当编辑器。
+        if bundleID == "dev.zed.Zed", role == "AXWindow" { return .text }
+        return .unknown
+    }
     public var permitted: Bool { AXIsProcessTrusted() }
     /// 用户点击粘贴时只请求系统显示授权提示，不修改系统权限数据库。
     public func requestPastePermission() {
@@ -43,6 +69,8 @@ import LocalClipCore
             reject(permitted ? "未记住目标焦点，请在目标应用重新打开历史" : "当前LocalClip尚未获得辅助功能权限")
             return
         }
+        // 不在捕获焦点时切换Electron的辅助模式：实际VS Code会重建AX控件身份，
+        // 使原焦点检查失效。直接读取当前已暴露的编辑控件元数据，保持目标状态不变。
         rememberedFocus = focusedElement(in: target)
         logger.notice("stage=remember_focus pid=\(target.pid) captured=\(self.rememberedFocus != nil)")
     }
@@ -114,4 +142,17 @@ import LocalClipCore
     public static func openAccessibilitySettings() {
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") { NSWorkspace.shared.open(url) }
     }
+    #if DEBUG
+    /// 隔离验收仅记录角色及能力，不读取第三方正文、路径或剪贴板内容，by AI.Coding。
+    public func focusDiagnostic(_ target: TargetToken) -> [String: Any] {
+        var result: [String: Any] = ["permitted": permitted, "bundleID": target.bundleID, "frontmost": isFrontmost(target), "remembered": rememberedFocus != nil, "kind": String(describing: pasteTargetKind(target))]
+        if let focused = focusedElement(in: target) {
+            result["role"] = attribute(kAXRoleAttribute, of: focused) as? String ?? ""
+            result["subrole"] = attribute(kAXSubroleAttribute, of: focused) as? String ?? ""
+            result["editable"] = attribute("AXEditable", of: focused) as? Bool
+            result["sameFocus"] = rememberedFocus.map { CFEqual($0, focused) } ?? false
+        }
+        return result
+    }
+    #endif
 }

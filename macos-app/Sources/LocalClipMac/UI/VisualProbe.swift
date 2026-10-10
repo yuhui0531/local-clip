@@ -7,16 +7,17 @@ import LocalClipCore
     /// 使用实际 SwiftUI 视图渲染像素，不以设计稿冒充运行效果。
     private static var session: (NSWindow, HistoryViewModel, URL)?
     private static var pointerMonitor: Any?
-    public static func render(at output: URL, dark: Bool, width: CGFloat = 1400, height: CGFloat = 400, keepOpen: Bool = false) async throws {
+    public static func render(at output: URL, dark: Bool, width: CGFloat = 1400, height: CGFloat = 400, keepOpen: Bool = false, codeDetail: Bool = false) async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("LocalClip-Visual-" + UUID().uuidString)
         defer { if !keepOpen { try? FileManager.default.removeItem(at: directory) } }
         var settings = SettingsSnapshot(); settings.panelHeight = height
+        settings.smartCodeFilePaste = ProcessInfo.processInfo.environment["LOCALCLIP_VISUAL_SMART_PASTE"] == "1"
         let store = try HistoryStore(location: directory, initialSettings: settings, extractor: ContentDecoder.extract)
         // 长文件名fixture用于检查卡片正文与辅助图标的空间分配。
         let file = directory.appendingPathComponent("LocalClip-source-example.txt")
         try Data("LocalClip synthetic file fixture".utf8).write(to: file)
         let now = SystemClock().now()
-        let inputs: [(ClipboardPayload, SourceAttribution)] = [
+        var inputs: [(ClipboardPayload, SourceAttribution)] = [
             (.init([.init([.init(SupportedType.string, Data("今天整理需求，明天处理代码。\n\n好的工具应该让工作流动起来。\nLocalClip · 只保存在这台 Mac".utf8))])]), .init(bundleID: "com.apple.TextEdit", name: "TextEdit")),
             (.init([.init([.init(SupportedType.url, Data("https://developer.apple.com/documentation/appkit/nspasteboard".utf8)), .init(SupportedType.string, Data("https://developer.apple.com/documentation/appkit/nspasteboard".utf8))])]), .init(bundleID: "com.apple.Safari", name: "Safari")),
             (.init([.init([.init(SupportedType.string, Data("func restore(_ clip: Clip) {\n  guard clip.isVisible else {\n    return\n  }\n  pasteboard.write(clip.payload)\n}\n\n// a->b · foo_bar · 50%".utf8))])]), .init(bundleID: "com.microsoft.VSCode", name: "Visual Studio Code")),
@@ -24,6 +25,14 @@ import LocalClipCore
             (.init([.init([.init(SupportedType.png, try fixtureImage())])]), .init(bundleID: "com.apple.Preview", name: "预览")),
             (.init([.init([.init(SupportedType.fileURL, Data(file.absoluteString.utf8))])]), .init(bundleID: "com.apple.finder", name: "Finder"))
         ]
+        let codeFixtures = [
+            "{\n  \"name\": \"LocalClip 中文\",\n  \"count\": 42,\n  \"enabled\": true\n}",
+            "def greet(name):\n    # Preserve indentation\n    count = 42\n    return f'Hello {name}'\n",
+            "interface User {\n  name: string;\n}\nconst user: User = { name: 'LocalClip' };\n"
+        ]
+        if ProcessInfo.processInfo.environment["LOCALCLIP_VISUAL_CODES"] == "1" || codeDetail {
+            inputs = codeFixtures.map { (.init([.init([.init(SupportedType.string, Data($0.utf8))])]), .init(bundleID: "com.microsoft.VSCode", name: "Visual Studio Code")) }
+        }
         for (index, value) in inputs.reversed().enumerated() {
             let result = try await store.ingest(.init(payload: value.0, source: value.1), at: now + Int64(index))
             guard case .inserted = result else { throw StoreError.ioFailure }
@@ -41,7 +50,10 @@ import LocalClipCore
         let model = HistoryViewModel(store: store, capture: capture, paste: paste, derived: DerivedContentService(store: store))
         try await model.start(); defer { if !keepOpen { capture.stop() } }
         model.actualPanelHeight = height
-        let host = NSHostingView(rootView: HistoryView(model: model)); host.sizingOptions = []
+        let view: AnyView = codeDetail
+            ? AnyView(VStack(alignment: .leading, spacing: 12) { Text("代码详情 · JSON").font(.headline); SyntaxDetailPreview(content: NSAttributedString(string: codeFixtures[0])) }.padding(24).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).background(Color(nsColor: .windowBackgroundColor)))
+            : AnyView(HistoryView(model: model))
+        let host = NSHostingView(rootView: view); host.sizingOptions = []
         let window = NSWindow(contentRect: .init(x: 0, y: 0, width: width, height: height), styleMask: [.borderless], backing: .buffered, defer: false)
         window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
         window.contentView = host; host.frame = .init(x: 0, y: 0, width: width, height: height)

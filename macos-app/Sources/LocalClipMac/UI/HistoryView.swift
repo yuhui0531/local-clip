@@ -357,8 +357,8 @@ private struct ClipCard: View, Equatable {
         } else if item.kind == .url {
             VStack(alignment: .leading, spacing: 10) { Image(systemName: "link").font(.system(size: 22, weight: .light)).foregroundStyle(tint); Text(URL(string: item.preview)?.host ?? "链接").font(.system(size: 15, weight: .semibold, design: .rounded)).lineLimit(1); Text(item.context).font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary).lineLimit(4); Spacer(minLength: 0) }.padding(14)
         } else {
-            // 正文统一清晰的浅色排版；代码只调整字体，不插入装饰性的终端界面。
-            Text(item.context).font(.system(size: tiny ? 10 : height < 210 ? 13 : code ? 14 : 16, design: code ? .monospaced : .default))
+            // 卡片正文自动高亮代码，普通内容保持原有排版，by AI.Coding。
+            SyntaxText(text: item.context, size: tiny ? 10 : height < 210 ? 13 : 15)
                 .lineSpacing(tiny ? 0 : 3).frame(maxWidth: .infinity, alignment: .topLeading)
                 .padding(.horizontal, tiny ? 6 : 14).padding(.top, tiny ? 3 : 10).padding(.bottom, tiny ? 0 : 4)
         }
@@ -393,7 +393,7 @@ private struct ClipInspector: View {
                 ScrollView { VStack(alignment: .leading, spacing: 16) {
                     if let image = model.image { Image(nsImage: image).resizable().scaledToFit().frame(maxHeight: 230).clipShape(RoundedRectangle(cornerRadius: 10)) }
                     if !model.previewMessage.isEmpty { Text(model.previewMessage).font(.caption).foregroundStyle(.secondary) }
-                    if let rich = model.richPreview { RichTextPreview(content: rich).frame(height: 220) }
+                    if let rich = model.richPreview { SyntaxDetailPreview(content: rich).frame(height: 220) }
                 } }.frame(maxHeight: .infinity)
                 Divider()
                 Text("\(detail.payload.items.count) 项 · \(HistoryViewModel.bytes(detail.payload.byteCount)) · 复制\(detail.summary.copyCount)次\n\(Date(timeIntervalSince1970: Double(detail.summary.lastCopiedAt)/1000).formatted())").font(.caption).foregroundStyle(.secondary)

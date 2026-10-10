@@ -24,13 +24,16 @@ public enum StorageProbe {
     }
     /// 生产历史模型包含收藏、普通条目、共享引用及需要淘汰的新内容。
     public static func runHistory(root: URL, point: String) async throws {
-        var settings = SettingsSnapshot(); settings.quotaBytes = 400_000
+        var settings = SettingsSnapshot(); settings.quotaBytes = MiB
         let store = try HistoryStore(location: root, initialSettings: settings)
         let now = SystemClock().now()
         func input(_ byte: UInt8, _ count: Int) -> ClipboardSnapshot { .init(payload: .init([.init([.init(SupportedType.png, Data(repeating: byte, count: count))])])) }
         guard case .inserted(let favorite) = try await store.ingest(input(1,180_000), at: now) else { throw StoreError.ioFailure }
         let preview = try await store.preview(.favorite(favorite,true)); _ = try await store.apply(preview.token)
         _ = try await store.ingest(input(2,70_000), at: now + 1)
+        // 根据当前schema的真实磁盘占用限定fixture，不沿用旧schema的固定页开销，by AI.Coding。
+        settings = try await store.settings(); settings.quotaBytes = try await store.usage().measuredTotal + 64 * 1024
+        let db = try SQLiteConnection(root.appendingPathComponent("History/history.sqlite")); try db.configure(); try Schema.writeSettings(db, settings); try db.close()
         let bytes = try Data(contentsOf: root.appendingPathComponent("History/history.sqlite"))
         try Data(ContentFingerprint.hash(bytes).utf8).write(to: root.appendingPathComponent("before.sha256"))
         guard let point = FaultPoint(rawValue: point) else { throw StoreError.invalidSettings }

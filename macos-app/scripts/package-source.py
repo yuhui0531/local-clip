@@ -12,13 +12,13 @@ DESTINATION = APP / "dist/LocalClip-source.tar.gz"
 
 def main() -> None:
     # 白名单只包含编译输入、原有测试源码和当前实施文档；不打包历史验收数据。
-    files = [APP / "Package.swift", APP / "README.md", APP / "docs/local-experience-delivery.md"]
+    files = [APP / "Package.swift", APP / "README.md", APP / "docs/local-experience-delivery.md", APP / "docs/code-features-delivery.md"]
     for folder in ("Sources", "Tests", "Resources", "scripts"):
         files.extend(path for path in (APP / folder).rglob("*") if path.is_file()
                      and not any(part.startswith(".") for part in path.relative_to(APP).parts)
                      and path.suffix not in {".sqlite", ".db", ".pyc"})
     plan = PROJECT / "paste-report/implementation-plan-2026-10-10"
-    files.extend(plan / name for name in ("README.md", "tasks.md", "report-coverage.csv", "user-checklist.md", "debug-image-drag-2026-10-11.md"))
+    files.extend(plan / name for name in ("README.md", "tasks.md", "report-coverage.csv", "user-checklist.md", "debug-image-drag-2026-10-11.md", "debug-log-2026-10-11-code-file-paste.md"))
     DESTINATION.parent.mkdir(exist_ok=True)
     with tarfile.open(DESTINATION, "w:gz") as archive:
         for path in sorted(set(files)):
