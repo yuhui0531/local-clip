@@ -82,8 +82,10 @@ import LocalClipCore
     private func drain() async {
         while !queue.isEmpty && !Task.isCancelled {
             let raw = queue.removeFirst(); queueBytes -= raw.payload.byteCount
+            let started = ContinuousClock.now
             let snapshot = await Task.detached(priority: .utility) { ContentDecoder.decode(raw) }.value
-            guard !pausePending, policy.captureEnabled, policy.revision == snapshot.policyRevision else { ignored(.paused); continue }
+            if policy.timingEnabled { StageTiming.record("capture_decode", since: started, count: snapshot.payload.items.count) }
+            guard !pausePending, policy.captureEnabled, (policy.pauseUntil ?? 0) <= clock.now(), policy.revision == snapshot.policyRevision else { ignored(.paused); continue }
             do {
                 let result = try await store.ingest(snapshot, at: snapshot.capturedAt)
                 switch result {

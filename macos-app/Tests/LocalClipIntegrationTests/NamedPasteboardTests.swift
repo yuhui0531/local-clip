@@ -32,7 +32,7 @@ import LocalClipCore
         guard case .inserted(let id)=try await store.ingest(snapshot,at:SystemClock().now()) else { Issue.record("fixture未保存"); return }
         let capture=CaptureCoordinator(board:client,store:store)
         let paste=PasteCoordinator(board:client,applications:MacApplicationClient(),store:store,capture:capture)
-        #expect(await paste.perform(.init(id:id,action:.copy)) == .copied)
+        #expect(await paste.perform(.init(ids:[id],action:.copy)) == .copied)
         let received=board.pasteboardItems!; #expect(received.count == 2)
         for (index,reps) in [representations,images].enumerated() { for rep in reps { #expect(received[index].data(forType:.init(rep.type)) == rep.data) } }
         capture.tick(); #expect(try await store.detail(id:id,at:SystemClock().now()).summary.copyCount == 1)
@@ -40,7 +40,7 @@ import LocalClipCore
         let deadline=ContinuousClock.now + .seconds(3)
         while try await store.search(.init()).items.count < 2, ContinuousClock.now < deadline { try await Task.sleep(for:.milliseconds(10)) }
         #expect(try await store.search(.init()).items.count == 2)
-        #expect(await paste.perform(.init(id:id,format:.plainText,action:.copy)) == .failed("该条目含无文本项目，不能纯文本复制"))
+        #expect(await paste.perform(.init(ids:[id],format:.plainText,action:.copy)) == .failed("所选内容包含无文本项目，不能纯文本输出；请使用原格式"))
         #expect(board.string(forType:.string) == "USER-AFTER-RESTORE")
         capture.stop()
     }

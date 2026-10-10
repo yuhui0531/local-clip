@@ -6,7 +6,7 @@
 
 **硬性要求：禁止写兼容代码。开发完成后直接交付可运行的 Release `.app`，功能和真实应用验收由用户自行执行。**
 
-本文件制定实施范围和具体行为；[tasks.md](/Users/ronny/VscodeProjects/rea/paste-report/implementation-plan-2026-10-10/tasks.md)负责执行状态；[报告覆盖表](/Users/ronny/VscodeProjects/rea/paste-report/implementation-plan-2026-10-10/report-coverage.csv)逐项处理报告中的76个对比点。当前仅完成计划，本轮开发任务尚未开始，不代表已有新应用交付。
+本文件制定实施范围和具体行为；[tasks.md](/Users/ronny/VscodeProjects/rea/paste-report/implementation-plan-2026-10-10/tasks.md)负责执行状态；[报告覆盖表](/Users/ronny/VscodeProjects/rea/paste-report/implementation-plan-2026-10-10/report-coverage.csv)逐项处理报告中的76个对比点。本轮M00–M21开发与打包交付完成；功能、真实接收及性能由用户自测。任务与产物状态以tasks.md和当前交付说明为准。
 
 ## 1. 执行与交付规则
 
@@ -35,7 +35,7 @@
 
 ## 3. 明确的行为决策
 
-### 3.1 无兼容代码与旧数据保留
+### 3.1 全新模型与无兼容代码
 
 本轮需要增加分类颜色、排序和设置字段，采用**单一新模型 schema3**。只实现创建schema3和读取schema3，不保留schema2读取路径；在指定目录碰到其他版本直接只读拒绝，不升级、不重建覆盖、不静默清库。
 
@@ -239,3 +239,8 @@ rtk proxy lipo -archs /Users/ronny/VscodeProjects/rea/macos-app/dist/LocalClip.a
 ## 8. 交给实施者的执行指令
 
 > 在现有 `/Users/ronny/VscodeProjects/rea/macos-app` 继续开发，先读本实施计划、tasks.md和报告覆盖表，再核对当前源码。按M00起的依赖顺序完成本轮本地体验任务，保留已有工作。禁止写旧库／旧配置／旧接口兼容、迁移、双写或逐应用补丁；只使用当前schema3和明确的新数据目录，旧用户目录原样留存且不读取。保持原格式、多项顺序、敏感先过滤、精确自身写入过滤、失败保旧、删除异步失效及真实容量一致性。用中文沟通，shell用rtk。用户自己测试：不要跑产品测试、自动化、基准、剪贴板探针或启动应用，只做必要编译和产物检查。全部实施完成后直接交付Release `.app`、源码和简短自测说明，不停在计划、骨架、演示或一次构建通过，不再等待真实验收或询问是否继续。
+
+
+### 用户补充：全新开发
+
+2026-10-10实施期间用户明确：旧剪贴板历史无需保留。旧历史不再是兼容或保留目标；新目录与schema3继续作为本轮唯一事实。没有旧数据读取、迁移或字段回填。

@@ -23,6 +23,14 @@ public struct SettingsView: View {
                         Picker("Enter 默认操作", selection: Binding(get: { model.settings.defaultAction }, set: { value in model.updateSettings { $0.defaultAction = value } })) {
                             Text("复制（默认）").tag(PasteAction.copy); Text("直接粘贴").tag(PasteAction.directPaste)
                         }
+                        Picker("默认输出格式", selection: Binding(get: { model.settings.defaultFormat }, set: { value in model.updateSettings { $0.defaultFormat = value } })) { Text("原格式").tag(OutputFormat.original); Text("纯文本").tag(OutputFormat.plainText) }
+                        HStack { Button("暂停15分钟") { model.updateSettings { $0.pauseUntil = SystemClock().now() + 15 * 60_000 } }; Button("暂停1小时") { model.updateSettings { $0.pauseUntil = SystemClock().now() + 60 * 60_000 } }; Button("取消定时暂停") { model.updateSettings { $0.pauseUntil = nil } } }
+                        if let deadline = model.settings.pauseUntil, deadline > SystemClock().now() { Text("暂停至 " + Date(timeIntervalSince1970: Double(deadline)/1000).formatted()).font(.caption) }
+                        Toggle("记录时播放提示音", isOn: Binding(get: { model.settings.captureSounds }, set: { value in model.updateSettings { $0.captureSounds = value } }))
+                        Toggle("显示菜单栏图标", isOn: Binding(get: { model.settings.showMenuIcon }, set: { value in model.updateSettings { $0.showMenuIcon = value } }))
+                        Picker("数字1–9快捷粘贴修饰键", selection: Binding(get: { model.settings.quickModifiers }, set: { value in model.updateSettings { $0.quickModifiers = value } })) { Text("⌘").tag(UInt32(256)); Text("⌥").tag(UInt32(2048)); Text("⌃").tag(UInt32(4096)); Text("⌘⇧").tag(UInt32(768)) }
+                        Picker("分类切换／新建修饰键", selection: Binding(get: { model.settings.boardModifiers }, set: { value in model.updateSettings { $0.boardModifiers = value } })) { Text("⌘⇧ + ← / → / N").tag(UInt32(768)); Text("⌘⌥ + ← / → / N").tag(UInt32(2304)); Text("⌃⌥ + ← / → / N").tag(UInt32(6144)) }
+                        Text("⌘C复制所选，⇧Return直接粘贴纯文本；Return按默认动作。搜索框Return或Tab先进入结果。隐藏菜单栏图标要求快捷键可用。").font(.caption).foregroundStyle(.secondary)
                         Text("直接粘贴需要辅助功能权限，仅恢复目标应用，不能保证原输入框或光标位置。没有权限仍可复制后手动粘贴。").font(.caption).foregroundStyle(.secondary)
                         HStack { Text(permitted ? "辅助功能：已授予" : "辅助功能：未授予"); Button("打开权限设置", action: MacApplicationClient.openAccessibilitySettings) }
                         HStack { Text("全局快捷键：\(HotKeyService.label(model.settings.shortcut))"); Spacer(); Button(recording ? "按下新的快捷键（Esc取消）" : "更改快捷键", action: recordShortcut) }
@@ -34,6 +42,11 @@ public struct SettingsView: View {
                     VStack(alignment: .leading, spacing: 10) {
                         Text("来源优先使用应用声明，缺失时显示复制时前台应用及其图标。前台推断与未知来源不参与应用排除；需要停止记录时请暂停采集。").font(.callout)
                         Text("排除仅按 org.nspasteboard.source 声明的 bundleID 匹配。前台推断可能误判后台写入，来源依据可在卡片提示和详情查看。敏感/临时标记在正文读取前整次过滤，不能识别所有密码。").font(.caption).foregroundStyle(.secondary)
+                        Toggle("排除应用位于前台时暂停采集", isOn: Binding(get: { model.settings.pauseWhenExcludedFrontmost }, set: { value in model.updateSettings { $0.pauseWhenExcludedFrontmost = value } }))
+                        Text("该选项默认关闭。开启后，排除应用处于前台的整个区间都不采集，包括来源未知或后台写入；退出区间不补采。它不代表知道所有剪贴板写入进程。").font(.caption).foregroundStyle(.secondary)
+                        Toggle("隐藏／模糊历史内容", isOn: Binding(get: { model.settings.hideContents }, set: { value in model.updateSettings { $0.hideContents = value } }))
+                        Toggle("限制系统窗口共享读取", isOn: Binding(get: { model.settings.excludeFromSharing }, set: { value in model.updateSettings { $0.excludeFromSharing = value } }))
+                        Text("共享限制使用公开NSWindow属性；不能保证所有屏幕共享、ScreenCaptureKit或第三方录屏方式隐藏本窗口。需要可靠遮蔽时请手动隐藏内容或关闭面板；本应用不申请录屏权限或监看共享状态。").font(.caption).foregroundStyle(.secondary)
                         ForEach(model.settings.excludedBundleIDs.sorted(), id: \.self) { id in
                             HStack { Text(id); Spacer(); Button("移除") { model.updateSettings { $0.excludedBundleIDs.remove(id) } } }
                         }
@@ -45,13 +58,21 @@ public struct SettingsView: View {
                     VStack(alignment: .leading, spacing: 12) {
                         if let usage = model.usage {
                             Text("实际总占用 \(HistoryViewModel.bytes(usage.measuredTotal)) / \(HistoryViewModel.bytes(model.settings.quotaBytes))").font(.headline)
-                            Text("收藏载荷 \(HistoryViewModel.bytes(usage.favoritePayload)) · 普通载荷 \(HistoryViewModel.bytes(usage.normalPayload))\n公共页/索引/缩略图 \(HistoryViewModel.bytes(usage.common)) · 待回收 \(HistoryViewModel.bytes(usage.pending))").font(.caption).foregroundStyle(.secondary)
+                            Text("保护载荷 \(HistoryViewModel.bytes(usage.favoritePayload)) · 普通载荷 \(HistoryViewModel.bytes(usage.normalPayload))\n公共页/索引/缩略图 \(HistoryViewModel.bytes(usage.common)) · 待回收 \(HistoryViewModel.bytes(usage.pending))").font(.caption).foregroundStyle(.secondary)
                         }
-                        HStack { Text("保留天数"); TextField("1–365", text: $retention).frame(width: 80); Button("应用") { if let days = Int(retention) { model.change(.retention(days)) } else { model.message = "保留天数需为1–365" } }; Text("当前\(model.settings.retentionDays)天").foregroundStyle(.secondary) }
+                        Button("永不过期（仍有容量限制）") { model.change(.retention(0)) }
+                        HStack { Text("保留天数"); TextField("1–365", text: $retention).frame(width: 80); Button("应用") { if let days = Int(retention) { model.change(.retention(days)) } else { model.message = "保留天数需为1–365" } }; Text(model.settings.retentionDays == 0 ? "当前永不过期" : "当前\(model.settings.retentionDays)天").foregroundStyle(.secondary) }
                         HStack { Text("容量 MiB"); TextField("100–4096", text: $quota).frame(width: 80); Button("应用") { if let value = Int64(quota), (100...4096).contains(value) { model.change(.quota(value * MiB)) } else { model.message = "容量需为100–4096MiB" } }; Text("1MiB=1,048,576字节").font(.caption).foregroundStyle(.secondary) }
-                        Text("期限按最近有效用户复制起算；浏览和自身恢复不续期。收藏不参与期限和自动淘汰，但计入容量。无法容纳新内容时保留旧历史，跳过新增。降低设置需预览确认。").font(.caption).foregroundStyle(.secondary)
+                        Text("期限按最近有效用户复制起算；浏览和自身恢复不续期。收藏或任一自定义分类的记录不参与期限和自动淘汰，但计入容量。无法容纳新内容时保留旧历史，跳过新增。降低设置需预览确认。").font(.caption).foregroundStyle(.secondary)
                         HStack { Button("清理已到期内容") { Task { await model.maintenance() } }; Button("清空普通历史", role: .destructive) { model.change(.clearOrdinary) } }
                     }.padding(10).frame(maxWidth: .infinity, alignment: .leading)
+                }
+                GroupBox("面板与诊断") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack { Text("面板高度"); Slider(value: Binding(get: { model.settings.panelHeight }, set: { value in model.resizePanel?(value, true) }), in: 220...520, step: 10); Text("\(Int(model.settings.panelHeight)) pt").monospacedDigit() }
+                        Toggle("启用本机阶段计时日志", isOn: Binding(get: { model.settings.timingEnabled }, set: { value in model.updateSettings { $0.timingEnabled = value } }))
+                        Text("只记录阶段、条数和毫秒，不含正文、文件路径、URL或搜索词；性能仍需您实测。数据目录：LocalClip-LocalEdition。全新数据模型，不兼容或迁移旧库。").font(.caption).foregroundStyle(.secondary)
+                    }.padding(10)
                 }
                 if !model.message.isEmpty { Text(model.message).font(.callout).foregroundStyle(.secondary).textSelection(.enabled) }
                 Text("支持文本、URL、RTF、简单HTML、PNG/TIFF/JPEG和文件引用；每次32项、表示数据50MiB。文件不备份本体，原件删除后无法恢复。Finder中双击文件复制到当前文件夹。RTFD、云同步、OCR、AI不在此版本。").font(.caption).foregroundStyle(.secondary)

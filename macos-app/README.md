@@ -1,3 +1,23 @@
+# LocalClip 0.2.0（构建16）
+
+本轮M00–M21实现与本地Release交付完成。全新schema3与`LocalClip-LocalEdition`数据目录；禁止兼容、迁移和旧接口包装。功能、真实目标接收及性能由用户自测，本轮未启动应用或执行产品测试。
+
+- 应用：`dist/LocalClip.app`
+- 源码：`dist/LocalClip-source.tar.gz`
+- [当前使用说明、权限、自测与限制](docs/local-experience-delivery.md)
+- [本轮任务](../paste-report/implementation-plan-2026-10-10/tasks.md)
+- 当前构建及产物身份：`evidence/delivery/local-experience/`
+
+```sh
+rtk proxy bash macos-app/scripts/build-app.sh release
+```
+
+在项目根目录执行上述命令。只构建并打包，不启动、安装或发布应用。首次采集暂停，由您启用。macOS15+、Apple Silicon；本地ad hoc签名。
+
+---
+
+以下是0.1.14及之前版本的历史README，保留已有工程记录。旧格式、目录、行为、通过数及样本不代表0.2.0；当前说明以上方链接为准。
+
 # LocalClip 0.1.14
 
 macOS 15+ / Apple Silicon 本地剪贴板管理器。Swift 6.2、SwiftPM、AppKit、SwiftUI；SQLite 是唯一持久历史存储。首版 F01–F11 已连接生产入口，采用用户要求的 Paste 风格底部横向卡片界面。2026-10-10追加了双击复制、屏幕全宽底部固定和文件对象支持。

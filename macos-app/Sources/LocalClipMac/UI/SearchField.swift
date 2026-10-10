@@ -43,6 +43,7 @@ public struct SearchField: NSViewRepresentable {
             case #selector(NSResponder.deleteBackward(_:)), #selector(NSResponder.deleteForward(_:)):
                 guard textView.string.isEmpty else { return false }
                 parent.onDelete(); return true
+            case #selector(NSResponder.insertTab(_:)): parent.onEnter(); return true
             case #selector(NSResponder.insertNewline(_:)): parent.onEnter(); return true
             case #selector(NSResponder.moveDown(_:)): parent.onNavigate(1); return true
             case #selector(NSResponder.moveUp(_:)): parent.onNavigate(-1); return true

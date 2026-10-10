@@ -1,6 +1,6 @@
 // 目标身份、权限与粘贴事件的唯一系统边界，by AI.Coding。
 import AppKit
-// C SDK把只读使用的AX提示常量导入为共享变量；兼容其并发标注，实际调用仍限定主线程。
+// C SDK把只读使用的AX提示常量导入为共享变量；限定当前C接口的并发边界，实际调用仍限定主线程。
 @preconcurrency import ApplicationServices
 import OSLog
 import LocalClipCore
@@ -56,6 +56,16 @@ import LocalClipCore
         guard enabled != false else { return reject("目标焦点控件已禁用") }
         pasteFailureReason = nil
         return true
+    }
+    /// 只恢复打开面板前保存的同一控件焦点，不设置正文，不按应用名称分支。
+    public func restorePasteFocus(_ target: TargetToken) -> Bool {
+        guard permitted, isFrontmost(target), focusTarget == target, let rememberedFocus else { return false }
+        if isPasteFocusReady(target) { return true }
+        var pid: pid_t = 0
+        guard AXUIElementGetPid(rememberedFocus, &pid) == .success, pid == target.pid else { return false }
+        var settable: DarwinBoolean = false
+        guard AXUIElementIsAttributeSettable(rememberedFocus, kAXFocusedAttribute as CFString, &settable) == .success, settable.boolValue else { return false }
+        return AXUIElementSetAttributeValue(rememberedFocus, kAXFocusedAttribute as CFString, kCFBooleanTrue) == .success
     }
     /// 日志仅含固定原因与状态，无输入框内容、剪贴板正文、文件路径或URL。
     @discardableResult private func reject(_ reason: String) -> Bool {

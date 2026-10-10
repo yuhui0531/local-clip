@@ -20,12 +20,14 @@ import LocalClipCore
         do {
             var records: [ClipboardPayload] = []
             for id in request.ids { records.append(try await store.loadPayload(id: id, at: clock.now())) }
+            let started = ContinuousClock.now
             let raw = try await Task.detached { try OutputComposer.combine(records, format: request.format) }.value
             let payload = raw
             let fingerprint = await Task.detached { payload.fingerprint }.value
             // 计算期间删除/到期时不允许恢复。取值再次验证，UI不直接触碰存储。
             for id in request.ids { _ = try await store.detail(id: id, at: clock.now()) }
             let receipt = board.write(payload, fingerprint: fingerprint); capture.recordOwnWrite(receipt)
+            if (try? await store.settings().timingEnabled) == true { StageTiming.record("output_write", since: started, count: payload.items.count) }
             guard receipt.successful else { return .failed("复制失败，请重试") }
             if copyFilesToFinder, let sources = payload.fileURLs {
                 return await copyFiles(sources, request: request, receipt: receipt)
@@ -52,6 +54,7 @@ import LocalClipCore
             guard board.matches(receipt) else { return .failed("剪贴板已变化，请重新选择") }
             guard applications.permitted, applications.isAlive(target), applications.isFrontmost(target) else { return fallback("请确认目标位置后手动粘贴", receipt: receipt) }
             // 应用成为前台不代表原焦点已恢复；目标可以是编辑器/文档/画布，不限定文本框。
+            _ = applications.restorePasteFocus(target)
             let focusDeadline = ContinuousClock.now + .milliseconds(700)
             var readySince: ContinuousClock.Instant?
             var focusReady = false
@@ -71,7 +74,8 @@ import LocalClipCore
                 return fallback((applications.pasteFailureReason ?? "粘贴指令未发出") + "，请手动粘贴", receipt: receipt)
             }
             return .commandSent
-        } catch StoreError.notFound { return .failed("内容已删除或到期，请重新选择") }
+        } catch StoreError.corruptPayload { return .failed("所选内容包含无文本项目，不能纯文本输出；请使用原格式") }
+        catch StoreError.notFound { return .failed("内容已删除或到期，请重新选择") }
         catch { return .failed("复制失败，请重试") }
     }
     /// Finder文件复制通过实际文件操作报告结果，不把Command-V发送当成复制完成。

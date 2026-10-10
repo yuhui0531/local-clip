@@ -1,6 +1,8 @@
 // 正式菜单栏、面板、依赖组装与生命周期；无 mock 入口，by AI.Coding。
 import AppKit
 import SwiftUI
+import Carbon
+import ApplicationServices
 import LocalClipCore
 @MainActor private final class ClipPanel: NSPanel {
     override var canBecomeKey: Bool { true }
@@ -83,6 +85,9 @@ import LocalClipCore
             model.panelInteractionChanged = { [weak self] in self?.scheduleFocusDismissal() }
             model.openSettings = { [weak self] in self?.showSettings() }
             model.registerShortcut = { [weak self] in self?.hotkeys.register($0) ?? false }
+            model.focusResults = { [weak self] in guard let panel = self?.panel else { return }; panel.makeFirstResponder(panel) }
+            model.settingsChanged = { [weak self] in self?.applyAppearanceSettings() }
+            model.resizePanel = { [weak self] height, persist in self?.resizeHistory(height, persist: persist) }
             model.showPasteFeedback = { [weak self] message in self?.showPasteFeedback(message) }
             paste.closePanel = model.closePanel
             hotkeys.onInvoke = { [weak self] in self?.toggleHistory() }
@@ -90,7 +95,7 @@ import LocalClipCore
                 var wantsCapture = false
                 if firstLaunch {
                     let notice = NSAlert(); notice.messageText = "LocalClip 只在本机保存剪贴板历史"
-                    notice.informativeText = "保存文本、URL、限定富文本、图片和文件引用的新变化；使用新的本地体验数据目录，旧开发版数据保留且不迁入。不导入当前剪贴板，不备份文件本体。敏感/临时标记会过滤，未知来源仍会记录。您可以从菜单栏暂停、排除声明来源应用、删除历史。默认复制，登录启动关闭。数据未宣称加密。"
+                    notice.informativeText = "保存文本、URL、限定富文本、图片和文件引用的新变化；使用全新本地体验数据目录，不兼容或迁移旧库。不导入当前剪贴板，不备份文件本体。敏感/临时标记会过滤，未知来源仍会记录。您可以从菜单栏暂停、排除声明来源应用、删除历史。默认复制，登录启动关闭。数据未宣称加密。"
                     notice.addButton(withTitle: "暂不记录"); notice.addButton(withTitle: "开始记录")
                     wantsCapture = notice.runModal() == .alertSecondButtonReturn
                 }
@@ -98,7 +103,7 @@ import LocalClipCore
                     if firstLaunch { var settings = try await store.settings(); settings.captureEnabled = wantsCapture; _ = try await store.updateCaptureSettings(settings) }
                     try await model.start()
                     if !hotkeys.register(model.settings.shortcut) { model.message = "快捷键注册冲突，菜单栏仍可使用" }
-                    updateMenu()
+                    applyAppearanceSettings(); updateMenu()
                     // 再次打开应用触发接替时，新进程完成启动后继续展示用户请求的历史。
                     if CommandLine.arguments.contains("--show-history") { showHistory() }
                 } catch { model.message = "启动恢复失败，未开启采集"; model.status = "存储异常"; updateMenu() }
@@ -172,9 +177,9 @@ import LocalClipCore
         model.target = lastExternal
         model.revalidateVisibleContent()
         if model.items.isEmpty { model.refresh() }
-        let screen = NSScreen.screens.first(where: { $0.frame.contains(NSEvent.mouseLocation) }) ?? NSScreen.main
+        let screen = targetScreen()
         let rect = screen?.frame ?? NSRect(x: 0, y: 0, width: 1400, height: 380)
-        let initialFrame = NSRect(x: rect.minX, y: rect.minY, width: rect.width, height: min(380, rect.height))
+        let initialFrame = NSRect(x: rect.minX, y: rect.minY, width: rect.width, height: min(max(220,model.settings.panelHeight), min(520,rect.height)))
         if panel == nil {
             // 非激活面板保留外部应用身份与文档焦点；搜索框仍可成为key接收键盘。
             // 先确定最终屏幕尺寸再挂载SwiftUI，避免1400pt初始布局到全宽的可见跳变。
@@ -184,11 +189,13 @@ import LocalClipCore
             panel.animationBehavior = .none
             // 底部覆盖Dock所在区域，避免按钮被Dock遮挡；关闭面板即恢复原桌面。
             panel.isReleasedWhenClosed = false; panel.level = .statusBar; panel.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
-            panel.contentView = NSHostingView(rootView: HistoryView(model: model)); panel.minSize = NSSize(width: 680, height: 380)
+            panel.contentView = NSHostingView(rootView: HistoryView(model: model)); panel.minSize = NSSize(width: 680, height: 220)
             self.panel = panel
         }
         if let panel {
             pinnedScreenID = screen?.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber
+            model.actualPanelHeight = min(max(220,model.settings.panelHeight), min(520,rect.height))
+            panel.sharingType = model.settings.excludeFromSharing ? .none : .readOnly
             pinPanel(to: screen)
             panel.contentView?.layoutSubtreeIfNeeded()
             panel.contentView?.displayIfNeeded()
@@ -200,12 +207,49 @@ import LocalClipCore
     private func pinPanel(to screen: NSScreen?) {
         guard let panel, let rect = screen?.frame else { return }
         // 紧凑布局380pt，只有尺寸确实变化才重排；隐藏阶段不触发显示更新。
-        let frame = NSRect(x: rect.minX, y: rect.minY, width: rect.width, height: min(380, rect.height))
+        let frame = NSRect(x: rect.minX, y: rect.minY, width: rect.width, height: min(max(220,model?.actualPanelHeight ?? model?.settings.panelHeight ?? 340), min(520,rect.height)))
         if panel.frame != frame { panel.setFrame(frame, display: panel.isVisible) }
+    }
+    /// 外部焦点所在窗口优先决定显示器，取不到时才回退鼠标位置。
+    private func targetScreen() -> NSScreen? {
+        if let target = applications.target() ?? lastExternal, applications.permitted {
+            let app = AXUIElementCreateApplication(target.pid)
+            AXUIElementSetMessagingTimeout(app, 0.1)
+            var window: CFTypeRef?
+            if AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute as CFString, &window) == .success, let window, CFGetTypeID(window) == AXUIElementGetTypeID() {
+                let element = unsafeDowncast(window, to: AXUIElement.self)
+                var position: CFTypeRef?, size: CFTypeRef?
+                if AXUIElementCopyAttributeValue(element,kAXPositionAttribute as CFString,&position) == .success, AXUIElementCopyAttributeValue(element,kAXSizeAttribute as CFString,&size) == .success, let position, let size, CFGetTypeID(position) == AXValueGetTypeID(), CFGetTypeID(size) == AXValueGetTypeID() {
+                    var point = CGPoint.zero; var dimensions = CGSize.zero
+                    if AXValueGetValue(unsafeDowncast(position,to: AXValue.self),.cgPoint,&point), AXValueGetValue(unsafeDowncast(size,to: AXValue.self),.cgSize,&dimensions) {
+                        let top = NSScreen.screens.first?.frame.maxY ?? 0
+                        let rect = NSRect(x:point.x,y:top-point.y-dimensions.height,width:dimensions.width,height:dimensions.height)
+                        return NSScreen.screens.max { $0.frame.intersection(rect).width * $0.frame.intersection(rect).height < $1.frame.intersection(rect).width * $1.frame.intersection(rect).height }
+                    }
+                }
+            }
+        }
+        return NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main
+    }
+    /// 调高只改变底部固定面板尺寸，结束手势后持久化一次。
+    private func resizeHistory(_ height: Double, persist: Bool) {
+        guard let model else { return }
+        model.actualPanelHeight = min(max(220,height),min(520,panel?.screen?.frame.height ?? 520))
+        pinPanel(to: panel?.screen)
+        if persist { model.updateSettings { $0.panelHeight = model.actualPanelHeight } }
+    }
+    /// 隐藏图标必须仍有已注册快捷键；共享设置使用系统公开窗口属性。
+    private func applyAppearanceSettings() {
+        guard let model else { return }
+        let registered = hotkeys.register(model.settings.shortcut)
+        status?.isVisible = model.settings.showMenuIcon || !registered
+        if !registered { model.message = "快捷键冲突，菜单栏入口保留" }
+        panel?.sharingType = model.settings.excludeFromSharing ? .none : .readOnly
+        model.actualPanelHeight = model.settings.panelHeight; pinPanel(to: panel?.screen)
     }
     /// 隐藏历史和其详情，不激活旧目标，也不改变系统剪贴板。
     private func dismissHistory() {
-        focusDismissal?.cancel(); model?.showingDetail = false; model?.showingCategoryEditor = false
+        focusDismissal?.cancel(); model?.showingDetail = false; model?.showingCategoryEditor = false; model?.showingFilters = false
         panel?.orderOut(nil)
     }
     /// key窗口切换稳定后核对整个面板交互，菜单/详情临时接管焦点不能误关闭。
@@ -215,7 +259,7 @@ import LocalClipCore
         focusDismissal = Task { [weak self] in
             do { try await Task.sleep(for: .milliseconds(60)) } catch { return }
             guard let self, !Task.isCancelled, panel.isVisible, !panel.isKeyWindow,
-                  self.menuTrackingDepth == 0 else { return }
+                  self.menuTrackingDepth == 0, self.model?.dragActive != true else { return }
             if let key = NSApp.keyWindow {
                 var owner: NSWindow? = key
                 while let window = owner {
@@ -321,12 +365,46 @@ import LocalClipCore
         keyboardMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self, let panel = self.panel, panel.isVisible, let model = self.model,
                   event.window === panel || event.window?.parent === panel || (event.window == nil && panel.isKeyWindow) else { return event }
-            // 分类名称编辑保留退格、方向键、回车与输入法，不能误删或粘贴历史。
-            if model.showingCategoryEditor { return event }
-            // Esc必须先于输入法和修饰键过滤，不能只取消中文组合输入而把面板留在屏幕上。
-            if event.keyCode == 53 { panel.cancelOperation(nil); return nil }
-            if let editor = self.panel?.firstResponder as? NSTextView, editor.hasMarkedText() { return event }
-            if !event.modifierFlags.intersection([.command, .control, .option]).isEmpty { return event }
+            if event.keyCode == 53 {
+                if model.showingCategoryEditor { model.showingCategoryEditor = false }
+                else if model.showingFilters { model.showingFilters = false }
+                else { self.dismissHistory() }
+                return nil
+            }
+            if model.showingCategoryEditor || model.showingFilters { return event }
+            let editor = panel.firstResponder as? NSTextView
+            if editor?.hasMarkedText() == true { return event }
+            let flags = event.modifierFlags.intersection([.command,.option,.control,.shift])
+            let editing = editor?.isEditable == true
+            if flags == [.command], event.keyCode == 3 {
+                if editing { model.showingFilters = true } else { model.focusRequest = UUID() }; return nil
+            }
+            if event.keyCode == 48 { model.focusResults?(); return nil }
+            if flags == [.shift], [UInt16(36),76].contains(event.keyCode) { model.perform(.plainText, action: .directPaste); return nil }
+            let carbon = (flags.contains(.command) ? UInt32(cmdKey) : 0) | (flags.contains(.option) ? UInt32(optionKey) : 0) | (flags.contains(.control) ? UInt32(controlKey) : 0) | (flags.contains(.shift) ? UInt32(shiftKey) : 0)
+            if carbon == model.settings.boardModifiers {
+                if event.keyCode == 123 || event.keyCode == 124 { model.switchBoard(event.keyCode == 123 ? -1 : 1); return nil }
+                if event.keyCode == 45 { model.editCategory(); return nil }
+            }
+            if carbon == model.settings.quickModifiers, let number = [UInt16(18),19,20,21,23,22,26,28,25].firstIndex(of: event.keyCode), model.items.indices.contains(number) {
+                model.select(model.items[number].id); model.perform(action: .directPaste); return nil
+            }
+            if flags == [.command] && !editing {
+                switch event.keyCode {
+                case 0: model.selectAllResults(); return nil
+                case 8: model.perform(action: .copy); return nil
+                case 6: model.undoDeletion(); return nil
+                case 5: model.jumpToHistory(); return nil
+                case 31: model.openSelected(); return nil
+                default: return event
+                }
+            }
+            if !flags.intersection([.command,.control,.option]).isEmpty { return event }
+            if !editing {
+                if event.keyCode == 49 { model.quickLook(); return nil }
+                if event.keyCode == 115 || event.keyCode == 119 { model.edgeSelection(event.keyCode == 119, extend: flags.contains(.shift)); return nil }
+                if flags.contains(.shift), [UInt16(123),124,125,126].contains(event.keyCode) { model.extendNavigation([UInt16(123),126].contains(event.keyCode) ? -1 : 1); return nil }
+            }
             if event.keyCode == 51 || event.keyCode == 117 {
                 // 有搜索文字时保留正常退格/删除；空搜索或卡片焦点删除当前记录。
                 if let editor = event.window?.firstResponder as? NSTextView, editor.isEditable, !editor.string.isEmpty { return event }
@@ -334,7 +412,7 @@ import LocalClipCore
                 model.deleteSelected(); return nil
             }
             switch event.keyCode {
-            case 36, 76: model.perform(); return nil
+            case 36, 76: if editing { model.focusResults?() } else { model.perform() }; return nil
             case 125: model.navigate(1); return nil
             case 126: model.navigate(-1); return nil
             case 123, 124:

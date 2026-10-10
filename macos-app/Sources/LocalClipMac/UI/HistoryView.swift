@@ -8,6 +8,8 @@ public struct HistoryView: View {
     @State private var resizingHeight: Double?
     @State private var scrollPosition = ScrollPosition(edge: .leading)
     @State private var scrollWheelState = HistoryScrollWheel.State()
+    private var dense: Bool { model.actualPanelHeight < 300 }
+    private var cardHeight: Double { max(64, model.actualPanelHeight - (dense ? 135 : 155)) }
     public init(model: HistoryViewModel) { self.model = model }
     public var body: some View {
         VStack(spacing: 0) {
@@ -27,11 +29,12 @@ public struct HistoryView: View {
                 Spacer(minLength: 10)
                 SearchField(text: $model.query, focus: model.focusRequest, onChange: model.searchChanged,
                     onNavigate: model.navigate, onEnter: { model.focusResults?() }, onEscape: { model.closePanel?() }, onDelete: model.deleteSelected).frame(maxWidth: 310).frame(height: 30)
+                Button { model.showingFilters.toggle() } label: { Image(systemName: "line.3.horizontal.decrease.circle").font(.system(size: 19)) }.buttonStyle(.plain).popover(isPresented: Binding(get: { dense && model.showingFilters }, set: { model.showingFilters = $0 })) { FilterEditor(model: model) }
                 Button { model.updateSettings { $0.captureEnabled.toggle() } } label: { Image(systemName: model.settings.captureEnabled ? "pause.circle" : "play.circle").font(.system(size: 20, weight: .light)) }.buttonStyle(.plain).help(model.settings.captureEnabled ? "暂停采集" : "恢复采集")
                 Menu { Button(model.settings.hideContents ? "显示内容" : "隐藏内容") { model.updateSettings { $0.hideContents.toggle() } }; Button("筛选…") { model.showingFilters.toggle() }; Button("撤销删除 · ⌘Z") { model.undoDeletion() }; Button("设置…") { model.openSettings?() }; Button("清空普通历史", role: .destructive) { model.change(.clearOrdinary) } }
                     label: { Image(systemName: "ellipsis.circle").font(.system(size: 20, weight: .light)) }.menuStyle(.borderlessButton).fixedSize()
                 Button { model.closePanel?() } label: { Image(systemName: "xmark").font(.system(size: 11, weight: .semibold)).frame(width: 24, height: 24).background(.primary.opacity(0.06), in: Circle()) }.buttonStyle(.plain).help("关闭 · Escape")
-            }.padding(.horizontal, 24).padding(.top, 12).padding(.bottom, 10)
+            }.padding(.horizontal, 24).padding(.top, dense ? 4 : 10).padding(.bottom, dense ? 4 : 8)
             // 类型和自定义分类共享一行；溢出横向滚动，新建入口始终可见。
             HStack(spacing: 8) {
                 ScrollView(.horizontal) {
@@ -41,15 +44,15 @@ public struct HistoryView: View {
                         if !model.categories.isEmpty { Divider().frame(height: 16).padding(.horizontal, 5) }
                         ForEach(model.categories) { categoryTab($0) }
                     }
-                }.scrollIndicators(.hidden).frame(height: 32)
+                }.scrollIndicators(.hidden).frame(height: dense ? 28 : 32)
                 Button { model.editCategory() } label: {
                     Image(systemName: "plus").font(.system(size: 19, weight: .regular)).frame(width: 30, height: 30)
                 }.buttonStyle(.plain).help("新建分类").accessibilityLabel("新建分类")
                     .popover(isPresented: $model.showingCategoryEditor, arrowEdge: .top) { CategoryEditor(model: model) }
                 ZStack { if model.loading { ProgressView().controlSize(.small) } }.frame(width: 16, height: 16)
                 Text("\(model.selectedIDs.count > 1 ? "已选\(model.selectedIDs.count) · " : "")\(model.items.count)\(model.hasMore ? "+" : "") 条").font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary).frame(width: 150, alignment: .trailing)
-            }.padding(.horizontal, 24).padding(.bottom, 8)
-            FilterStrip(model: model)
+            }.padding(.horizontal, 24).padding(.bottom, dense ? 3 : 6)
+            if !dense { FilterStrip(model: model) }
             ZStack {
                 if model.items.isEmpty {
                     VStack(spacing: 12) {
@@ -62,7 +65,7 @@ public struct HistoryView: View {
                         ScrollView(.horizontal) {
                             LazyHStack(spacing: 16) {
                                 ForEach(Array(model.items.enumerated()), id: \.element.id) { index, item in
-                                    ClipCard(item: item, index: index, selected: model.selectedIDs.contains(item.id), height: max(80, model.actualPanelHeight - 140), categoryID: model.categoryID, categories: model.categories, target: model.target, model: model).equatable().id(item.id)
+                                    ClipCard(item: item, index: index, selected: model.selectedIDs.contains(item.id), height: cardHeight, categoryID: model.categoryID, categories: model.categories, target: model.target, model: model).equatable().id(item.id)
                                         // LazyHStack接近页尾才预读，滚动不改变当前选择，也不一次加载全部历史。
                                         .onAppear { if index >= model.items.count - 6 { model.loadMore() } }
                                 }
@@ -71,7 +74,7 @@ public struct HistoryView: View {
                                         VStack(spacing: 10) {
                                             if model.loading { ProgressView() } else { Image(systemName: "arrow.right").font(.title2) }
                                             Text(model.loading ? "正在读取…" : "更多历史")
-                                        }.frame(width: 130, height: 200)
+                                        }.frame(width: 130, height: cardHeight)
                                     }.buttonStyle(.plain).onAppear { model.loadMore() }
                                 }
                             }.padding(.horizontal, 24).padding(.top, 5).padding(.bottom, 12)
@@ -122,7 +125,7 @@ public struct HistoryView: View {
                     Button { model.perform(action: .copy) } label: { HStack(spacing: 12) { Text("复制").fontWeight(.semibold); Text("⌘C").font(.system(size: 10)).opacity(0.7) }.padding(.horizontal, 17).padding(.vertical, 7) }
                         .buttonStyle(.plain).foregroundStyle(.white).background(Color(red: 0.23, green: 0.43, blue: 0.94), in: Capsule()).keyboardShortcut("c", modifiers: .command)
                 }.disabled(model.selectedID == nil)
-            }.padding(.horizontal, 24).padding(.vertical, 8)
+            }.padding(.horizontal, 24).padding(.vertical, dense ? 4 : 8)
         // 顶部保留圆角，底边与屏幕贴合，不留可拖动的悬浮窗口边距。
         }.background(HistoryBackdrop()).clipShape(UnevenRoundedRectangle(topLeadingRadius: 18, topTrailingRadius: 18))
             .overlay(UnevenRoundedRectangle(topLeadingRadius: 18, topTrailingRadius: 18).strokeBorder(.white.opacity(0.30), lineWidth: 1))
@@ -255,10 +258,10 @@ private struct ClipCard: View, Equatable {
                     else { Image(systemName: symbol).font(.system(size: 15, weight: .medium)).frame(width: 28, height: 28).background(.white.opacity(0.17), in: RoundedRectangle(cornerRadius: 6)) }
                     VStack(alignment: .leading, spacing: 3) { Text(item.source.bundleID == nil ? "未知来源" : item.source.name).font(.system(size: 12, weight: .semibold)).lineLimit(1); Text(HistoryView.kindName(item.kind)).font(.system(size: 9, weight: .medium)).opacity(0.74) }.help(sourceDescription)
                     Spacer(); if item.isFavorite { Image(systemName: "star.fill").font(.system(size: 11)) }
-                }.foregroundStyle(.white).padding(.horizontal, 14).frame(height: 44).background(tint.gradient)
+                }.foregroundStyle(.white).padding(.horizontal, 14).frame(height: height < 130 ? 30 : 44).background(tint.gradient)
                 cardContent.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).clipped()
                 HStack { Text(Date(timeIntervalSince1970: Double(item.lastCopiedAt)/1000), style: .relative); Spacer(); if selected { Text("已选中").fontWeight(.medium).foregroundStyle(tint) } else { Text("\(index + 1)").monospacedDigit() } }.font(.system(size: 10)).foregroundStyle(Color.secondary).padding(.horizontal, 14).frame(height: 24).background(Color(nsColor: .controlBackgroundColor))
-            }.frame(width: 250, height: max(24, height - 72)).background(Color(nsColor: .textBackgroundColor)).clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }.frame(width: 250, height: height).background(Color(nsColor: .textBackgroundColor)).clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(selected ? tint : Color.primary.opacity(0.08), lineWidth: selected ? 2.5 : 0.7))
                 .shadow(color: .black.opacity(0.08), radius: 4, y: 2)
             .contentShape(RoundedRectangle(cornerRadius: 12))

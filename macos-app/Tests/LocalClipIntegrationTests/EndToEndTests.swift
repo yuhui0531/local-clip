@@ -18,7 +18,11 @@ import LocalClipCore
     func isFrontmost(_ target: TargetToken) -> Bool { isAlive(target) && current == target }
     /// 可注入用户切焦点或复制。
     func activate(_ target: TargetToken) -> Bool { activations += 1; if activationOK { current = target }; onActivate?(); return activationOK }
-    func sendPaste(_ target: TargetToken) -> Bool { guard permitted, isFrontmost(target) else { return false }; events += 1; return true }
+    var pasteFailureReason: String? { nil }
+    func requestPastePermission() {}
+    func isPasteFocusReady(_ target: TargetToken) -> Bool { isFrontmost(target) }
+    func restorePasteFocus(_ target: TargetToken) -> Bool { isFrontmost(target) }
+    func sendPaste(_ target: TargetToken, ifClipboardUnchanged stillValid: () -> Bool) -> Bool { guard stillValid(), permitted, isFrontmost(target) else { return false }; events += 1; return true }
 }
 @MainActor struct EndToEndTests {
     /// 大条目预拒绝只影响本条，不吞掉随后可以容纳的小条目。
@@ -74,10 +78,10 @@ import LocalClipCore
         let first = try await store.search(.init()); #expect(first.items.count == 1)
         guard let firstID = first.items.first?.id else { return }
         let paste = PasteCoordinator(board: board, applications: FakeApplications(), store: store, capture: capture)
-        #expect(await paste.perform(.init(id: firstID)) == .copied)
+        #expect(await paste.perform(.init(ids: [firstID])) == .copied)
         capture.tick(); try await Task.sleep(for: .milliseconds(30))
         #expect(try await store.detail(id: firstID, at: SystemClock().now()).summary.copyCount == 1)
-        _ = await paste.perform(.init(id: firstID))
+        _ = await paste.perform(.init(ids: [firstID]))
         raw.user("LOCALCLIP-TEST-B"); capture.tick()
         let secondDeadline = ContinuousClock.now + .seconds(3)
         while try await store.search(.init()).items.count != 2, ContinuousClock.now < secondDeadline { try await Task.sleep(for: .milliseconds(10)) }
@@ -109,7 +113,7 @@ import LocalClipCore
         let raw = RawBoard(); let board = MacPasteboardClient(access: raw); let apps = FakeApplications()
         let capture = CaptureCoordinator(board: board, store: store)
         let paste = PasteCoordinator(board: board, applications: apps, store: store, capture: capture)
-        let request = PasteRequest(id: id, action: .directPaste, target: apps.remembered)
+        let request = PasteRequest(ids: [id], action: .directPaste, target: apps.remembered)
         #expect(await paste.perform(request) == .commandSent); #expect(apps.events == 1)
         apps.permitted = false
         if case .fallback = await paste.perform(request) {} else { Issue.record("缺权限未回退") }; #expect(apps.events == 1)
@@ -130,7 +134,7 @@ import LocalClipCore
         #expect(raw.items[0][SupportedType.string] == Data("USER-B-COMBINED".utf8))
         apps.onActivate = nil; raw.writeOK = false
         #expect(await paste.perform(request) == .failed("复制失败，请重试")); #expect(apps.events == 1)
-        let reused = PasteRequest(id: id, action: .directPaste, target: .init(pid: 123, bundleID: "local.target", launchedAt: 999))
+        let reused = PasteRequest(ids: [id], action: .directPaste, target: .init(pid: 123, bundleID: "local.target", launchedAt: 999))
         raw.writeOK = true
         if case .fallback = await paste.perform(reused) {} else { Issue.record("PID重用未回退") }; #expect(apps.events == 1)
     }

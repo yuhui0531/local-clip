@@ -30,6 +30,8 @@ public enum RichContent {
                     if tag == "u" { attributes[.underlineStyle] = NSUnderlineStyle.single.rawValue }
                     let font = attributes[.font] as? NSFont ?? .systemFont(ofSize: 14)
                     if !traits.isEmpty { attributes[.font] = NSFontManager.shared.convert(font, toHaveTrait: traits) }
+                    if tag == "a", let expression = try? NSRegularExpression(pattern: "(?i)href\\s*=\\s*[\"']([^\"']+)[\"']"), let match = expression.firstMatch(in: token, range: NSRange(token.startIndex...,in: token)), let range = Range(match.range(at:1),in: token), let url = URL(string: HTMLText.extract(String(token[range]))), ["http","https","mailto"].contains(url.scheme?.lowercased() ?? "") { attributes[.link] = url }
+                    if let expression = try? NSRegularExpression(pattern: "(?i)font-size\\s*:\\s*([0-9]+)(px|pt)"), let match = expression.firstMatch(in: token, range: NSRange(token.startIndex...,in: token)), let range = Range(match.range(at:1),in: token), let size = Double(token[range]), (6...96).contains(size) { attributes[.font] = NSFontManager.shared.convert(attributes[.font] as? NSFont ?? font, toSize: size) }
                     if tag == "code" || tag == "pre" { attributes[.font] = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular) }
                     if let expression = try? NSRegularExpression(pattern: "(?i)(?:color\\s*:\\s*|color=[\"']?)(#[0-9a-f]{6})"), let color = expression.firstMatch(in: token, range: NSRange(token.startIndex..., in: token)), let r = Range(color.range(at: 1), in: token) { attributes[.foregroundColor] = colorValue(String(token[r])) }
                 }
@@ -63,14 +65,39 @@ struct RichTextPreview: NSViewRepresentable {
     }
     func updateNSView(_ view: NSScrollView, context: Context) { (view.documentView as? NSTextView)?.textStorage?.setAttributedString(content) }
 }
-@MainActor final class FilePreview: NSObject, QLPreviewPanelDataSource {
+// QLPreviewView嵌入自有窗口，不接管系统共享Quick Look控制器，by AI.Coding。
+@MainActor final class FilePreview: NSObject {
     private var urls: [URL] = []
-    /// 仅预览存在的原件，引用失效时不尝试恢复文件本体。
-    func show(_ values: [URL]) {
-        urls = values.filter { FileManager.default.fileExists(atPath: $0.path) }
-        guard !urls.isEmpty, let panel = QLPreviewPanel.shared() else { return }
-        panel.dataSource = self; panel.reloadData(); panel.makeKeyAndOrderFront(nil)
+    private var index = 0
+    private var panel: NSPanel?
+    private var preview: QLPreviewView?
+    private var label: NSTextField?
+    /// 仅预览存在的原件，文件引用失效不尝试还原本体。
+    func show(_ values: [URL], excludeFromSharing: Bool) {
+        urls = values.filter { FileManager.default.fileExists(atPath: $0.path) }; index = 0
+        guard !urls.isEmpty else { return }
+        if panel == nil {
+            let window = PreviewWindow(contentRect: NSRect(x:0,y:0,width:760,height:560), styleMask:[.titled,.closable,.resizable], backing:.buffered,defer:false)
+            window.title = "LocalClip 文件预览"; window.isReleasedWhenClosed = false; window.center()
+            let view = QLPreviewView(frame:.zero,style:.normal)!
+            let previous = NSButton(title:"上一项",target:self,action:#selector(previousItem))
+            let next = NSButton(title:"下一项",target:self,action:#selector(nextItem))
+            let caption = NSTextField(labelWithString: ""); caption.lineBreakMode = .byTruncatingMiddle
+            let controls = NSStackView(views:[previous,caption,next]); controls.orientation = .horizontal; controls.spacing = 12
+            let stack = NSStackView(views:[controls,view]); stack.orientation = .vertical; stack.spacing = 8; stack.edgeInsets = NSEdgeInsets(top:8,left:12,bottom:12,right:12)
+            window.contentView = stack; view.translatesAutoresizingMaskIntoConstraints = false
+            NSLayoutConstraint.activate([view.widthAnchor.constraint(equalTo:stack.widthAnchor,constant:-24),view.heightAnchor.constraint(greaterThanOrEqualToConstant:300)])
+            preview = view; label = caption; panel = window
+        }
+        panel?.sharingType = excludeFromSharing ? .none : .readOnly
+        displayItem(); panel?.makeKeyAndOrderFront(nil)
     }
-    func numberOfPreviewItems(in panel: QLPreviewPanel!) -> Int { urls.count }
-    func previewPanel(_ panel: QLPreviewPanel!, previewItemAt index: Int) -> (any QLPreviewItem)! { urls[index] as NSURL }
+    func close() { preview?.previewItem = nil; panel?.orderOut(nil); urls.removeAll() }
+    private func displayItem() { guard urls.indices.contains(index) else { return }; preview?.previewItem = urls[index] as NSURL; label?.stringValue = "\(index+1)/\(urls.count) · " + urls[index].lastPathComponent }
+    @objc private func previousItem() { index = max(0,index-1); displayItem() }
+    @objc private func nextItem() { index = min(urls.count-1,index+1); displayItem() }
+    private final class PreviewWindow: NSPanel {
+        override func cancelOperation(_ sender: Any?) { orderOut(sender) }
+        override func keyDown(with event: NSEvent) { if event.keyCode == 53 || event.keyCode == 49 { orderOut(nil) } else { super.keyDown(with:event) } }
+    }
 }

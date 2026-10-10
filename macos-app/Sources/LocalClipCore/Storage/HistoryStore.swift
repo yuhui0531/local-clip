@@ -104,6 +104,9 @@ public actor HistoryStore: HistoryRepository {
     /// 单一候选变更入口；淘汰只发生于候选，对外发布仍是一个原子点。
     private func mutate(operation: String = UUID().uuidString, quota: Int64, allowOverQuota: Bool = false, growth: Int64 = 0, trim: Bool = false, protectedID: ClipID? = nil, _ body: (SQLiteConnection) throws -> Void) throws {
         try requireAvailable()
+        let started = ContinuousClock.now
+        let timing = (try? settings().timingEnabled) == true
+        defer { if timing { StageTiming.record("storage_commit", since: started, count: 1) } }
         do {
             try strategy.commit(quota: quota, allowOverQuota: allowOverQuota, estimatedGrowth: growth, finalize: { db, pending in
                 if trim {
@@ -258,7 +261,7 @@ public actor HistoryStore: HistoryRepository {
             if needle.isEmpty {
                 let count = Int(try db.scalarInt("SELECT COUNT(*) FROM clips WHERE " + condition, filters))
                 guard offset <= count else { throw StoreError.invalidCursor }
-                let rows = try db.rows("SELECT *, (isFavorite=1 OR EXISTS(SELECT 1 FROM clip_categories WHERE clipID=clips.id)) AS isProtected FROM clips WHERE " + condition + " ORDER BY " + order + " LIMIT ? OFFSET ?", filters + [.integer(Int64(size)), .integer(Int64(offset))])
+                let rows = try db.rows("SELECT *, (isFavorite=1 OR EXISTS(SELECT 1 FROM clip_categories WHERE clipID=clips.id)) AS isProtected FROM clips WHERE " + condition + " ORDER BY " + order + " LIMIT ? OFFSET ?", filters + (request.categoryIDs.count == 1 ? [.text(request.categoryIDs.first!)] : []) + [.integer(Int64(size)), .integer(Int64(offset))])
                 return SearchPage(queryID: request.queryID, revision: revision, items: rows.map { summary($0) }, next: offset + rows.count < count ? .init(revision: revision, offset: offset + rows.count, signature: request.signature) : nil)
             }
             // 内存仅缓存当前SQLite revision的派生全文；任何提交先失效，所有可见性逐次检查。
@@ -345,11 +348,11 @@ public actor HistoryStore: HistoryRepository {
             case .retention(let days):
                 guard (0...365).contains(days) else { throw StoreError.invalidSettings }
                 count = Int(try db.scalarInt("SELECT COUNT(*) FROM clips WHERE isFavorite=0 AND NOT EXISTS(SELECT 1 FROM clip_categories WHERE clipID=clips.id) AND lastCopiedAtMs<=?", [.integer(at - (days == 0 ? Int64.max / 2 : Int64(days) * dayMS))]))
-                confirmation = days != 0 && (settings.retentionDays == 0 || days < settings.retentionDays); message = "更改保留期限；到期普通历史将删除，收藏保留。"
+                confirmation = days != 0 && (settings.retentionDays == 0 || days < settings.retentionDays); message = "更改保留期限；到期普通历史将删除，收藏与分类保护保留。"
             case .quota(let bytes):
                 guard (100 * MiB...4096 * MiB).contains(bytes) else { throw StoreError.invalidSettings }
                 count = Int(try db.scalarInt("SELECT COUNT(*) FROM clips WHERE isFavorite=0 AND NOT EXISTS(SELECT 1 FROM clip_categories WHERE clipID=clips.id)"))
-                confirmation = bytes < settings.quotaBytes; message = "调整容量，必要时从最早复制的普通历史开始清理；收藏保留。"
+                confirmation = bytes < settings.quotaBytes; message = "调整容量，必要时从最早复制的普通历史开始清理；收藏与分类保护保留。"
             }
             return try self.revision(db)
         }
@@ -411,7 +414,13 @@ public actor HistoryStore: HistoryRepository {
                 try db.run("DELETE FROM clips WHERE isFavorite=0 AND NOT EXISTS(SELECT 1 FROM clip_categories WHERE clipID=clips.id) AND lastCopiedAtMs<=?", [.integer(at - (settings.retentionDays == 0 ? Int64.max / 2 : Int64(settings.retentionDays) * dayMS))])
             }
         }
-        if case .delete = preview.operation { undoPacket = undoCandidate }
+        if case .delete = preview.operation {
+            undoExpiry?.cancel(); undoPacket = undoCandidate
+            if let undoCandidate { undoExpiry = Task { [weak self] in
+                do { try await Task.sleep(for: .seconds(30)) } catch { return }
+                await self?.clearUndo(expires: undoCandidate.expires)
+            } }
+        }
         let newCount = try strategy.read { try $0.scalarInt("SELECT COUNT(*) FROM clips") }
         return ChangeResult(removed: Int(oldCount - newCount), reclaimedBytes: max(0, before - (try usage().measuredTotal)), revision: try strategy.read { try self.revision($0) })
     }
@@ -448,7 +457,7 @@ public actor HistoryStore: HistoryRepository {
             try db.exec("DELETE FROM clips WHERE isFavorite=0 AND NOT EXISTS(SELECT 1 FROM clip_categories WHERE clipID=clips.id); DELETE FROM thumbnails; DELETE FROM text_content")
             try garbageCollect(db)
         }
-        return strategy.lastCandidateBytes + (try CommitStrategy.bytes(strategy.staging)) < settings.quotaBytes
+        return strategy.lastCandidateBytes + (try CommitStrategy.bytes(strategy.staging)) + (try CommitStrategy.bytes(strategy.root.appendingPathComponent("Exports"))) < settings.quotaBytes
     }
     /// 非破坏性设置也递增版本；容量与期限只能走确认接口。
     public func updateCaptureSettings(_ next: SettingsSnapshot) throws -> SettingsSnapshot {
@@ -511,6 +520,7 @@ public actor HistoryStore: HistoryRepository {
         var bytes: Int64
     }
     private var undoPacket: UndoPacket?
+    private var undoExpiry: Task<Void, Never>?
     /// 分类保护在SQL与内存摘要中一致；永不过期仍遵循物理容量。
     private func removeExpired(_ db: SQLiteConnection, settings: SettingsSnapshot, at: Instant) throws {
         guard settings.retentionDays > 0 else { return }
@@ -538,7 +548,7 @@ public actor HistoryStore: HistoryRepository {
             clauses.append("EXISTS(SELECT 1 FROM clip_categories WHERE clipID=clips.id AND categoryID IN(" + request.categoryIDs.map { _ in "?" }.joined(separator: ",") + "))")
             values += request.categoryIDs.sorted().map(SQLValue.text)
         }
-        let order = request.categoryIDs.count == 1 ? "(SELECT position FROM clip_categories WHERE clipID=clips.id AND categoryID='" + request.categoryIDs.first!.replacingOccurrences(of: "'", with: "''") + "'),id" : "lastCopiedAtMs DESC,id"
+        let order = request.categoryIDs.count == 1 ? "(SELECT position FROM clip_categories WHERE clipID=clips.id AND categoryID=?),id" : "lastCopiedAtMs DESC,id"
         return (clauses.joined(separator: " AND "), values, order)
     }
     /// 分类与板内记录移动一次提交，不刷新复制身份。
@@ -562,27 +572,31 @@ public actor HistoryStore: HistoryRepository {
     }
     /// 来源建议来自本地元数据，不加载载荷、不记录搜索正文。
     public func sources() throws -> [SourceAttribution] {
-        try strategy.read { db in try db.rows("SELECT DISTINCT sourceBundleID,sourceName,sourceBasis FROM clips ORDER BY sourceName").map { .init(bundleID: $0.text("sourceBundleID").isEmpty ? nil : $0.text("sourceBundleID"), name: $0.text("sourceName"), basis: $0.text("sourceBasis")) } }
+        try strategy.read { db in try db.rows("SELECT sourceBundleID,MIN(sourceName) AS sourceName,MIN(sourceBasis) AS sourceBasis FROM clips GROUP BY COALESCE(sourceBundleID,'') ORDER BY sourceName").map { .init(bundleID: $0.text("sourceBundleID").isEmpty ? nil : $0.text("sourceBundleID"), name: $0.text("sourceName"), basis: $0.text("sourceBasis")) } }
     }
     /// 删除包只驻留内存，先估算预算，超预算不读取大正文。
     private func makeUndo(_ change: HistoryChange) throws -> UndoPacket? {
-        guard case .delete(let ids) = change, !ids.isEmpty else { return nil }
+        guard case .delete(let ids) = change, !ids.isEmpty, ids.count <= 4096 else { return nil }
         return try strategy.read { db in
             let placeholders = Set(ids).map { _ in "?" }.joined(separator: ",")
             let values = Set(ids).sorted().map(SQLValue.text)
             let blobCondition = "digest IN(SELECT blobDigest FROM representations WHERE clipID IN(" + placeholders + "))"
             let bytes = try db.scalarInt("SELECT COALESCE(SUM(byteCount),0) FROM blobs WHERE " + blobCondition, values)
-            let metadata = try db.scalarInt("SELECT COALESCE(SUM(length(previewText)),0) FROM clips WHERE id IN(" + placeholders + ")", values)
-            guard bytes + metadata + Int64(ids.count) * 8192 <= 50 * MiB else { return nil }
+            let metadata = try db.scalarInt("SELECT COALESCE(SUM(length(CAST(previewText AS BLOB))),0) FROM clips WHERE id IN(" + placeholders + ")", values)
+            let texts = try db.scalarInt("SELECT COALESCE(SUM(length(CAST(plainText AS BLOB))+length(CAST(normalizedText AS BLOB))),0) FROM text_content WHERE clipID IN(" + placeholders + ")", values)
+            let declarations = try db.scalarInt("SELECT COALESCE(SUM(length(CAST(declaredTypes AS BLOB))),0) FROM items WHERE clipID IN(" + placeholders + ")", values)
+            guard bytes + metadata + texts + declarations + Int64(ids.count) * 8192 <= 50 * MiB else { return nil }
             var tables: [String: [[String: SQLValue]]] = [:]
             tables["clips"] = try db.rows("SELECT * FROM clips WHERE id IN(" + placeholders + ")", values)
             for table in ["items", "representations", "text_content", "clip_categories"] {
                 tables[table] = try db.rows("SELECT * FROM " + table + " WHERE clipID IN(" + placeholders + ")", values)
             }
             tables["blobs"] = try db.rows("SELECT * FROM blobs WHERE " + blobCondition, values)
-            return UndoPacket(expires: clock.now() + 30_000, tables: tables, bytes: bytes + metadata + Int64(ids.count) * 8192)
+            return UndoPacket(expires: clock.now() + 30_000, tables: tables, bytes: bytes + metadata + texts + declarations + Int64(ids.count) * 8192)
         }
     }
+    /// 到期主动释放内存正文，不能只隐藏撤销入口。
+    private func clearUndo(expires: Instant) { if undoPacket?.expires == expires { undoPacket = nil }; undoExpiry = nil }
     public func undoAvailable() -> Bool {
         if let packet = undoPacket, packet.expires > clock.now() { return true }
         undoPacket = nil; return false
@@ -608,7 +622,7 @@ public actor HistoryStore: HistoryRepository {
                 }
             }
         }
-        undoPacket = nil
+        undoPacket = nil; undoExpiry?.cancel(); undoExpiry = nil
     }
 
     /// 只公开只读延迟导出句柄，拖拽开始只查询类型和版本，不读取图片正文。

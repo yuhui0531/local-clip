@@ -7,16 +7,16 @@ import LocalClipCore
 
 @MainActor final class ContentExportProvider {
     /// 内部令牌只供本进程分类；每个真实项目有独立公开提供者。
-    static func writers(ids: [ClipID], store: HistoryStore, token: String) async throws -> [any NSPasteboardWriting] {
+    static func writers(ids: [ClipID], store: HistoryStore, token: String, register: (ClipExportAccess) -> Void) async throws -> [any NSPasteboardWriting] {
         var result: [any NSPasteboardWriting] = []
         for id in ids {
             let access = try await store.exportAccess(id: id)
+            register(access)
             let types = try await Task.detached { try access.itemTypes() }.value
             for (index, values) in types.enumerated() {
                 if !Set(values).isDisjoint(with: [SupportedType.png, SupportedType.tiff, SupportedType.jpeg]) {
                     let delegate = ImagePromise(access: access, index: index, types: values, store: store)
-                    let writer = ImageWriter(fileType: UTType.png.identifier, delegate: delegate)
-                    writer.owner = delegate; writer.access = access; writer.index = index; writer.types = values; writer.token = token
+                    let writer = ImageWriter(access: access, index: index, types: values, token: token, owner: delegate)
                     result.append(writer)
                 } else { result.append(ClipWriter(access: access, index: index, types: values, token: token)) }
             }
@@ -24,30 +24,40 @@ import LocalClipCore
         return result
     }
 }
-@MainActor private final class ClipWriter: NSObject, NSPasteboardWriting {
+private final class ClipWriter: NSObject, NSPasteboardWriting {
     let access: ClipExportAccess
     let index: Int
     let types: [String]
     let token: String
     init(access: ClipExportAccess, index: Int, types: [String], token: String) { self.access = access; self.index = index; self.types = types; self.token = token }
-    func writableTypes(for pasteboard: NSPasteboard) -> [NSPasteboard.PasteboardType] { (types + [HistoryViewModel.categoryDragType]).map(NSPasteboard.PasteboardType.init) }
+    private var publicTypes: [String] { types.contains(SupportedType.string) || Set(types).isDisjoint(with: [SupportedType.rtf,SupportedType.html,SupportedType.url]) ? types : types + [SupportedType.string] }
+    func writableTypes(for pasteboard: NSPasteboard) -> [NSPasteboard.PasteboardType] { (publicTypes + [HistoryViewModel.categoryDragType]).map { NSPasteboard.PasteboardType($0) } }
     func writingOptions(forType type: NSPasteboard.PasteboardType, pasteboard: NSPasteboard) -> NSPasteboard.WritingOptions { .promised }
     func pasteboardPropertyList(forType type: NSPasteboard.PasteboardType) -> Any? {
         if type.rawValue == HistoryViewModel.categoryDragType { return Data(token.utf8) }
+        if type.rawValue == SupportedType.string, !types.contains(SupportedType.string) {
+            for original in [SupportedType.url,SupportedType.rtf,SupportedType.html] where types.contains(original) {
+                if let data = try? access.itemData(index:index,type:original), let text = ContentDecoder.extract(.init(original,data)) { return Data(text.utf8) }
+            }
+        }
         return try? access.itemData(index: index, type: type.rawValue)
     }
 }
 @MainActor private final class ImageWriter: NSFilePromiseProvider {
-    var owner: ImagePromise?
-    var access: ClipExportAccess?
-    var index = 0
-    var types: [String] = []
-    var token = ""
-    override func writableTypes(for pasteboard: NSPasteboard) -> [NSPasteboard.PasteboardType] { super.writableTypes(for: pasteboard) + (types + [HistoryViewModel.categoryDragType]).map(NSPasteboard.PasteboardType.init) }
+    let owner: ImagePromise
+    nonisolated let access: ClipExportAccess
+    nonisolated let index: Int
+    nonisolated let types: [String]
+    nonisolated let token: String
+    init(access: ClipExportAccess, index: Int, types: [String], token: String, owner: ImagePromise) {
+        self.access = access; self.index = index; self.types = types; self.token = token; self.owner = owner
+        super.init(fileType: UTType.png.identifier, delegate: owner)
+    }
+    override func writableTypes(for pasteboard: NSPasteboard) -> [NSPasteboard.PasteboardType] { super.writableTypes(for: pasteboard) + (types + [HistoryViewModel.categoryDragType]).map { NSPasteboard.PasteboardType($0) } }
     override func writingOptions(forType type: NSPasteboard.PasteboardType, pasteboard: NSPasteboard) -> NSPasteboard.WritingOptions { types.contains(type.rawValue) || type.rawValue == HistoryViewModel.categoryDragType ? .promised : super.writingOptions(forType: type, pasteboard: pasteboard) }
     override func pasteboardPropertyList(forType type: NSPasteboard.PasteboardType) -> Any? {
         if type.rawValue == HistoryViewModel.categoryDragType { return Data(token.utf8) }
-        if types.contains(type.rawValue) { return try? access?.itemData(index: index, type: type.rawValue) }
+        if types.contains(type.rawValue) { return try? access.itemData(index: index, type: type.rawValue) }
         return super.pasteboardPropertyList(forType: type)
     }
 }
@@ -76,7 +86,9 @@ import LocalClipCore
                     _ = try access.itemData(index: index, type: type)
                     return output as Data
                 }.value
+                try access.checkValid()
                 let lease = try await store.writeExport(data, id: access.id, revision: access.revision)
+                try access.checkValid()
                 try await Task.detached { try FileManager.default.copyItem(at: lease, to: url) }.value
                 completionHandler(nil)
             } catch { completionHandler(error) }
@@ -109,22 +121,22 @@ struct HistoryDragBridge: NSViewRepresentable {
                     guard NSEvent.pressedMouseButtons & 1 != 0 else { return }
                     let token = model.prepareDrag(self.id)
                     do {
-                        let writers = try await ContentExportProvider.writers(ids: model.orderedSelection, store: model.store, token: token)
-                        guard self.window != nil, NSEvent.pressedMouseButtons & 1 != 0 else { model.dragActive = false; return }
+                        let writers = try await ContentExportProvider.writers(ids: model.orderedSelection, store: model.store, token: token, register: model.registerDragAccess)
+                        guard self.window != nil, NSEvent.pressedMouseButtons & 1 != 0 else { model.finishDrag(cancelled: true); return }
                         let values = writers.enumerated().map { index, writer in
                             let item = NSDraggingItem(pasteboardWriter: writer)
                             let image = NSImage(systemSymbolName: "doc.on.clipboard", accessibilityDescription: nil) ?? NSImage(size: NSSize(width:40,height:40))
                             item.setDraggingFrame(NSRect(x:point.x+CGFloat(index)*8,y:point.y,width:48,height:48), contents: image); return item
                         }
-                        guard !values.isEmpty else { model.dragActive = false; return }
+                        guard !values.isEmpty else { model.finishDrag(cancelled: true); return }
                         self.beginDraggingSession(with: values, event: event, source: self)
-                    } catch { model.dragActive = false; model.message = "拖出失败，记录或容量已变化" }
+                    } catch { model.finishDrag(cancelled: true); model.message = "拖出失败，记录或容量已变化" }
                 }
                 return nil
             }
         }
         func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation { .copy }
-        func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) { model?.dragActive = false; model?.panelInteractionChanged?() }
-        deinit { if let monitor { NSEvent.removeMonitor(monitor) } }
+        func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) { model?.finishDrag(cancelled: operation.isEmpty) }
+        isolated deinit { if let monitor { NSEvent.removeMonitor(monitor) } }
     }
 }

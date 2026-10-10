@@ -137,7 +137,7 @@ public struct SettingsSnapshot: Codable, Equatable, Sendable {
     public var excludeFromSharing = false
     public var timingEnabled = false
     public var quickModifiers: UInt32 = 256
-    public var boardModifiers: UInt32 = 768
+    public var boardModifiers: UInt32 = 2304
     public var quotaBytes = 500 * MiB
     public var defaultAction: PasteAction = .copy
     public var captureEnabled = true
@@ -149,7 +149,7 @@ public struct SettingsSnapshot: Codable, Equatable, Sendable {
     public func validate() throws {
         guard (0...365).contains(retentionDays), (100 * MiB...4096 * MiB).contains(quotaBytes), shortcut.keyCode <= 127,
               shortcut.modifiers != 0, (220...520).contains(panelHeight),
-              [UInt32(256),512,2048,768].contains(quickModifiers), boardModifiers != 0 else { throw StoreError.invalidSettings }
+              [UInt32(256),4096,2048,768].contains(quickModifiers), [UInt32(768),2304,6144].contains(boardModifiers) else { throw StoreError.invalidSettings }
     }
     /// 所有入库入口应用同一策略，旧配置快照不得穿透新暂停。
     public func rejection(source: SourceAttribution, types: [[String]], revision: Int64? = nil) -> SkipReason? {
@@ -300,6 +300,7 @@ public struct WriteReceipt: Sendable, Equatable { public var count: Int; public 
     func isAlive(_ target: TargetToken) -> Bool
     func isFrontmost(_ target: TargetToken) -> Bool
     func activate(_ target: TargetToken) -> Bool
+    func restorePasteFocus(_ target: TargetToken) -> Bool
     func isPasteFocusReady(_ target: TargetToken) -> Bool
     func sendPaste(_ target: TargetToken, ifClipboardUnchanged: () -> Bool) -> Bool
 }

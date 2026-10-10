@@ -54,7 +54,7 @@ final class CommitStrategy {
         for file in try FileManager.default.contentsOfDirectory(at: staging, includingPropertiesForKeys: nil) {
             do { try FileManager.default.removeItem(at: file) } catch { /* 无法回收时仍纳入容量，不能报已释放。 */ }
         }
-        return try Self.bytes(staging) + Self.bytes(root.appendingPathComponent("Exports"))
+        return try Self.bytes(staging)
     }
     /// 候选变更 → 校验和物理计量 → fsync → rename，提交点只有一个。
     func commit(quota: Int64, allowOverQuota: Bool = false, estimatedGrowth: Int64 = 0, dryRun: Bool = false, finalize: ((SQLiteConnection, Int64) throws -> Void)? = nil, _ body: (SQLiteConnection) throws -> Void) throws {

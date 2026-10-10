@@ -64,6 +64,7 @@ import LocalClipCore
     private let clock: any ClipClock
     private var savingSettings = false
     public nonisolated static let categoryDragType = "local.localclip.history-item"
+    private var dragAccesses: [ClipExportAccess] = []
     private var categoryDrag: (token: String, ids: [ClipID], expiresAt: Instant)?
     public var closePanel: (() -> Void)?
     public var openSettings: (() -> Void)?
@@ -90,7 +91,7 @@ import LocalClipCore
                 }
                 if case .unavailable = event { self.message = "提交后存储不可用，请重启。已提交操作不会重放。" }
                 self.invalidateSelection(); self.refresh()
-                do { self.categories = try await self.store.categories(); self.settings = try await self.store.settings(); self.usage = try await self.store.usage(); self.revalidateVisibleContent() }
+                do { self.categories = try await self.store.categories(); self.pruneCategoryFilters(); self.sourceSuggestions = try await self.store.sources(); self.settings = try await self.store.settings(); self.usage = try await self.store.usage(); self.revalidateVisibleContent(); self.reconcileSelection() }
                 catch { self.message = "存储状态读取失败" }
             }
         }
@@ -109,7 +110,9 @@ import LocalClipCore
             guard let self else { return }
             do {
                 if debounce { try await Task.sleep(for: .milliseconds(60)) }
+                let started = ContinuousClock.now
                 let page = try await store.search(request)
+                if settings.timingEnabled { StageTiming.record("history_query", since: started, count: page.items.count) }
                 guard !Task.isCancelled, queryID == page.queryID else { return }
                 items = page.items.filter(isVisible); cursor = page.next; pageRevision = page.revision; loading = false
                 if let selectedID, items.contains(where: { $0.id == selectedID }) { select(selectedID, preserveSelection: true) }
@@ -126,17 +129,19 @@ import LocalClipCore
     /// 分页携带同输入和storeRevision；失效时重新查询。
     public func loadMore() { loadMore(advanceSelection:false) }
     /// 键盘到达页尾时延续选择，不能把第50条当成历史终点。
-    private func loadMore(advanceSelection:Bool) {
+    private func loadMore(advanceSelection:Bool, extend: Bool = false) {
         guard let cursor, !loading else { return }
         let id = queryID; loading = true
         let previousCount = items.count, previousSelection = selectedID
         let request = SearchRequest(query, favorites: favorites, kind: kind, cursor: cursor, queryID: id, categoryIDs: activeCategories, sourceBundleID: sourceFilter, from: dateBounds?.0, until: dateBounds?.1)
         Task {
             do {
+                let started = ContinuousClock.now
                 let page = try await store.search(request)
+                if settings.timingEnabled { StageTiming.record("history_query", since: started, count: page.items.count) }
                 guard id == queryID else { return }
                 items += page.items.filter(isVisible); self.cursor = page.next; loading = false
-                if advanceSelection, selectedID == previousSelection, items.count > previousCount { select(items[previousCount].id) }
+                if advanceSelection, selectedID == previousSelection, items.count > previousCount { if extend { choose(items[previousCount].id, modifiers: .shift) } else { select(items[previousCount].id) } }
                 scheduleVisibilityDeadline()
             } catch { if id == queryID { loading = false; refresh() } }
         }
@@ -178,14 +183,15 @@ import LocalClipCore
                 let detail = try await store.detail(id: id, at: clock.now())
                 guard !Task.isCancelled, generation == detailID, selectedID == id, showingDetail else { return }
                 guard isVisible(detail.summary) else { revalidateVisibleContent(); return }
-                self.detail = detail; detailLoading = false
                 let rich = await Task.detached { () -> AttributedString in
                     let result = NSMutableAttributedString(string: "")
                     for (index, item) in detail.payload.items.enumerated() { if index > 0 { result.append(NSAttributedString(string: "\n")) }; result.append(RichContent.attributed(item)) }
                     return AttributedString(result)
                 }.value
                 guard !Task.isCancelled, generation == detailID, selectedID == id else { return }
-                richPreview = NSAttributedString(rich)
+                let latest = try await store.metadata(id: id, at: clock.now())
+                guard generation == detailID, selectedID == id, latest.revision == detail.revision, isVisible(latest.summary) else { return }
+                self.detail = detail; detailLoading = false; richPreview = NSAttributedString(rich)
                 if detail.summary.kind == .image || detail.summary.kind == .mixed {
                     let bytes = await Task.detached { RichContent.fullImage(detail.payload) }.value
                     let metadata = try await store.metadata(id: id, at: clock.now())
@@ -253,7 +259,7 @@ import LocalClipCore
     }
     /// 双击恢复原格式后向原应用焦点粘贴；Finder文件对象仍复制到其当前实际目录。
     public func doubleClick(_ id: ClipID) {
-        guard let item = items.first(where: { $0.id == id }) else { return }
+        guard items.contains(where: { $0.id == id }) else { return }
         if !selectedIDs.contains(id) { select(id) }
         focusResults?()
         let ids = orderedSelection
@@ -303,7 +309,8 @@ import LocalClipCore
                 settings = try await store.settings(); capture.updatePolicy(settings)
                 await capture.refreshCapacity(); usage = try await store.usage()
                 let undo = await store.undoAvailable()
-                message = (undo ? "可按⌘Z撤销（30秒） · " : "") + "已保存变更，删除\(result.removed)条，实际释放\(Self.bytes(result.reclaimedBytes))"
+                let deleted = { if case .delete = change { return true }; return false }()
+                message = (undo ? "可按⌘Z撤销（30秒） · " : deleted ? "本次删除不可撤销（超过内存预算或无可恢复内容） · " : "") + "已保存变更，删除\(result.removed)条，实际释放\(Self.bytes(result.reclaimedBytes))"
                 refresh()
             } catch StoreError.stalePreview { pendingDeletion.removeAll(); message = "历史已变化，请重新预览并确认"; refresh() }
             catch { pendingDeletion.removeAll(); message = "变更未完成，旧内容保持或存储不可用，请检查状态"; refresh() }
@@ -342,6 +349,11 @@ import LocalClipCore
         }
     }
     /// 开始拖动只生成短期ID令牌，正文由公开提供者按需读取。
+    public func registerDragAccess(_ access: ClipExportAccess) { dragAccesses.append(access) }
+    public func finishDrag(cancelled: Bool) {
+        if cancelled { for access in dragAccesses { access.cancel() }; categoryDrag = nil }
+        dragAccesses.removeAll(); dragActive = false; panelInteractionChanged?()
+    }
     public func prepareDrag(_ clipID: ClipID) -> String {
         if !selectedIDs.contains(clipID) { select(clipID) }
         let token = UUID().uuidString
@@ -378,6 +390,7 @@ import LocalClipCore
     public func updateSettings(_ edit: (inout SettingsSnapshot) -> Void) {
         guard !savingSettings else { message = "正在保存设置，请稍候"; return }
         var next = settings; edit(&next)
+        if !next.showMenuIcon, registerShortcut?(next.shortcut) != true { message = "快捷键注册失败，不能隐藏菜单栏入口"; return }
         savingSettings = true
         if settings.captureEnabled && !next.captureEnabled { capture.requestPause() }
         Task {
@@ -386,6 +399,7 @@ import LocalClipCore
             if next.shortcut != previous.shortcut, registerShortcut?(next.shortcut) != true { capture.updatePolicy(previous); message = "快捷键注册冲突，菜单栏仍可使用"; return }
             do {
                 settings = try await store.updateCaptureSettings(next); capture.updatePolicy(settings); settingsChanged?()
+                if settings.hideContents { showingDetail = false; invalidateDetail(); filePreview.close() }
                 message = "设置已保存"
             } catch {
                 if next.shortcut != previous.shortcut { _ = registerShortcut?(previous.shortcut) }
@@ -414,6 +428,23 @@ import LocalClipCore
         let names: [SkipReason: String] = [.sensitive:"敏感/临时标记", .unsupported:"无支持格式、无效文件引用或文件promise", .tooLarge:"超过32项或50MiB", .paused:"采集暂停或配置变化", .excluded:"声明来源被排除", .changedDuringRead:"读取期间内容持续变化", .accessUnavailable:"剪贴板访问或表示读取失败", .busy:"处理繁忙，未记录", .selfWrite:"自身恢复，未新增历史"]
         return "最近忽略：\(names[reason] ?? reason.rawValue) · \(Date(timeIntervalSince1970: Double(time)/1000).formatted(date: .omitted, time: .shortened))"
     }
+    /// 变更事件按ID复查跨分页选择，不保留已删除或到期的幽灵选择。
+    private func reconcileSelection() {
+        let generation = queryID, ids = selectedIDs
+        Task {
+            var valid = Set<ClipID>()
+            for id in ids { if (try? await store.metadata(id: id, at: clock.now())) != nil { valid.insert(id) } }
+            guard generation == queryID else { return }
+            selectedIDs.formIntersection(valid)
+        }
+    }
+    /// 分类被删除后清理筛选身份，不能困在已经不存在的空分类中。
+    private func pruneCategoryFilters() {
+        let valid = Set(categories.map(\.id)), current = activeCategories
+        let remaining = current.intersection(valid)
+        guard remaining != current else { return }
+        categoryFilters = remaining; categoryID = remaining.count == 1 ? remaining.first : nil
+    }
     public var activeCategories: Set<String> { categoryFilters.isEmpty ? Set(categoryID.map { [$0] } ?? []) : categoryFilters }
     public var dateBounds: (Instant, Instant)? {
         guard dateFilterEnabled else { return nil }
@@ -435,14 +466,15 @@ import LocalClipCore
     }
     public func extendNavigation(_ delta: Int) {
         guard let index = items.firstIndex(where: { $0.id == selectedID }), !items.isEmpty else { return }
-        if index + delta >= items.count, hasMore { loadMore(); return }
+        if index + delta >= items.count, hasMore { loadMore(advanceSelection: true, extend: true); return }
         choose(items[max(0,min(items.count-1,index+delta))].id, modifiers: .shift)
     }
     public func selectAllResults() {
         selectedIDs.formUnion(items.map(\.id)); select(items.first?.id, preserveSelection: true)
         guard let cursor else { return }
-        let generation = queryID
+        searching?.cancel(); queryID = UUID(); let generation = queryID; loading = true
         Task {
+            defer { if generation == queryID { loading = false } }
             var next: SearchCursor? = cursor
             do {
                 while let pageCursor = next {
@@ -454,7 +486,20 @@ import LocalClipCore
         }
     }
     public func edgeSelection(_ last: Bool, extend: Bool) {
-        if last && hasMore { selectAllResults(); return }
+        if last && hasMore {
+            let generation = queryID, anchor = anchorID
+            loading = true
+            Task {
+                defer { if generation == queryID { loading = false } }
+                do {
+                    while let next = cursor {
+                        let page = try await store.search(SearchRequest(query, favorites: favorites, kind: kind, cursor: next, queryID: generation, categoryIDs: activeCategories, sourceBundleID: sourceFilter, from: dateBounds?.0, until: dateBounds?.1))
+                        guard generation == queryID else { return }; items += page.items.filter(isVisible); cursor = page.next
+                    }
+                    if let id = items.last?.id { anchorID = anchor; choose(id, modifiers: extend ? .shift : []) }
+                } catch { message = "结果已变化，请重试"; refresh() }
+            }; return
+        }
         if let id = (last ? items.last : items.first)?.id { choose(id, modifiers: extend ? .shift : []) }
     }
     public func toggleCategory(_ id: String) {
@@ -498,7 +543,7 @@ import LocalClipCore
     /// Space按需预览文件；其他格式使用详情，不提前读取正文。
     public func quickLook() {
         guard let selectedID else { return }
-        Task { do { let detail = try await store.detail(id: selectedID, at: clock.now()); if let urls = detail.payload.fileURLs { filePreview.show(urls) } else { showingDetail = true; detailVisibilityChanged() } } catch { message = "预览不可用，记录已变化" } }
+        Task { do { let detail = try await store.detail(id: selectedID, at: clock.now()); if let urls = detail.payload.fileURLs { filePreview.show(urls, excludeFromSharing: settings.excludeFromSharing) } else { showingDetail = true; detailVisibilityChanged() } } catch { message = "预览不可用，记录已变化" } }
     }
     /// 用户明确选择单个对象再打开，混合记录不会自动打开所有资源。
     public func openSelected(reveal: Bool = false, withApplication: Bool = false) {
@@ -515,8 +560,8 @@ import LocalClipCore
                 if reveal && url.isFileURL { NSWorkspace.shared.activateFileViewerSelecting([url]) }
                 else if withApplication && url.isFileURL {
                     let picker = NSOpenPanel(); picker.allowedContentTypes = [.application]; picker.directoryURL = URL(fileURLWithPath: "/Applications"); guard picker.runModal() == .OK, let app = picker.url else { return }
-                    NSWorkspace.shared.open([url], withApplicationAt: app, configuration: .init()) { _, _ in }
-                } else { _ = NSWorkspace.shared.open(url) }
+                    NSWorkspace.shared.open([url], withApplicationAt: app, configuration: .init()) { [weak self] _, error in let failed = error != nil; Task { @MainActor in if failed { self?.message = "指定应用未能打开对象" } } }
+                } else if !NSWorkspace.shared.open(url) { message = "系统未能打开对象，请检查关联应用" }
             } catch { message = "打开失败，记录已变化" }
         }
     }
