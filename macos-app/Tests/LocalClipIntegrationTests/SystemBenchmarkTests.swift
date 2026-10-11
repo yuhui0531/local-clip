@@ -46,6 +46,11 @@ import LocalClipCore
             try Self.write(["layer":"real named NSPasteboard + production capture/store, no UI", "pollMs":200,"phases":phases],to:output.appendingPathComponent("stress.json"))
             print("stress interval=\(interval) inputs=100 saved=\(saved) explicit=\(explicit) unobserved=\(max(0,100-saved-explicit))")
         }
+        // 新的GUI进程单独测空闲；此开关只重跑压力，不把测试宿主空闲冒充GUI资源，by AI.Coding。
+        if environment["LOCALCLIP_SYSTEM_STRESS_ONLY"] == "1" {
+            try Self.write(["stressComplete":true,"idleMeasuredHere":false],to:output.appendingPathComponent("stress-only.json"))
+            return
+        }
         try await Task.sleep(for:.seconds(10))
         var samples:[[String:Any]] = []; var previous=Self.resources(); var instant=ContinuousClock.now
         for index in 0..<120 {

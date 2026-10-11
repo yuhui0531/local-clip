@@ -17,9 +17,10 @@ public actor HistoryStore: HistoryRepository {
             let db = try SQLiteConnection(strategy.databaseURL, readonly: true)
             let version = try db.scalarInt("PRAGMA user_version")
             guard version == Schema.version else { try db.close(); throw StoreError.incompatibleSchema }
-            guard try db.scalarText("PRAGMA quick_check") == "ok" else { throw StoreError.corruptPayload }
+            guard try db.scalarText("PRAGMA quick_check") == "ok", try db.rows("PRAGMA foreign_key_check").isEmpty else { throw StoreError.corruptPayload }
             try db.close()
         } else { try strategy.initialize { try Schema.create($0, settings: initialSettings) } }
+        strategy.sourceDidValidate()
         self.strategy = strategy
     }
     /// 读取不可用状态不重放已提交写入。
@@ -70,10 +71,13 @@ public actor HistoryStore: HistoryRepository {
     private func visible(_ row: [String: SQLValue], at: Instant, settings: SettingsSnapshot) -> Bool {
         settings.retentionDays == 0 || row.int("isProtected") == 1 || row.int("lastCopiedAtMs") > at - (settings.retentionDays == 0 ? Int64.max / 2 : Int64(settings.retentionDays) * dayMS)
     }
-    /// 原始与派生引用一起级联删除，共享 BLOB 只有最后引用消失才删除。
+    /// 临时触发器捕获所有级联删除，只查本次失去引用的digest，by AI.Coding。
+    private func trackBlobRemovals(_ db: SQLiteConnection) throws {
+        try db.exec("CREATE TEMP TABLE removed_blob_refs(digest TEXT PRIMARY KEY); CREATE TEMP TRIGGER track_removed_blob_refs AFTER DELETE ON main.representations BEGIN INSERT OR IGNORE INTO removed_blob_refs VALUES(old.blobDigest); END")
+    }
+    /// 共享BLOB只有最后引用消失才删除，不扫描未变更记录。
     private func garbageCollect(_ db: SQLiteConnection) throws {
-        // 先从digest覆盖索引找孤儿，只读取实际待删除载荷；避免每次普通提交扫描全部图片正文。
-        try db.exec("DELETE FROM blobs WHERE rowid IN (SELECT rowid FROM blobs WHERE NOT EXISTS(SELECT 1 FROM representations WHERE blobDigest=blobs.digest))")
+        try db.exec("DELETE FROM blobs WHERE digest IS NULL; DELETE FROM blobs WHERE digest IN (SELECT digest FROM removed_blob_refs) AND NOT EXISTS(SELECT 1 FROM representations WHERE blobDigest=blobs.digest); DELETE FROM removed_blob_refs")
     }
     /// 共用候选配额算法，预览与实际执行不能采用不同淘汰规则。
     private func fitCandidate(_ db: SQLiteConnection, pending: Int64, quota: Int64, protectedID: ClipID?, allowOverQuota: Bool) throws {
@@ -116,6 +120,7 @@ public actor HistoryStore: HistoryRepository {
                     try self.fitCandidate(db, pending: pending, quota: quota, protectedID: protectedID, allowOverQuota: allowOverQuota)
                 }
             }) { db in
+                try trackBlobRemovals(db)
                 try body(db)
                 try garbageCollect(db)
                 try db.run("UPDATE store_meta SET storeRevision=storeRevision+1,lastOperationID=? WHERE singletonID=1", [.text(operation)])
@@ -328,10 +333,12 @@ public actor HistoryStore: HistoryRepository {
             let offset = request.cursor?.offset ?? 0; let size = min(50, max(1, request.pageSize))
             guard offset >= 0 else { throw StoreError.invalidCursor }
             if needle.isEmpty {
-                let count = Int(try db.scalarInt("SELECT COUNT(*) FROM clips WHERE " + condition, filters))
-                guard offset <= count else { throw StoreError.invalidCursor }
-                let rows = try db.rows("SELECT *, (isFavorite=1 OR EXISTS(SELECT 1 FROM clip_categories WHERE clipID=clips.id)) AS isProtected FROM clips WHERE " + condition + " ORDER BY " + order + " LIMIT ? OFFSET ?", filters + (request.categoryIDs.count == 1 ? [.text(request.categoryIDs.first!)] : []) + [.integer(Int64(size)), .integer(Int64(offset))])
-                return SearchPage(queryID: request.queryID, revision: revision, items: rows.map { summary($0) }, next: offset + rows.count < count ? .init(revision: revision, offset: offset + rows.count, signature: request.signature) : nil)
+                // 多取一行判断下一页，普通浏览不再为每页额外统计全库，顺序/版本身份不变，by AI.Coding。
+                let rows = try db.rows("SELECT *, (isFavorite=1 OR EXISTS(SELECT 1 FROM clip_categories WHERE clipID=clips.id)) AS isProtected FROM clips WHERE " + condition + " ORDER BY " + order + " LIMIT ? OFFSET ?", filters + (request.categoryIDs.count == 1 ? [.text(request.categoryIDs.first!)] : []) + [.integer(Int64(size + 1)), .integer(Int64(offset))])
+                if rows.isEmpty && offset > 0 {
+                    guard offset <= Int(try db.scalarInt("SELECT COUNT(*) FROM clips WHERE " + condition, filters)) else { throw StoreError.invalidCursor }
+                }
+                return SearchPage(queryID: request.queryID, revision: revision, items: rows.prefix(size).map { summary($0) }, next: rows.count > size ? .init(revision: revision, offset: offset + size, signature: request.signature) : nil)
             }
             // 按SQLite页缓存扫描有界结果，不在Swift中常驻全部正文/规范化副本。
             // BLOB instr保持NUL及UTF-8字节字面语义，不使用LIKE/FTS通配规则。
@@ -446,6 +453,7 @@ public actor HistoryStore: HistoryRepository {
             try strategy.commit(quota: bytes, allowOverQuota: true, dryRun: true, finalize: { db, pending in
                 try self.fitCandidate(db, pending: pending, quota: bytes, protectedID: nil, allowOverQuota: true)
             }) { db in
+                try trackBlobRemovals(db)
                 var lowered = settings; lowered.quotaBytes = bytes; lowered.revision += 1
                 try Schema.writeSettings(db, lowered)
                 try db.run("DELETE FROM clips WHERE isFavorite=0 AND NOT EXISTS(SELECT 1 FROM clip_categories WHERE clipID=clips.id) AND lastCopiedAtMs<=?", [.integer(at - (settings.retentionDays == 0 ? Int64.max / 2 : Int64(settings.retentionDays) * dayMS))])
@@ -537,6 +545,7 @@ public actor HistoryStore: HistoryRepository {
         let settings = try settings(), usage = try usage()
         if usage.measuredTotal < settings.quotaBytes { return true }
         try strategy.commit(quota: settings.quotaBytes, allowOverQuota: true, dryRun: true) { db in
+            try trackBlobRemovals(db)
             try db.exec("DELETE FROM clips WHERE isFavorite=0 AND NOT EXISTS(SELECT 1 FROM clip_categories WHERE clipID=clips.id); DELETE FROM thumbnails")
             try garbageCollect(db)
         }
@@ -568,7 +577,7 @@ public actor HistoryStore: HistoryRepository {
         let db = try SQLiteConnection(strategy.databaseURL)
         guard try db.scalarInt("PRAGMA user_version") == Schema.version,
               try db.scalarText("PRAGMA integrity_check") == "ok", try db.rows("PRAGMA foreign_key_check").isEmpty else { throw StoreError.corruptPayload }
-        let revision = try self.revision(db); try db.close(); unavailable = false
+        let revision = try self.revision(db); try db.close(); strategy.sourceDidValidate(); unavailable = false
         return .init(revision: revision, pendingBytes: pending)
     }
     private var thumbnailCache: [ClipID: Data] = [:]

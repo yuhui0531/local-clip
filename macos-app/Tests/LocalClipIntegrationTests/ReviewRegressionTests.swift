@@ -15,6 +15,62 @@ import LocalClipCore
         while !predicate(), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
         #expect(predicate())
     }
+    /// 拖动期间点击/键盘不会改变来源选择；结束后选择恢复，真实导出仍读取按下记录，by AI.Coding。
+    @Test func dragFreezesSelectionUntilSessionEnds() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try HistoryStore(location: root), raw = RawBoard()
+        for text in ["drag-A", "drag-B", "drag-C"] { _ = try await store.ingest(.init(payload: .init([.init([.init(SupportedType.string, Data(text.utf8))])])), at: SystemClock().now()) }
+        let model = model(store, raw); try await model.start(); model.capture.stop()
+        try await until { model.items.count == 3 && !model.loading }
+        let source = model.items[1].id, other = model.items[0].id
+        model.choose(source, modifiers: []); _ = model.prepareDrag(source)
+        let access = try await store.exportAccess(id: source); model.registerDragAccess(access)
+        model.choose(other, modifiers: []); model.select(other); model.navigate(1)
+        #expect(model.selectedID == source); #expect(model.draggedIDs == [source])
+        _ = try await store.ingest(.init(payload: .init([.init([.init(SupportedType.string, Data("new-during-drag".utf8))])])), at: SystemClock().now()+1000)
+        try await until { model.items.first?.preview == "new-during-drag" && !model.loading }
+        #expect(model.selectedID == source)
+        #expect(try access.itemData(index: 0, type: SupportedType.string) == Data("drag-B".utf8))
+        model.finishDrag(cancelled: true)
+        #expect(!model.dragActive); #expect(model.draggedIDs.isEmpty)
+        #expect(throws: StoreError.notFound) { try access.itemData(index: 0, type: SupportedType.string) }
+        model.choose(other, modifiers: []); #expect(model.selectedID == other)
+    }
+    /// 删除/到期在手势中冻结来源，结束后必须选择最近存活项；空历史必须清空详情，by AI.Coding。
+    @Test(arguments: ["delete", "expire", "all"])
+    func dragReconcilesRemovedSelection(removal: String) async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try HistoryStore(location: root), at = SystemClock().now()
+        for index in 0..<3 {
+            _ = try await store.ingest(.init(payload: .init([.init([.init(SupportedType.string, Data("removed-drag-\(index)".utf8))])])), at: at + Int64(index))
+        }
+        let model = model(store, RawBoard()); try await model.start(); model.capture.stop()
+        try await until { model.items.count == 3 && !model.loading }
+        let source = model.items[1].id, neighbor = model.items[2].id
+        if removal == "expire" {
+            for id in model.items.map(\.id) where id != source {
+                let preview = try await store.preview(.favorite(id, true)); _ = try await store.apply(preview.token)
+            }
+            try await until { model.items.filter { $0.id != source }.allSatisfy(\.isFavorite) && !model.loading }
+        }
+        model.choose(source, modifiers: []); model.showingDetail = true; model.detailVisibilityChanged()
+        try await until { model.detail?.summary.id == source }
+        _ = model.prepareDrag(source)
+        if removal == "expire" { _ = try await store.expire(at: at + 31 * 86_400_000) }
+        else {
+            let preview = try await store.preview(.delete(removal == "all" ? model.items.map(\.id) : [source]))
+            _ = try await store.apply(preview.token)
+        }
+        try await until { !model.items.contains { $0.id == source } && !model.loading }
+        #expect(model.selectedID == source); #expect(model.draggedIDs == [source])
+        model.finishDrag(cancelled: removal != "expire")
+        #expect(!model.dragActive); #expect(model.draggedIDs.isEmpty)
+        #expect(model.selectedID == (removal == "all" ? nil : neighbor))
+        #expect(model.selectedIDs == (removal == "all" ? [] : [neighbor]))
+        #expect(model.detail?.summary.id != source)
+    }
     /// 没有滚动/分页的连续捕获只增长真实新项目；分页从超取截断点继续，不丢行。
     @Test(arguments: [80, 500])
     func repeatedCapturesDoNotPromotePrefetchedTail(count: Int) async throws {

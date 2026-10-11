@@ -59,6 +59,8 @@ struct CategoryDropTarget: NSViewRepresentable {
             layer?.borderColor = (targeted ? tint : .clear).cgColor
             layer?.borderWidth = targeted ? 1.5 : 0
         }
+        /// 托管层与按钮本身的原生接收共用反馈，不发布整个历史模型，by AI.Coding。
+        func setDropTargeted(_ value: Bool) { targeted = value; updateAppearance() }
 
         /// AppKit外观切换时重新生成动态颜色。
         override func viewDidChangeEffectiveAppearance() { super.viewDidChangeEffectiveAppearance(); updateAppearance() }
@@ -87,8 +89,12 @@ struct CategoryDropTarget: NSViewRepresentable {
 
         /// 只接收当前LocalClip会话的随机令牌；公开文本／文件载荷不参与内部分类。
         private func token(from sender: any NSDraggingInfo) -> String? {
+            acceptedToken(from: sender.draggingPasteboard)
+        }
+        /// 原生回调与回归检查共用真实命名剪贴板的令牌校验，不接受外部伪造身份，by AI.Coding。
+        func acceptedToken(from pasteboard: NSPasteboard) -> String? {
             let type = NSPasteboard.PasteboardType(HistoryViewModel.categoryDragType)
-            guard let data = sender.draggingPasteboard.data(forType: type), data.count == 36,
+            guard let data = pasteboard.data(forType: type), data.count == 36,
                   let value = String(data: data, encoding: .utf8), let category,
                   model?.canDropIntoCategory(value, categoryID: category.id) == true else { return nil }
             return value
@@ -106,9 +112,69 @@ struct CategoryDropTarget: NSViewRepresentable {
         /// 同步认领归属令牌，避免拖动结束的取消回调抢先使异步读取失效。
         override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
             defer { targeted = false; updateAppearance() }
-            guard let token = token(from: sender), let category else { return false }
+            return performCategoryDrop(from: sender.draggingPasteboard)
+        }
+        /// 同步认领后异步持久化；只有当前会话的目标分类可认领一次，by AI.Coding。
+        func performCategoryDrop(from pasteboard: NSPasteboard) -> Bool {
+            guard let token = acceptedToken(from: pasteboard), let category else { return false }
             return model?.dropIntoCategory(token, categoryID: category.id) == true
         }
         override func concludeDragOperation(_ sender: (any NSDraggingInfo)?) { targeted = false; updateAppearance() }
+        /// 在目标上取消不会必然经过退出/放下，结束回调也必须清除高亮，by AI.Coding。
+        override func draggingEnded(_ sender: any NSDraggingInfo) { setDropTargeted(false) }
     }
+}
+
+// 整个托管面板注册内部拖放类型，把原生回调按实际指针位置路由给可见分类，by AI.Coding。
+@MainActor final class CategoryDropHostingView<Content: View>: NSHostingView<Content> {
+    private weak var model: HistoryViewModel?
+    private weak var highlighted: CategoryDropTarget.CategoryButton?
+    init(rootView: Content, model: HistoryViewModel) {
+        self.model = model
+        super.init(rootView: rootView)
+        registerForDraggedTypes([.init(HistoryViewModel.categoryDragType)])
+    }
+    @MainActor required init(rootView: Content) { fatalError("Use init(rootView:model:)") }
+    @MainActor required dynamic init?(coder: NSCoder) { fatalError("init(coder:) is unavailable") }
+
+    /// 使用窗口坐标和真实裁剪区域；拖动预览覆盖标签不能代替指针命中，by AI.Coding。
+    func categoryTarget(at windowPoint: NSPoint) -> CategoryDropTarget.CategoryButton? {
+        guard let model else { return nil }
+        func find(_ view: NSView) -> CategoryDropTarget.CategoryButton? {
+            guard !view.isHiddenOrHasHiddenAncestor else { return nil }
+            if let button = view as? CategoryDropTarget.CategoryButton, button.model === model {
+                let point = button.convert(windowPoint, from: nil)
+                if button.bounds.contains(point), button.visibleRect.contains(point) { return button }
+            }
+            for child in view.subviews { if let button = find(child) { return button } }
+            return nil
+        }
+        return find(self)
+    }
+    /// 原生按钮和托管层回调共享同一剪贴板令牌校验，不凭公开格式或来源结束猜测接收，by AI.Coding。
+    private func target(_ sender: any NSDraggingInfo) -> CategoryDropTarget.CategoryButton? {
+        guard let window, sender.draggingDestinationWindow === window,
+              let button = categoryTarget(at: sender.draggingLocation),
+              button.acceptedToken(from: sender.draggingPasteboard) != nil else { return nil }
+        return button
+    }
+    private func clearHighlight() {
+        highlighted?.setDropTargeted(false); highlighted = nil
+    }
+    override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation { draggingUpdated(sender) }
+    override func draggingUpdated(_ sender: any NSDraggingInfo) -> NSDragOperation {
+        let button = target(sender)
+        if highlighted !== button { clearHighlight(); highlighted = button }
+        button?.setDropTargeted(true)
+        return button == nil ? [] : .copy
+    }
+    override func draggingExited(_ sender: (any NSDraggingInfo)?) { clearHighlight() }
+    override func prepareForDragOperation(_ sender: any NSDraggingInfo) -> Bool { target(sender) != nil }
+    override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+        defer { clearHighlight() }
+        return target(sender)?.performCategoryDrop(from: sender.draggingPasteboard) == true
+    }
+    override func concludeDragOperation(_ sender: (any NSDraggingInfo)?) { clearHighlight() }
+    /// Escape等取消路径可能不派发draggingExited，不能遗留目标反馈，by AI.Coding。
+    override func draggingEnded(_ sender: any NSDraggingInfo) { clearHighlight() }
 }

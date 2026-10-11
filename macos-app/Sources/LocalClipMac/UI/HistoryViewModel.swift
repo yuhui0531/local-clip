@@ -22,8 +22,10 @@ import LocalClipCore
     @Published public var categoryColor = "34C759"
     @Published public var actualPanelHeight = 340.0
     @Published public var dragActive = false
+    @Published public private(set) var draggedIDs: Set<ClipID> = []
     @Published public var richPreview: NSAttributedString?
     private var anchorID: ClipID?
+    private var dragSelection: (ids: [ClipID], index: Int)?
     private let filePreview = FilePreview()
     public var focusResults: (() -> Void)?
     public var settingsChanged: (() -> Void)?
@@ -39,6 +41,17 @@ import LocalClipCore
     @Published public var status = "准备中"
     @Published public var message = ""
     @Published public private(set) var loading = false
+    @Published public private(set) var confirmingChange = false
+    struct ScrollRestoration: Equatable { var generation = UUID(); var offset: CGFloat }
+    @Published private(set) var scrollRestoration: ScrollRestoration?
+    private var viewportPageSize = 50
+    private var historyViewport: CGFloat = 0
+    private var historyStride: CGFloat = 195
+    private var scrollAnchor: (id: ClipID, relative: CGFloat)?
+    private var historyOffset: CGFloat = 0
+    private var started = false
+    private var paging: Task<Void, Never>?
+    private var pendingPageNavigation: (selection: ClipID?, extend: Bool)?
     @Published public private(set) var settings = SettingsSnapshot()
     @Published public private(set) var usage: StorageUsage?
     @Published public var target: TargetToken?
@@ -50,6 +63,11 @@ import LocalClipCore
     @Published public private(set) var categoryError = ""
     @Published public private(set) var savingCategory = false
     private var queryID = UUID()
+    #if DEBUG
+    var guiQueryGeneration: UUID { queryID }
+    /// 验收包只通过生产持久化设置更新采集策略，by AI.Coding。
+    func guiApplySettings(_ value: SettingsSnapshot) { settings = value; capture.updatePolicy(value) }
+    #endif
     private var detailID = UUID()
     private var cursor: SearchCursor?
     private var pageRevision: Int64 = 0
@@ -83,6 +101,7 @@ import LocalClipCore
     /// 订阅仅作为刷新信号，事实仍从 HistoryStore 读取。
     public func start() async throws {
         settings = try await store.settings(); usage = try await store.usage()
+        configureHistoryViewport(width: historyViewport, cardWidth: HistoryView.cardSide(height: settings.panelHeight, filtered: sourceFilter != nil || dateFilterEnabled))
         categories = try await store.categories(); sourceSuggestions = try await store.sources()
         capture.onState = { [weak self] state in self?.status = state }
         // 持久变更流已负责刷新，避免同一次采集同时触发两轮查询和布局。
@@ -108,7 +127,7 @@ import LocalClipCore
                 catch { self.message = "存储状态读取失败" }
             }
         }
-        refresh()
+        started = true; refresh()
         // 旧版缺索引只在后台有界修复；空间不足仍从原格式检索，不删除历史。
         indexRepair = Task { [weak self] in
             while let self, !Task.isCancelled {
@@ -134,13 +153,14 @@ import LocalClipCore
     public func refresh() { search(debounce: false, preserveWindow: true) }
     /// 查询乱序保护与清晰加载/失败状态。
     private func search(debounce: Bool, preserveWindow: Bool = false) {
-        let windowSize = preserveWindow ? max(50, items.count) : 50
+        let windowSize = preserveWindow ? max(viewportPageSize, items.count) : viewportPageSize
         let previousSelection = selectedID
         let previousIndex = items.firstIndex { $0.id == previousSelection } ?? 0
         let tailCandidates = preserveWindow ? items.suffix(50).map(\.id) : []
         let previousSelections = preserveWindow ? selectedIDs.union(Set(previousSelection.map { [$0] } ?? [])) : []
-        searching?.cancel(); queryID = UUID(); let id = queryID
-        let request = SearchRequest(query, favorites: favorites, kind: kind, queryID: id, categoryIDs: activeCategories, sourceBundleID: sourceFilter, from: dateBounds?.0, until: dateBounds?.1)
+        searching?.cancel(); paging?.cancel(); paging = nil; pendingPageNavigation = nil; queryID = UUID(); let id = queryID
+        if !preserveWindow { scrollAnchor = nil; historyOffset = 0; scrollRestoration = .init(offset: 0) }
+        let request = SearchRequest(query, favorites: favorites, kind: kind, queryID: id, pageSize: preserveWindow ? min(50, max(viewportPageSize, windowSize)) : viewportPageSize, categoryIDs: activeCategories, sourceBundleID: sourceFilter, from: dateBounds?.0, until: dateBounds?.1)
         loading = true; cursor = nil
         searching = Task { [weak self] in
             guard let self else { return }
@@ -158,9 +178,11 @@ import LocalClipCore
                 var loadedIDs = Set(values.map(\.id))
                 var consumedCursor = page.next
                 // 读到仍可见的原窗口尾部和选择；新增项推过50/100边界也不能替换详情。
-                while values.count < windowSize || !anchors.isSubset(of: loadedIDs), let next = page.next {
+                while values.count < max(windowSize, viewportPageSize) || !anchors.isSubset(of: loadedIDs), let next = page.next {
                     consumedCursor = next
                     var following = request; following.cursor = next
+                    // 查询期间窗口放大时只补当前缺口，不用旧视口留下半空首屏，by AI.Coding。
+                    if anchors.isSubset(of: loadedIDs) { following.pageSize = min(50, max(1, max(windowSize, viewportPageSize) - values.count)) }
                     page = try await store.search(following); values += page.items
                     loadedIDs.formUnion(page.items.map(\.id))
                     try Task.checkCancellation()
@@ -169,17 +191,25 @@ import LocalClipCore
                 guard !Task.isCancelled, queryID == page.queryID else { return }
                 // 只发布原窗口及锚点需要的精确范围；下一页从截断位置续读，不跳过超取行。
                 let anchorEnd = values.lastIndex { anchors.contains($0.id) }.map { $0 + 1 } ?? 0
-                let retainedCount = min(values.count, max(windowSize, anchorEnd))
+                let retainedCount = min(values.count, max(windowSize, viewportPageSize, anchorEnd))
                 var nextCursor = page.next
                 if retainedCount < values.count {
                     nextCursor = consumedCursor; nextCursor?.offset = retainedCount
                     values.removeLast(values.count - retainedCount)
                 }
-                items = values.filter(isVisible); cursor = nextCursor; pageRevision = page.revision; loading = false
+                let visible = values.filter(isVisible)
+                // 新记录插入头部时保留正在浏览的卡片与卡内偏移，不用旧像素位置显示别的记录，by AI.Coding。
+                if preserveWindow, historyOffset > 0,
+                   let anchor = scrollAnchor, let index = visible.firstIndex(where: { $0.id == anchor.id }) {
+                    let offset = max(0, 24 + CGFloat(index) * historyStride + anchor.relative)
+                    if abs(offset - historyOffset) > 0.5 { scrollRestoration = .init(offset: offset) }
+                }
+                items = visible; cursor = nextCursor; pageRevision = page.revision; loading = false
                 selectedIDs.formIntersection(Set(items.map(\.id)))
                 if let selectedID, items.contains(where: { $0.id == selectedID }) { select(selectedID, preserveSelection: true) }
                 else { select(items.isEmpty ? nil : items[min(previousIndex, items.count - 1)].id) }
                 scheduleVisibilityDeadline()
+                fillHistoryViewport()
             } catch StoreError.invalidCursor { if id == queryID { refresh() } }
             catch is CancellationError { /* 旧输入取消无需报错。 */ }
             catch {
@@ -189,28 +219,62 @@ import LocalClipCore
         }
     }
     public var hasMore: Bool { cursor != nil }
+    /// 首屏只读足够填满可见区域的摘要；尺寸变化只补不足，不截断浏览窗口或选择，by AI.Coding。
+    func configureHistoryViewport(width: CGFloat, cardWidth: CGFloat) {
+        guard width.isFinite, cardWidth.isFinite, width > 48, cardWidth > 0 else { return }
+        historyViewport = width; historyStride = cardWidth + 16
+        viewportPageSize = min(50, max(1, Int(ceil((width - 48 + 16) / historyStride))))
+        fillHistoryViewport()
+    }
+    /// 发布后复核最新视口；补屏查询只取缺少的行，零偏移也不会一直留空，by AI.Coding。
+    private func fillHistoryViewport() {
+        if started, !loading, hasMore, items.count < viewportPageSize { loadMore(advanceSelection: false, pageSize: viewportPageSize - items.count) }
+    }
+    /// 只在实际滚动后预读一屏距离内的下一批；首屏布局/卡片appear不能级联加载，by AI.Coding。
+    func historyScrolled(offset: CGFloat) {
+        guard historyViewport > 0, offset.isFinite else { return }
+        historyOffset = max(0, offset)
+        if !items.isEmpty {
+            let index = min(items.count - 1, max(0, Int(floor((historyOffset - 24) / historyStride))))
+            scrollAnchor = (items[index].id, historyOffset - (24 + CGFloat(index) * historyStride))
+        }
+        guard historyOffset > 1, !dragActive, !loading, hasMore else { return }
+        let end = 48 + CGFloat(items.count) * historyStride - 16
+        if end - (historyOffset + historyViewport) < historyViewport { loadMore() }
+    }
     /// 分页携带同输入和storeRevision；失效时重新查询。
     public func loadMore() { loadMore(advanceSelection:false) }
     /// 键盘到达页尾时延续选择，不能把第50条当成历史终点。
-    private func loadMore(advanceSelection:Bool, extend: Bool = false) {
-        guard let cursor, !loading else { return }
+    private func loadMore(advanceSelection:Bool, extend: Bool = false, pageSize: Int? = nil) {
+        guard let cursor else { return }
+        if loading {
+            // 预读正在进行时记住页尾方向键，页面返回后继续选择，不要求用户再按一次，by AI.Coding。
+            if advanceSelection, paging != nil { pendingPageNavigation = (selectedID, extend) }
+            return
+        }
         let id = queryID; loading = true
         let previousCount = items.count, previousSelection = selectedID
-        let request = SearchRequest(query, favorites: favorites, kind: kind, cursor: cursor, queryID: id, categoryIDs: activeCategories, sourceBundleID: sourceFilter, from: dateBounds?.0, until: dateBounds?.1)
-        Task {
+        let request = SearchRequest(query, favorites: favorites, kind: kind, cursor: cursor, queryID: id, pageSize: pageSize ?? min(50, max(8, viewportPageSize * 2)), categoryIDs: activeCategories, sourceBundleID: sourceFilter, from: dateBounds?.0, until: dateBounds?.1)
+        // 一个在途分页任务合并连续滚动；查询切换立即取消，旧页不能混入新筛选，by AI.Coding。
+        paging = Task {
             do {
                 let started = ContinuousClock.now
                 let page = try await store.search(request)
                 if settings.timingEnabled { StageTiming.record("history_query", since: started, count: page.items.count) }
-                guard id == queryID else { return }
+                guard !Task.isCancelled, id == queryID else { return }
                 items += page.items.filter(isVisible); self.cursor = page.next; loading = false
-                if advanceSelection, selectedID == previousSelection, items.count > previousCount { if extend { choose(items[previousCount].id, modifiers: .shift) } else { select(items[previousCount].id) } }
+                let queued = pendingPageNavigation; pendingPageNavigation = nil; paging = nil
+                let advance = (advanceSelection && selectedID == previousSelection) || (queued != nil && queued?.selection == selectedID)
+                if advance, items.count > previousCount { if queued?.extend ?? extend { choose(items[previousCount].id, modifiers: .shift) } else { select(items[previousCount].id) } }
                 scheduleVisibilityDeadline()
-            } catch { if id == queryID { loading = false; refresh() } }
+                fillHistoryViewport()
+            } catch is CancellationError { }
+            catch { if id == queryID { loading = false; refresh() } }
         }
     }
     /// 高亮立即更新；快速连续选择取消旧元数据请求，完整正文仅在详情打开时读取。
     public func select(_ id: ClipID?, preserveSelection: Bool = false) {
+        guard !dragActive else { return }
         if !preserveSelection { selectedIDs = Set(id.map { [$0] } ?? []); anchorID = id }
         if selectedID == id {
             guard let id else { return }
@@ -363,11 +427,10 @@ import LocalClipCore
             do {
                 let preview = try await store.preview(change)
                 if preview.requiresConfirmation {
-                    let alert = NSAlert(); alert.messageText = preview.message
-                    alert.informativeText = "涉及普通历史或选中条目：\(preview.affectedCount) 条。实际释放空间将在完成后按磁盘文件统计。"
-                    alert.addButton(withTitle: "确认"); alert.addButton(withTitle: "取消")
-                    alert.window.level = NSWindow.Level(rawValue: NSWindow.Level.statusBar.rawValue + 1)
-                    guard alert.runModal() == .alertFirstButtonReturn else { return }
+                    confirmingChange = true; panelInteractionChanged?()
+                    let accepted = await ChangeConfirmation.confirm(preview)
+                    confirmingChange = false; panelInteractionChanged?()
+                    guard accepted else { return }
                 }
                 searching?.cancel(); queryID = UUID(); cursor = nil; loading = false
                 invalidateSelection()
@@ -434,13 +497,41 @@ import LocalClipCore
     public func registerDragAccess(_ access: ClipExportAccess) { dragAccesses.append(access) }
     public func finishDrag(cancelled: Bool) {
         if cancelled { for access in dragAccesses { access.cancel() }; categoryDrag = nil }
-        dragAccesses.removeAll(); dragActive = false; panelInteractionChanged?()
+        let wasDragging = dragActive
+        dragAccesses.removeAll(); draggedIDs = []; dragActive = false
+        // 手势内冻结来源；释放后按原顺序选择最近存活记录，不能保留已删除的ID/详情，by AI.Coding。
+        if wasDragging {
+            let visible = Set(items.map(\.id))
+            if let selectedID, visible.contains(selectedID) {
+                selectedIDs.formIntersection(visible); selectedIDs.insert(selectedID)
+                select(selectedID, preserveSelection: true)
+            } else {
+                var nearest: ClipID?, distance = Int.max
+                if let snapshot = dragSelection {
+                    for (index, id) in snapshot.ids.enumerated() where visible.contains(id) {
+                        let offset = abs(index - snapshot.index)
+                        if offset <= distance { nearest = id; distance = offset }
+                    }
+                }
+                select(nearest ?? items.first?.id)
+            }
+        }
+        dragSelection = nil; panelInteractionChanged?()
+        #if DEBUG
+        GUIAcceptanceProbe.event(cancelled ? "drag-cancelled" : "drag-completed", self)
+        #endif
     }
     public func prepareDrag(_ clipID: ClipID) -> String {
         if !selectedIDs.contains(clipID) { select(clipID) }
+        dragSelection = (items.map(\.id), items.firstIndex { $0.id == selectedID } ?? 0)
         let token = UUID().uuidString
         categoryDrag = (token, orderedSelection, clock.now() + 60_000)
-        dragActive = true; panelInteractionChanged?(); return token
+        draggedIDs = Set(orderedSelection)
+        dragActive = true; panelInteractionChanged?()
+        #if DEBUG
+        GUIAcceptanceProbe.event("drag-started", self)
+        #endif
+        return token
     }
     /// 原生拖放目标同步校验令牌，不读取正文，不接受其他应用伪造的归属ID。
     public func canDropIntoCategory(_ token: String, categoryID: String) -> Bool {
@@ -540,6 +631,7 @@ import LocalClipCore
     public var orderedSelection: [ClipID] { items.filter { selectedIDs.contains($0.id) }.map(\.id) }
     /// Command切换单条，Shift基于稳定ID锚点扩选；原生文字编辑不进入此路径。
     public func choose(_ id: ClipID, modifiers: NSEvent.ModifierFlags = NSEvent.modifierFlags) {
+        guard !dragActive else { return }
         focusResults?()
         if modifiers.contains(.shift), let anchorID, let start = items.firstIndex(where: { $0.id == anchorID }), let end = items.firstIndex(where: { $0.id == id }) {
             selectedIDs.formUnion(items[min(start,end)...max(start,end)].map(\.id)); select(id, preserveSelection: true)
@@ -556,32 +648,37 @@ import LocalClipCore
     public func selectAllResults() {
         selectedIDs.formUnion(items.map(\.id)); select(items.first?.id, preserveSelection: true)
         guard let cursor else { return }
-        searching?.cancel(); queryID = UUID(); let generation = queryID; loading = true
-        Task {
-            defer { if generation == queryID { loading = false } }
+        searching?.cancel(); paging?.cancel(); pendingPageNavigation = nil; queryID = UUID(); let generation = queryID; loading = true
+        // 全选与滚动预读共用分页所有权，旧页只能被取消，不能重复追加，by AI.Coding。
+        paging = Task {
+            defer { if generation == queryID { loading = false; paging = nil } }
             var next: SearchCursor? = cursor
             do {
                 while let pageCursor = next {
                     let page = try await store.search(SearchRequest(query, favorites: favorites, kind: kind, cursor: pageCursor, queryID: generation, categoryIDs: activeCategories, sourceBundleID: sourceFilter, from: dateBounds?.0, until: dateBounds?.1))
-                    guard generation == queryID else { return }
+                    guard !Task.isCancelled, generation == queryID else { return }
                     let values = page.items.filter(isVisible); items += values; selectedIDs.formUnion(values.map(\.id)); next = page.next; self.cursor = next
                 }
-            } catch { message = "结果已变化，请重新全选"; refresh() }
+            } catch is CancellationError { }
+            catch { if generation == queryID { message = "结果已变化，请重新全选"; refresh() } }
         }
     }
     public func edgeSelection(_ last: Bool, extend: Bool) {
         if last && hasMore {
+            // End接管在途预读；重复按键更新代次，不产生多个同游标循环，by AI.Coding。
+            searching?.cancel(); paging?.cancel(); pendingPageNavigation = nil; queryID = UUID()
             let generation = queryID, anchor = anchorID
             loading = true
-            Task {
-                defer { if generation == queryID { loading = false } }
+            paging = Task {
+                defer { if generation == queryID { loading = false; paging = nil } }
                 do {
                     while let next = cursor {
                         let page = try await store.search(SearchRequest(query, favorites: favorites, kind: kind, cursor: next, queryID: generation, categoryIDs: activeCategories, sourceBundleID: sourceFilter, from: dateBounds?.0, until: dateBounds?.1))
-                        guard generation == queryID else { return }; items += page.items.filter(isVisible); cursor = page.next
+                        guard !Task.isCancelled, generation == queryID else { return }; items += page.items.filter(isVisible); cursor = page.next
                     }
                     if let id = items.last?.id { anchorID = anchor; choose(id, modifiers: extend ? .shift : []) }
-                } catch { message = "结果已变化，请重试"; refresh() }
+                } catch is CancellationError { }
+                catch { if generation == queryID { message = "结果已变化，请重试"; refresh() } }
             }; return
         }
         if let id = (last ? items.last : items.first)?.id { choose(id, modifiers: extend ? .shift : []) }
@@ -625,7 +722,7 @@ import LocalClipCore
             do {
                 _ = try await store.metadata(id: wanted, at: clock.now())
                 query = ""; favorites = false; kind = nil; sourceFilter = nil; dateFilterEnabled = false; categoryID = category; categoryFilters = Set(category.map { [$0] } ?? [])
-                searching?.cancel(); queryID = UUID(); let generation = queryID
+                searching?.cancel(); paging?.cancel(); paging = nil; pendingPageNavigation = nil; queryID = UUID(); let generation = queryID
                 var next: SearchCursor?; var found: [ClipSummary] = []
                 repeat {
                     let page = try await store.search(SearchRequest(cursor: next, queryID: generation, categoryIDs: activeCategories))

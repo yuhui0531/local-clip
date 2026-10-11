@@ -35,6 +35,8 @@ import LocalClipCore
     private var focusObservers: [NSObjectProtocol] = []
     private var focusDismissal: Task<Void, Never>?
     private var menuTrackingDepth = 0
+    private var outsideClickMonitor: Any?
+    private var externalInteractionPending = false
     private let instances = SingleInstanceService()
     private var startup: Task<Void, Never>?
     private var modelStartup: Task<Void, Never>?
@@ -43,12 +45,20 @@ import LocalClipCore
     /// Release始终使用自有Application Support，忽略测试环境覆盖。
     public static func storageLocation() -> URL {
         #if DEBUG
+        if let root = GUIAcceptanceProbe.configuration?["root"] { return URL(fileURLWithPath: root, isDirectory: true) }
         if let override = ProcessInfo.processInfo.environment["LOCALCLIP_DATA_DIR"], !override.isEmpty { return URL(fileURLWithPath: override, isDirectory: true) }
         #endif
         return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("LocalClip-LocalEdition", isDirectory: true)
     }
     /// 在任何历史读写/采集/菜单栏/快捷键之前等待旧进程退出，并持有进程锁。
     public func applicationDidFinishLaunching(_ notification: Notification) {
+        #if DEBUG
+        if GUIAcceptanceProbe.configuration != nil {
+            _ = GUIAcceptanceProbe.launched
+            // 独立验收宿主提供常规应用身份，生产仍为菜单栏非激活面板，by AI.Coding。
+            NSApp.setActivationPolicy(.regular)
+        }
+        #endif
         startup = Task { [weak self] in
             guard let self else { return }
             do {
@@ -73,7 +83,13 @@ import LocalClipCore
             var initialSettings = SettingsSnapshot()
             if firstLaunch { initialSettings.captureEnabled = false }
             let store = try HistoryStore(location: location, initialSettings:initialSettings, extractor: ContentDecoder.extract)
-            let access = NativePasteboardAccess()
+            let access: NativePasteboardAccess
+            #if DEBUG
+            if let name = GUIAcceptanceProbe.configuration?["board"] { access = NativePasteboardAccess(NSPasteboard(name: .init(name))) }
+            else { access = NativePasteboardAccess() }
+            #else
+            access = NativePasteboardAccess()
+            #endif
             let sources = SourceApplicationObserver(changeCount: { access.count })
             sourceObserver = sources
             let board = MacPasteboardClient(access: access, observedSource: { sources.source(for: $0) })
@@ -81,6 +97,8 @@ import LocalClipCore
             let paste = PasteCoordinator(board: board, applications: applications, store: store, capture: capture)
             let model = HistoryViewModel(store: store, capture: capture, paste: paste, derived: DerivedContentService(store: store))
             self.model = model; lastExternal = applications.target()
+            // 在首次查询前提供屏幕尺寸；SwiftUI随后用实际视口修正，不先读固定50条，by AI.Coding。
+            model.configureHistoryViewport(width: NSScreen.main?.frame.width ?? 1400, cardWidth: HistoryView.cardSide(height: initialSettings.panelHeight, filtered: false))
             model.panelVisibilityChanged(false)
             model.closePanel = { [weak self] in self?.dismissHistory() }
             model.panelInteractionChanged = { [weak self] in self?.scheduleFocusDismissal() }
@@ -107,6 +125,9 @@ import LocalClipCore
                     applyAppearanceSettings(); updateMenu()
                     // 再次打开应用触发接替时，新进程完成启动后继续展示用户请求的历史。
                     if CommandLine.arguments.contains("--show-history") { showHistory() }
+                    #if DEBUG
+                    GUIAcceptanceProbe.attach(model: model, board: access, show: { [weak self] in self?.showHistory() }, hide: { [weak self] in self?.dismissHistory() })
+                    #endif
                 } catch { model.message = "启动恢复失败，未开启采集"; model.status = "存储异常"; updateMenu() }
             }
             observeLifecycle(); installKeyboard()
@@ -167,6 +188,7 @@ import LocalClipCore
     /// 记住外部目标后展示面板，铺满当前显示器底边，禁止拖动和缩放。
     @objc public func showHistory() {
         guard let model else { return }
+        externalInteractionPending = false
         focusDismissal?.cancel(); model.showingDetail = false; model.showingCategoryEditor = false
         if let target = applications.target() {
             lastExternal = target
@@ -175,12 +197,14 @@ import LocalClipCore
         } else if panel?.isKeyWindow != true {
             applications.rememberFocus(for: nil)
         }
+        let screen = targetScreen()
+        let rect = screen?.frame ?? NSRect(x: 0, y: 0, width: 1400, height: 380)
+        let panelHeight = min(max(280,model.settings.panelHeight), min(520,rect.height))
+        model.configureHistoryViewport(width: rect.width, cardWidth: HistoryView.cardSide(height: panelHeight, filtered: model.sourceFilter != nil || model.dateFilterEnabled))
         model.panelVisibilityChanged(true)
         model.target = lastExternal
         model.revalidateVisibleContent()
-        if model.items.isEmpty { model.refresh() }
-        let screen = targetScreen()
-        let rect = screen?.frame ?? NSRect(x: 0, y: 0, width: 1400, height: 380)
+        if model.items.isEmpty && !model.loading { model.refresh() }
         let initialFrame = NSRect(x: rect.minX, y: rect.minY, width: rect.width, height: min(max(280,model.settings.panelHeight), min(520,rect.height)))
         if panel == nil {
             // 非激活面板保留外部应用身份与文档焦点；搜索框仍可成为key接收键盘。
@@ -192,7 +216,7 @@ import LocalClipCore
             // 底部覆盖Dock所在区域，避免按钮被Dock遮挡；关闭面板即恢复原桌面。
             panel.isReleasedWhenClosed = false; panel.level = .statusBar; panel.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
             // 窗口尺寸由屏幕和高度设置唯一决定，不让SwiftUI固有尺寸改变内容视口。
-            let host = NSHostingView(rootView: HistoryView(model: model))
+            let host = CategoryDropHostingView(rootView: HistoryView(model: model), model: model)
             host.sizingOptions = []
             panel.contentView = host; panel.minSize = NSSize(width: 680, height: 280)
             self.panel = panel
@@ -254,19 +278,24 @@ import LocalClipCore
     }
     /// 隐藏历史和其详情，不激活旧目标，也不改变系统剪贴板。
     private func dismissHistory() {
+        externalInteractionPending = false
         model?.panelVisibilityChanged(false)
         focusDismissal?.cancel(); model?.showingDetail = false; model?.showingCategoryEditor = false; model?.showingFilters = false
         panel?.orderOut(nil)
+        #if DEBUG
+        if let model { GUIAcceptanceProbe.event("panel-dismissed", model) }
+        #endif
     }
     /// key窗口切换稳定后核对整个面板交互，菜单/详情临时接管焦点不能误关闭。
-    private func scheduleFocusDismissal() {
+    private func scheduleFocusDismissal(externalInteraction: Bool = false) {
+        externalInteractionPending = externalInteractionPending || externalInteraction
         focusDismissal?.cancel()
         guard let panel, panel.isVisible else { return }
         focusDismissal = Task { [weak self] in
             do { try await Task.sleep(for: .milliseconds(60)) } catch { return }
-            guard let self, !Task.isCancelled, panel.isVisible, !panel.isKeyWindow,
-                  self.menuTrackingDepth == 0, self.model?.dragActive != true else { return }
-            if let key = NSApp.keyWindow {
+            guard let self, !Task.isCancelled, panel.isVisible, (!panel.isKeyWindow || self.externalInteractionPending),
+                  self.menuTrackingDepth == 0, self.model?.dragActive != true, self.model?.confirmingChange != true else { return }
+            if !self.externalInteractionPending, let key = NSApp.keyWindow {
                 var owner: NSWindow? = key
                 while let window = owner {
                     if window === panel { return }
@@ -324,6 +353,11 @@ import LocalClipCore
     @objc private func toggleCapture() { model?.updateSettings { $0.captureEnabled.toggle() } }
     /// 外部前台身份由系统公开事件更新，不用于复制来源归因。
     private func observeLifecycle() {
+        // 非激活面板返回同一个外部应用时可能没有激活/失去key通知；鼠标点击明确结束交互。
+        // 全局监视仅观察点击，不读取按键、不拦截外部事件，也不需要输入监控授权，by AI.Coding。
+        outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak self] _ in
+            MainActor.assumeIsolated { self?.scheduleFocusDismissal(externalInteraction: true) }
+        }
         // 非激活面板不能用NSApp.isActive判断失焦；观察自己的key窗口转移。
         for name in [NSWindow.didResignKeyNotification, NSWindow.didBecomeKeyNotification, NSWindow.willCloseNotification] {
             focusObservers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
@@ -355,10 +389,9 @@ import LocalClipCore
                        previous.pid != target.pid || previous.bundleID != target.bundleID || previous.launchedAt != target.launchedAt {
                         self.model?.target = nil
                         self.applications.rememberFocus(for: nil)
-                        self.dismissHistory()
                     }
                     self.lastExternal = target
-                    self.scheduleFocusDismissal()
+                    self.scheduleFocusDismissal(externalInteraction: true)
                 }
             }
         }
@@ -440,6 +473,7 @@ import LocalClipCore
         for observer in focusObservers { NotificationCenter.default.removeObserver(observer) }
         focusObservers.removeAll()
         if let keyboardMonitor { NSEvent.removeMonitor(keyboardMonitor) }
+        if let outsideClickMonitor { NSEvent.removeMonitor(outsideClickMonitor) }
         if let activatedObserver { NSWorkspace.shared.notificationCenter.removeObserver(activatedObserver) }
         if let wakeObserver { NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver) }
         if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }

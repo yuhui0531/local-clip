@@ -33,6 +33,9 @@ public struct SearchField: NSViewRepresentable {
         /// 每次输入只更新绑定与queryID；不将搜索词写入日志。
         public func controlTextDidChange(_ notification: Notification) {
             guard let field = notification.object as? NSSearchField else { return }
+            #if DEBUG
+            GUIAcceptanceProbe.inputChanged(field.stringValue)
+            #endif
             parent.text = field.stringValue; parent.onChange()
         }
         /// Esc始终关闭面板；中文组合输入中的Enter及方向键仍交给输入法。

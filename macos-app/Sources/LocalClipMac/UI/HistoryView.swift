@@ -12,6 +12,11 @@ public struct HistoryView: View {
     // 跟随SwiftUI实际外观，避免NSColor按宿主外观解析造成浅色工具栏白字。
     private var toolbarColor: Color { Color(white: colorScheme == .dark ? 0.82 : 0.28) }
     public init(model: HistoryViewModel) { self.model = model }
+    /// 首屏查询与实际卡片布局共用边长，窗口/筛选高度变化不会多读固定50条，by AI.Coding。
+    static func cardSide(height: CGFloat, filtered: Bool) -> CGFloat {
+        let dense = height < 300
+        return min(260, max(1, height - 8 - (dense ? 40 : 48) - 40 - (filtered ? 22 : 0) - (dense ? 36 : 44) - 1 - 20))
+    }
     /// 直接描画两种小工具图标，避免模板系统图标在材质面板中丢失指定颜色。
     private func toolbarGlyph(filter: Bool) -> some View {
         let enabled = model.settings.captureEnabled, color = toolbarColor
@@ -43,7 +48,7 @@ public struct HistoryView: View {
             let filterHeight: CGFloat = model.sourceFilter != nil || model.dateFilterEnabled ? 22 : 0
             let availableCardHeight = max(1, viewport.size.height - 8 - toolbarHeight - 40 - filterHeight - footerHeight - 1 - 20)
             // 正方形宽高一起收缩，完整边界始终留在实际视口内。
-            let cardHeight = min(260, availableCardHeight)
+            let cardHeight = Self.cardSide(height: viewport.size.height, filtered: filterHeight > 0)
             VStack(spacing: 0) {
                 Capsule().fill(.secondary.opacity(0.3)).frame(width: 36, height: 3).frame(maxWidth: .infinity).frame(height: 8).contentShape(Rectangle())
                     .help("上下拖动调整高度")
@@ -103,9 +108,7 @@ public struct HistoryView: View {
                             ScrollView(.horizontal) {
                                 LazyHStack(spacing: 16) {
                                     ForEach(Array(model.items.enumerated()), id: \.element.id) { index, item in
-                                        ClipCard(item: item, index: index, selected: model.selectedIDs.contains(item.id), height: cardHeight, categoryID: model.categoryID, categories: model.categories, target: model.target, model: model).equatable().id(item.id)
-                                            // LazyHStack接近页尾才预读，滚动不改变当前选择，也不一次加载全部历史。
-                                            .onAppear { if index >= model.items.count - 6 { model.loadMore() } }
+                                        ClipCard(item: item, index: index, selected: model.selectedIDs.contains(item.id), dragging: model.draggedIDs.contains(item.id), height: cardHeight, categoryID: model.categoryID, categories: model.categories, target: model.target, model: model).equatable().id(item.id)
                                     }
                                     if model.hasMore {
                                         Button(action: model.loadMore) {
@@ -113,19 +116,22 @@ public struct HistoryView: View {
                                                 if model.loading { ProgressView() } else { Image(systemName: "arrow.right").font(.title2) }
                                                 Text(model.loading ? "正在读取…" : "更多历史")
                                             }.frame(width: 130, height: cardHeight)
-                                        }.buttonStyle(.plain).onAppear { model.loadMore() }
+                                        }.buttonStyle(.plain)
                                     }
                                 }.padding(.horizontal, 24).padding(.vertical, 10)
                             }.scrollIndicators(.visible)
                                 .scrollPosition($scrollPosition)
                                 .onScrollGeometryChange(for: HistoryScrollMetrics.self) { geometry in
                                     HistoryScrollMetrics(offset: max(0, geometry.contentOffset.x), maximum: max(0, geometry.contentSize.width - geometry.containerSize.width), viewport: geometry.containerSize.width)
-                                } action: { _, metrics in scrollWheelState.update(metrics) }
+                                } action: { _, metrics in scrollWheelState.update(metrics); model.historyScrolled(offset: metrics.offset) }
                                 .background(HistoryScrollWheel(state: scrollWheelState) { x in scrollPosition.scrollTo(x: x) })
                                 .onChange(of: model.selectedID) { _, id in
                                     if let id, let index = model.items.firstIndex(where: { $0.id == id }), scrollWheelState.needsReveal(index: index, cardWidth: cardHeight) {
                                         proxy.scrollTo(id)
                                     }
+                                }
+                                .onChange(of: model.scrollRestoration) { _, restore in
+                                    if let restore { scrollPosition.scrollTo(x: restore.offset) }
                                 }
                         }
                     }
@@ -174,6 +180,18 @@ public struct HistoryView: View {
                 .clipShape(UnevenRoundedRectangle(topLeadingRadius: 18, topTrailingRadius: 18))
                 .overlay(UnevenRoundedRectangle(topLeadingRadius: 18, topTrailingRadius: 18).strokeBorder(.white.opacity(0.30), lineWidth: 1))
                 .clipped()
+                .onGeometryChange(for: CGSize.self) { CGSize(width: $0.size.width, height: cardHeight) } action: { size in
+                    model.configureHistoryViewport(width: size.width, cardWidth: size.height)
+                }
+                .background {
+                    #if DEBUG
+                    if GUIAcceptanceProbe.configuration != nil {
+                        GUIRenderWitness(displayCycle: model.focusRequest, query: model.query, generation: model.guiQueryGeneration, first: model.items.first?.preview, firstID: model.items.first?.id, firstImage: model.items.first?.kind == .image, ready: model.items.first?.kind != .image || GUIAcceptanceProbe.imageReadyIDs.contains(model.items.first?.id ?? ""), loading: model.loading).frame(width: 1, height: 1)
+                    }
+                    #else
+                    EmptyView()
+                    #endif
+                }
                 .onChange(of: model.favorites) { _, _ in model.searchChanged() }
                 .onChange(of: model.categoryID) { _, _ in model.searchChanged() }
                 .onChange(of: model.categoryFilters) { _, _ in model.searchChanged() }
@@ -238,6 +256,8 @@ private struct ClipCard: View, Equatable {
     let item: ClipSummary
     let index: Int
     let selected: Bool
+    let dragging: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let height: Double
     let categoryID: String?
     let categories: [ClipCategory]
@@ -245,9 +265,10 @@ private struct ClipCard: View, Equatable {
     let model: HistoryViewModel
     @State private var characterCount: Int?
     @State private var thumbnail: NSImage?
+    @State private var isOnscreen = false
     @State private var detectedLanguage: String?
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.item == rhs.item && lhs.index == rhs.index && lhs.selected == rhs.selected && lhs.height == rhs.height
+        lhs.item == rhs.item && lhs.index == rhs.index && lhs.selected == rhs.selected && lhs.dragging == rhs.dragging && lhs.height == rhs.height
             && lhs.categoryID == rhs.categoryID && lhs.categories == rhs.categories && lhs.target == rhs.target
     }
     private var code: Bool { item.kind == .text && detectedLanguage != nil }
@@ -276,7 +297,7 @@ private struct ClipCard: View, Equatable {
         default: "来源未知"
         }
     }
-    var body: some View {
+    private var cardBody: some View {
         VStack(spacing: 0) {
             HStack(spacing: tiny ? 4 : 7) {
                 VStack(alignment: .leading, spacing: 2) {
@@ -314,10 +335,23 @@ private struct ClipCard: View, Equatable {
             .overlay(RoundedRectangle(cornerRadius: cardRadius, style: .continuous).strokeBorder(selected ? Color(red: 0, green: 0.48, blue: 1) : Color.primary.opacity(0.07), lineWidth: selected ? 3 : 0.7))
             .shadow(color: .black.opacity(0.09), radius: 3, y: 2)
             .contentShape(RoundedRectangle(cornerRadius: 22))
-            // 单/双击互斥识别，避免Button先消费点击导致必须再按回车。
-            .gesture(TapGesture(count: 2).onEnded { model.doubleClick(item.id) }
-                .exclusively(before: TapGesture(count: 1).onEnded { model.choose(item.id) }))
-            .background(HistoryDragBridge(model: model, id: item.id))
+    }
+    var body: some View {
+        cardBody
+            // 原生桥必须有明确卡片尺寸，否则透明NSView会占满滚动视口并误认其他卡片，by AI.Coding。
+            .background(HistoryDragBridge(model: model, id: item.id).frame(width: height, height: height))
+            .background {
+                #if DEBUG
+                if GUIAcceptanceProbe.configuration != nil, index == 0 {
+                    GUIRenderWitness(displayCycle: model.focusRequest, query: model.query, generation: model.guiQueryGeneration, first: item.preview, firstID: item.id, firstImage: item.kind == .image, ready: item.kind != .image || thumbnail != nil, loading: model.loading).frame(width: 1, height: 1)
+                }
+                #else
+                EmptyView()
+                #endif
+            }
+            .scaleEffect(dragging ? 0.96 : 1)
+            .opacity(dragging ? 0.55 : 1)
+            .animation(reduceMotion ? nil : .spring(response: 0.22, dampingFraction: 0.82), value: dragging)
             .help(item.kind == .file ? "双击复制到Finder当前目录或原应用" : "单击选择，双击粘贴到：\(MacApplicationClient.targetName(model.target))")
             .accessibilityLabel("\(HistoryView.kindName(item.kind))，\(item.source.name)，\(item.preview)").accessibilityAddTraits(selected ? [.isButton, .isSelected] : [.isButton])
             .accessibilityAction { model.select(item.id) }
@@ -338,7 +372,13 @@ private struct ClipCard: View, Equatable {
                 if item.kind == .file { Button("在Finder中显示") { model.select(item.id); model.openSelected(reveal: true) }; Button("打开方式…") { model.select(item.id); model.openSelected(withApplication: true) } }
                 Divider(); Button("删除", role: .destructive) { model.change(.delete(model.selectedIDs.contains(item.id) ? model.orderedSelection : [item.id])) }
             }
-            .task(id: item.id) {
+            // LazyHStack可能提前创建邻近卡片；正文/图片任务只在真实可见时运行，离屏释放解码图，by AI.Coding。
+            .onScrollVisibilityChange(threshold: 0.01) { visible in
+                isOnscreen = visible
+                if !visible { thumbnail = nil; Task { await model.derived.cancel(id: item.id) } }
+            }
+            .task(id: isOnscreen) {
+                guard isOnscreen else { return }
                 // 只为实际出现的文字卡片统计全文，计数缓存不随选中状态重算。
                 if [.text, .url, .richText].contains(item.kind) {
                     let count = try? await model.store.textCharacterCount(id: item.id, at: SystemClock().now())
@@ -352,7 +392,12 @@ private struct ClipCard: View, Equatable {
                 guard !Task.isCancelled, model.items.contains(where: { $0.id == item.id }) else { return }
                 do { _ = try await model.store.metadata(id: item.id, at: SystemClock().now()) } catch { return }
                 guard !Task.isCancelled, model.items.contains(where: { $0.id == item.id }) else { return }
-                if case .image(let data) = result { thumbnail = NSImage(data: data) }
+                if case .image(let data) = result {
+                    thumbnail = NSImage(data: data)
+                    #if DEBUG
+                    if thumbnail != nil { GUIAcceptanceProbe.imageReadyIDs.insert(item.id) }
+                    #endif
+                }
             }.onDisappear { thumbnail = nil; characterCount = nil; Task { await model.derived.cancel(id: item.id) } }
     }
     @ViewBuilder private var cardContent: some View {

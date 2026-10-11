@@ -32,7 +32,8 @@ private final class ClipWriter: NSObject, NSPasteboardWriting {
     init(access: ClipExportAccess, index: Int, types: [String], token: String) { self.access = access; self.index = index; self.types = types; self.token = token }
     private var publicTypes: [String] { types.contains(SupportedType.string) || Set(types).isDisjoint(with: [SupportedType.rtf,SupportedType.html,SupportedType.url]) ? types : types + [SupportedType.string] }
     func writableTypes(for pasteboard: NSPasteboard) -> [NSPasteboard.PasteboardType] { (publicTypes + [HistoryViewModel.categoryDragType]).map { NSPasteboard.PasteboardType($0) } }
-    func writingOptions(forType type: NSPasteboard.PasteboardType, pasteboard: NSPasteboard) -> NSPasteboard.WritingOptions { .promised }
+    /// 分类令牌立即提供；只有公开正文延迟读取，分类悬停不依赖载荷回调，by AI.Coding。
+    func writingOptions(forType type: NSPasteboard.PasteboardType, pasteboard: NSPasteboard) -> NSPasteboard.WritingOptions { type.rawValue == HistoryViewModel.categoryDragType ? [] : .promised }
     func pasteboardPropertyList(forType type: NSPasteboard.PasteboardType) -> Any? {
         if type.rawValue == HistoryViewModel.categoryDragType { return Data(token.utf8) }
         if type.rawValue == SupportedType.string, !types.contains(SupportedType.string) {
@@ -58,7 +59,11 @@ private final class ClipWriter: NSObject, NSPasteboardWriting {
         delegate = owner
     }
     override func writableTypes(for pasteboard: NSPasteboard) -> [NSPasteboard.PasteboardType] { super.writableTypes(for: pasteboard) + (types + [HistoryViewModel.categoryDragType]).map { NSPasteboard.PasteboardType($0) } }
-    override func writingOptions(forType type: NSPasteboard.PasteboardType, pasteboard: NSPasteboard) -> NSPasteboard.WritingOptions { types.contains(type.rawValue) || type.rawValue == HistoryViewModel.categoryDragType ? .promised : super.writingOptions(forType: type, pasteboard: pasteboard) }
+    /// 文件承诺与图片正文保持原路径，内部分类身份在建立会话时即可读取，by AI.Coding。
+    override func writingOptions(forType type: NSPasteboard.PasteboardType, pasteboard: NSPasteboard) -> NSPasteboard.WritingOptions {
+        if type.rawValue == HistoryViewModel.categoryDragType { return [] }
+        return types.contains(type.rawValue) ? .promised : super.writingOptions(forType: type, pasteboard: pasteboard)
+    }
     override func pasteboardPropertyList(forType type: NSPasteboard.PasteboardType) -> Any? {
         if type.rawValue == HistoryViewModel.categoryDragType { return Data(token.utf8) }
         if types.contains(type.rawValue) { return try? access.itemData(index: index, type: type.rawValue) }
@@ -99,71 +104,113 @@ private final class ClipWriter: NSObject, NSPasteboardWriting {
         }
     }
 }
-// 只监听卡片区域的拖动；点击与双击继续由SwiftUI处理，by AI.Coding。
+// 卡片点击和拖动共享一次原生事件认领，避免SwiftUI在拖动结束后误选相邻卡片，by AI.Coding。
 struct HistoryDragBridge: NSViewRepresentable {
     let model: HistoryViewModel
     let id: ClipID
     func makeNSView(context: Context) -> DragView { let view = DragView(); view.model = model; view.id = id; view.install(); return view }
     func updateNSView(_ view: DragView, context: Context) { view.model = model; view.id = id }
-    /// 背景桥覆盖整张卡片的实际区域，不依赖无固有尺寸NSView的默认布局。
+    /// 背景桥覆盖整张卡片区域，不依赖无固有尺寸NSView的默认布局，by AI.Coding。
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: DragView, context: Context) -> CGSize? {
         CGSize(width: proposal.width ?? 0, height: proposal.height ?? 0)
     }
     @MainActor final class DragView: NSView, NSDraggingSource {
         weak var model: HistoryViewModel?
         var id: ClipID = ""
-        // 所有卡片共享一次面板事件订阅，拖动事件直接送往按下时命中的卡片。
         private static var monitor: Any?
         private static let views = NSHashTable<DragView>.weakObjects()
-        private static weak var active: DragView?
-        private var start: NSPoint?
+        private static var active: DragView?
+        private var down: NSEvent?
+        private var pressedID: ClipID?
         private var preparing = false
+        private var dragged = false
+        private var nativeSessionActive = false
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
-        /// 阈值前保留原生点击；开始拖动后由AppKit完整接管源和目标会话。
+        /// 按下时冻结来源ID，并消费整段左键手势；右键菜单仍由SwiftUI处理。
         func install() {
             Self.views.add(self)
             guard Self.monitor == nil else { return }
             Self.monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown,.leftMouseDragged,.leftMouseUp]) { event in
                 if event.type == .leftMouseDown {
                     Self.active = Self.views.allObjects.first { view in
-                        event.window === view.window && view.visibleRect.contains(view.convert(event.locationInWindow, from: nil))
+                        let point = view.convert(event.locationInWindow, from: nil)
+                        // 非裁剪NSView的visibleRect可能延伸到整个父视口；必须同时命中自身bounds，by AI.Coding。
+                        return event.window === view.window && view.bounds.contains(point) && view.visibleRect.contains(point)
                     }
                 }
+                #if DEBUG
+                if GUIAcceptanceProbe.configuration != nil {
+                    GUIAcceptanceProbe.pointer(event, id: Self.active?.id, rectangles: Self.views.allObjects.filter { $0.window === event.window }.map { ["id":$0.id,"rect":NSStringFromRect($0.convert($0.bounds.intersection($0.visibleRect),to:nil))] })
+                }
+                #endif
                 guard let active = Self.active else { return event }
                 let result = active.handle(event)
-                if event.type == .leftMouseUp { Self.active = nil }
+                if event.type == .leftMouseUp && !active.nativeSessionActive { Self.active = nil }
                 return result
             }
         }
-        /// 只处理当前拖动来源，保留SwiftUI点击和双击语义。
-        private func handle(_ event: NSEvent) -> NSEvent? {
-                guard event.window === window, let model else { return event }
-                let point = self.convert(event.locationInWindow, from: nil)
-                // 滚动裁剪之外的卡片不能抢到相邻控件的按下事件。
-                if event.type == .leftMouseDown { self.start = self.visibleRect.contains(point) ? point : nil; return event }
-                if event.type == .leftMouseUp { self.start = nil; return event }
-                guard let start = self.start, !self.preparing, hypot(point.x-start.x,point.y-start.y) > 4 else { return event }
-                self.preparing = true; self.start = nil
-                Task { @MainActor in
-                    defer { self.preparing = false }
-                    guard NSEvent.pressedMouseButtons & 1 != 0 else { return }
-                    let token = model.prepareDrag(self.id)
-                    do {
-                        let writers = try await ContentExportProvider.writers(ids: model.orderedSelection, store: model.store, token: token, register: model.registerDragAccess)
-                        guard self.window != nil, NSEvent.pressedMouseButtons & 1 != 0 else { model.finishDrag(cancelled: true); return }
-                        let values = writers.enumerated().map { index, writer in
-                            let item = NSDraggingItem(pasteboardWriter: writer)
-                            let image = NSImage(systemSymbolName: "doc.on.clipboard", accessibilityDescription: nil) ?? NSImage(size: NSSize(width:40,height:40))
-                            item.setDraggingFrame(NSRect(x:point.x+CGFloat(index)*8,y:point.y,width:48,height:48), contents: image); return item
-                        }
-                        guard !values.isEmpty else { model.finishDrag(cancelled: true); return }
-                        self.beginDraggingSession(with: values, event: event, source: self)
-                    } catch { model.finishDrag(cancelled: true); model.message = "拖出失败，记录或容量已变化" }
+        /// 原生会话接管后必须收到拖动和抬起事件，否则AppKit无法向分类目标派发放下，by AI.Coding。
+        func handPointerToNativeSession() { nativeSessionActive = true }
+        func handle(_ event: NSEvent) -> NSEvent? {
+            if nativeSessionActive { return event }
+            guard let model else { return event }
+            if event.type == .leftMouseDown {
+                guard !model.dragActive else { return nil }
+                down = event; pressedID = id; dragged = false
+                return nil
+            }
+            guard let down, let pressedID else { return nil }
+            if event.type == .leftMouseUp {
+                self.down = nil; self.pressedID = nil
+                if !dragged && !preparing {
+                    if down.clickCount == 2 { model.doubleClick(pressedID) }
+                    else { model.choose(pressedID, modifiers: down.modifierFlags) }
                 }
                 return nil
+            }
+            let distance = hypot(event.locationInWindow.x-down.locationInWindow.x, event.locationInWindow.y-down.locationInWindow.y)
+            guard !dragged, !preparing, distance > 5 else { return nil }
+            dragged = true; preparing = true
+            // 先截取实际卡片，再触发源卡片的提起动画；不展示不相关的通用图标。
+            let image = preview(), frame = bounds
+            let token = model.prepareDrag(pressedID), ids = model.orderedSelection
+            Task { @MainActor in
+                defer { self.preparing = false }
+                do {
+                    let writers = try await ContentExportProvider.writers(ids: ids, store: model.store, token: token, register: model.registerDragAccess)
+                    guard Self.active === self, self.down === down, self.window != nil,
+                          NSEvent.pressedMouseButtons & 1 != 0, !writers.isEmpty else { model.finishDrag(cancelled: true); return }
+                    let values = writers.enumerated().map { index, writer in
+                        let item = NSDraggingItem(pasteboardWriter: writer)
+                        item.setDraggingFrame(frame.offsetBy(dx: CGFloat(index)*8, dy: CGFloat(index)*8), contents: image)
+                        return item
+                    }
+                    self.handPointerToNativeSession()
+                    let session = self.beginDraggingSession(with: values, event: event, source: self)
+                    session.animatesToStartingPositionsOnCancelOrFail = true
+                    session.draggingFormation = .pile
+                } catch { model.finishDrag(cancelled: true); model.message = "拖出失败，记录或容量已变化" }
+            }
+            return nil
+        }
+        /// 在卡片坐标内保存真实绘制结果，图片/正文/标题随拖动一起移动，by AI.Coding。
+        private func preview() -> NSImage {
+            guard let content = window?.contentView else { return NSImage(size: bounds.size) }
+            let rect = convert(bounds, to: content)
+            guard let bitmap = content.bitmapImageRepForCachingDisplay(in: rect) else { return NSImage(size: bounds.size) }
+            content.cacheDisplay(in: rect, to: bitmap)
+            let image = NSImage(size: bounds.size); image.addRepresentation(bitmap); return image
         }
         func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation { .copy }
-        func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) { model?.finishDrag(cancelled: operation.isEmpty) }
+        func draggingSession(_ session: NSDraggingSession, willBeginAt screenPoint: NSPoint) {
+            #if DEBUG
+            if let model { GUIAcceptanceProbe.event("native-session-started", model) }
+            #endif
+        }
+        func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
+            nativeSessionActive = false; down = nil; pressedID = nil; Self.active = nil
+            model?.finishDrag(cancelled: operation.isEmpty)
+        }
         isolated deinit {
             Self.views.remove(self)
             if Self.views.allObjects.isEmpty, let monitor = Self.monitor { NSEvent.removeMonitor(monitor); Self.monitor = nil }

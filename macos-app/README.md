@@ -1,6 +1,12 @@
-# LocalClip 0.3.4（构建25）
+# LocalClip 0.3.7（构建29）
 
-Review fixes: preserve loaded history and detail during captures, keep queued copies across preference saves, make Copy deterministic, reject terminal code conversion, retain search indexes under quota pressure, and use bounded in-memory thumbnails. Full status and verification: [review fixes](docs/review-fixes.md). The independent 0.3.2 review found two remaining defects; 0.3.3 adds page-boundary/hidden-burst preservation and worker-side privacy checks; the independent follow-up found page amplification, corrected in 0.3.4 with an exact published range and continuation cursor. Release UI target receipt remains pending.
+Current follow-up: shared native category-drop routing on the panel's hosting view, covering every supported clipboard kind and newly created categories. Implementation and verification boundary: [category drop routing](docs/category-drop-routing.md). Quit the old app and open `dist/LocalClip.app` to use build 29; this turn did not launch or install it.
+
+Previous follow-up: native drag-event handoff, compact confirmation sheets and viewport-sized progressive history loading. Its measurements and review belong to build 28: [progressive history loading](docs/progressive-history-loading.md).
+
+Previous follow-up: LC-06 scaling, card drag hit areas and frozen source selection, card drag animation, and external-click panel dismissal. Its measurements belong to the recorded earlier builds: [scaling, drag and focus checks](docs/scaling-drag-focus-checks.md).
+
+Previous review fixes: preserve loaded history and detail during captures, keep queued copies across preference saves, make Copy deterministic, reject terminal code conversion, retain search indexes under quota pressure, and use bounded in-memory thumbnails. Full status and verification: [review fixes](docs/review-fixes.md). The independent 0.3.2 review found two remaining defects; 0.3.3 adds page-boundary/hidden-burst preservation and worker-side privacy checks; the independent follow-up found page amplification, corrected in 0.3.4 with an exact published range and continuation cursor. Release UI target receipt remains pending.
 
 ## 0.2.4（20）的既有界面基础
 
@@ -21,7 +27,7 @@ rtk proxy bash macos-app/scripts/build-app.sh release
 
 ---
 
-以下是0.1.14及之前版本的历史README，保留已有工程记录。旧格式、目录、行为、通过数及样本不代表0.3.4；当前说明以上方链接为准。
+以下是0.1.14及之前版本的历史README，保留已有工程记录。旧格式、目录、行为、通过数及样本不代表0.3.7；当前说明以上方链接为准。
 
 # LocalClip 0.1.14
 

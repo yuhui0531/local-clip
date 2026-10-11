@@ -9,6 +9,9 @@ final class CommitStrategy {
     private(set) var peakTemporaryBytes: Int64 = 0
     private(set) var lastCandidateClipCount: Int64 = 0
     private(set) var lastCandidateBytes: Int64 = 0
+    private var validatedSource = false
+    /// 启动/恢复完成全库与外键校验后，才允许已验证APFS源库的局部提交校验，by AI.Coding。
+    func sourceDidValidate() { validatedSource = true }
     /// 创建专用布局；历史日志与待回收候选均纳入实际占用。
     init(root: URL, faults: any StorageFaultInjector = NoStorageFault()) throws {
         self.root = root; self.faults = faults
@@ -84,8 +87,8 @@ final class CommitStrategy {
                 }
             } else { try db.exec("PRAGMA auto_vacuum=FULL") }
             try faults.check(.candidateCreated)
-            // 新APFS克隆inode没有源库的文件缓存。顺序预读后仍执行全部SQLite校验，避免随机页缺失逐页访问磁盘。
-            if cloned { try prefetch(candidate) }
+            // 不用全文件预读验证权限；候选读写权限失败仍在变更事务之前拒绝，by AI.Coding。
+            guard Darwin.access(candidate.path, R_OK | W_OK) == 0 else { throw StoreError.ioFailure }
             try db.configure()
             guard try db.scalarInt("PRAGMA auto_vacuum") == 1 else { throw StoreError.ioFailure }
             try db.exec("BEGIN IMMEDIATE")
@@ -99,7 +102,11 @@ final class CommitStrategy {
                 let pending = try Self.bytes(staging) + Self.bytes(root.appendingPathComponent("Exports")) - Self.bytes(operation)
                 try finalize(db, pending)
             }
-            guard try db.scalarText("PRAGMA quick_check") == "ok", try db.rows("PRAGMA foreign_key_check").isEmpty else { throw StoreError.corruptPayload }
+            // 已验证源库的COW副本由SQLite约束校验变更页；不再为小写入读取全部正文。
+            // 初始化、未验证源库和非APFS备份仍执行完整校验，by AI.Coding。
+            if !cloned || !validatedSource {
+                guard try db.scalarText("PRAGMA quick_check") == "ok", try db.rows("PRAGMA foreign_key_check").isEmpty else { throw StoreError.corruptPayload }
+            }
             let identity: (Int64, String)?
             if try db.scalarInt("SELECT COUNT(*) FROM sqlite_master WHERE name='store_meta'") == 1 {
                 identity = (try db.scalarInt("SELECT storeRevision FROM store_meta WHERE singletonID=1"), try db.scalarText("SELECT lastOperationID FROM store_meta WHERE singletonID=1"))
@@ -137,24 +144,6 @@ final class CommitStrategy {
             do { try FileManager.default.removeItem(at: operation) } catch { /* 删除失败计入容量。 */ }
             if committed { throw StoreError.postCommitUnavailable }
             throw error
-        }
-    }
-    /// 只读预热较大候选；用户态缓冲固定1MiB，内核文件缓存另行计量。读取失败仍在提交点前保留原库。
-    private func prefetch(_ url: URL) throws {
-        let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
-        guard size >= 32 * MiB else { return }
-        let descriptor = Darwin.open(url.path, O_RDONLY)
-        guard descriptor >= 0 else { throw StoreError.ioFailure }
-        defer { Darwin.close(descriptor) }
-        let buffer = UnsafeMutableRawPointer.allocate(byteCount: 1_048_576, alignment: 4096)
-        defer { buffer.deallocate() }
-        while true {
-            let count = Darwin.read(descriptor, buffer, 1_048_576)
-            if count == 0 { return }
-            if count < 0 {
-                if errno == EINTR { continue }
-                throw StoreError.ioFailure
-            }
         }
     }
     /// 候选内容同步到磁盘，失败属于提交前失败。

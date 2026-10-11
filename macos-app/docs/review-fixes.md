@@ -1,6 +1,6 @@
 # LocalClip review fixes — 2026-10-11
 
-Delivery: **0.3.4 (25)**, based on `1b9cbed2e956f9ac1c9668c7809243b1a74b975e`. This addresses the [independent review](../../paste-report/review/independent-review-report.md). Implementation, service measurements, rendered components and live Release acceptance are reported separately.
+Previous delivery: **0.3.4 (25)**, based on `1b9cbed2e956f9ac1c9668c7809243b1a74b975e`. This addresses the [independent review](../../paste-report/review/independent-review-report.md). Implementation, service measurements, rendered components and live Release acceptance are reported separately. Current **0.3.5 (26)** LC-06/drag/focus follow-up: [checks and limits](scaling-drag-focus-checks.md).
 
 ## Independent review and follow-up
 
@@ -23,8 +23,8 @@ The [final independent review](../evidence/review-fixes/independent-final-review
 | LC-02 | Remove the Zed `AXWindow` exception. Terminal bundles and terminal-labelled AX ancestors remain unknown and cannot trigger code conversion; no AX text body is read. Classifier tables cover native and embedded terminal metadata. | Fixed at classifier boundary; real target matrix pending |
 | LC-03 | Quota pressure evicts ordinary history with its index instead of deleting every text index. Large text retains normalized search text while avoiding duplicate derived plaintext. Missing legacy indexes have correct fallback and bounded 200-clip background repair. Quota fixture retains 7,333 text clips and 7,333 index rows. | Fixed |
 | LC-04 | Preference refresh preserves queued copies and the observed baseline. Only actual pause/resume, capacity and explicit wake/rebaseline transitions invalidate the capture epoch. Queue and suspended-read regressions verify preservation and deliberate pause rejection. | Fixed |
-| LC-05 | Remove the all-text Swift corpus. SQL ranks literal UTF-8 bytes without materializing every source payload in Swift; page results remain bounded. NFC, punctuation, NUL and missing-index regressions pass. Search debounce is 20 ms. | Fixed; UI timing pending |
-| LC-06 | Thumbnails use a bounded 16 MiB / 256-entry memory cache without a database commit; slider persistence is coalesced. Quota eviction batches its transaction and limits orphan checks to affected digests. Atomic user-data commit verification, sync and rename remain intact. | Mitigated; primary writes still scale with DB size |
+| LC-05 | Remove the all-text Swift corpus. SQL ranks literal UTF-8 bytes without materializing every source payload in Swift; page results remain bounded. NFC, punctuation, NUL and missing-index regressions pass. Search debounce is 20 ms. | 0.3.4 fixed; 0.3.5 isolated GUI timing measured, search budget missed; see current follow-up |
+| LC-06 | Thumbnails use a bounded 16 MiB / 256-entry memory cache without a database commit; slider persistence is coalesced. Quota eviction batches its transaction and limits orphan checks to affected digests. Atomic user-data commit verification, sync and rename remain intact. | 0.3.4 mitigation; 0.3.5 removes routine full-payload verification scans; see current follow-up |
 | LC-07 | Backspace/Delete always stay in the native editable search field, including when empty. Record undo is available through Command-Z for an unchanged query and through the menu. | Fixed; native keyboard/IME acceptance pending |
 | LC-08 | Smart code conversion requires direct paste. Copy restores original file URLs regardless of the remembered target; named-pasteboard tests verify Copy and direct paste separately. | Fixed |
 | LC-09 | Export access uses immutable clip identity/hash plus current existence, visibility and expiry instead of global revision. Unrelated commits retain access; deletion invalidates it. | Fixed; real mouse/receiver check pending |
@@ -85,6 +85,6 @@ rtk proxy env LOCALCLIP_REVIEW_BENCHMARK=1 LOCALCLIP_REVIEW_OUTPUT=/absolute/pat
 
 ## Remaining acceptance
 
-Live Release double-click target receipt, terminal/editor/Finder matrix, real mouse drag, keyboard/IME, multi-display, login/hotkey and input/copy-to-visible timing remain open. The running user app was not restarted or taken over, and production history was not opened. User-data atomic commits remain O(database size); rewriting that protocol is outside this safe fix. Existing missing-index stores that cannot fit repair safely keep correct raw-payload search, which can remain slower until space is available.
+Live Release double-click target receipt, terminal/editor/Finder matrix, real mouse drag, keyboard/IME, multi-display, login/hotkey and input/copy-to-visible timing remain open. The running user app was not restarted or taken over, and production history was not opened. Routine full-payload verification in 0.3.4 is superseded for validated APFS writes by the linked 0.3.5 follow-up; non-APFS backup and quota reclamation can still scale with database size. Existing missing-index stores that cannot fit repair safely keep correct raw-payload search, which can remain slower until space is available.
 
-The packaged app is ad-hoc signed for local testing. Build/version/hash checks are recorded in [0.3.4 artifacts](../evidence/review-fixes/artifacts-0.3.4.json). Fixes are uncommitted; the existing user modification to `.gitignore` is preserved.
+The packaged app is ad-hoc signed for local testing. Build/version/hash checks are recorded in [0.3.4 artifacts](../evidence/review-fixes/artifacts-0.3.4.json). The 0.3.4 changes were subsequently committed as `87c71a2`; the follow-up preserves the current `.gitignore` baseline.
