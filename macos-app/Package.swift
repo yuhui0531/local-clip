@@ -1,4 +1,4 @@
-// swift-tools-version: 6.2
+// swift-tools-version: 6.0
 // SwiftPM 模块与系统依赖，by AI.Coding。
 import PackageDescription
 let package = Package(
