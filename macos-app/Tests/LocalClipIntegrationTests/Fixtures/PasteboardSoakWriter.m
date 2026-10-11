@@ -17,7 +17,7 @@ int main(int argc, const char *argv[]) {
         CFDataRef data = CFStringCreateExternalRepresentation(kCFAllocatorDefault, text, kCFStringEncodingUTF8, 0);
         CFRelease(text);
         status = PasteboardClear(board);
-        if (status == noErr) status = PasteboardPutItemFlavor(board, 1, CFSTR("public.utf8-plain-text"), data, 0);
+        if (status == noErr) status = PasteboardPutItemFlavor(board, (PasteboardItemID)1, CFSTR("public.utf8-plain-text"), data, 0);
         CFRelease(data);
         if (status == noErr) status = PasteboardSynchronize(board);
         if (status != noErr) {
