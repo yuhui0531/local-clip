@@ -129,4 +129,79 @@ private final class CountingBodyProvider: NSObject, NSPasteboardItemDataProvider
         #expect(snapshot.payload.items[1].representations.first { $0.type == SupportedType.png }?.data == Data([1,2,3]))
         #expect(snapshot.payload.items[1].representations.first { $0.type == SupportedType.tiff }?.data == Data([4,5,6]))
     }
+    /// 另一进程在私有命名板写入一万次时由生产 captureAsync 读取并核对守恒，by AI.Coding。
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["LOCALCLIP_NAMED_TEST"] == "1"
+                   && ProcessInfo.processInfo.environment["LOCALCLIP_PASTEBOARD_SOAK"] == "1"))
+    func nativeCaptureSurvivesCrossProcessTenThousandWrites() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let boardName = "local.localclip.review-soak." + UUID().uuidString
+        let native = NSPasteboard(name: .init(boardName))
+        defer { native.releaseGlobally() }
+        native.clearContents()
+        let client = MacPasteboardClient(access: NativePasteboardAccess(native))
+        let store = try HistoryStore(location: root.appendingPathComponent("store"))
+        let policy = try await store.settings()
+        let source = try #require(Bundle.module.url(forResource: "PasteboardSoakWriter", withExtension: "m", subdirectory: "Fixtures"))
+        let executable = root.appendingPathComponent("pasteboard-soak-writer")
+        let compiler = Process()
+        compiler.executableURL = URL(fileURLWithPath: "/usr/bin/clang")
+        compiler.arguments = ["-fmodules", "-fmodules-cache-path=\(root.appendingPathComponent("clang-cache").path)",
+                              "-framework", "Carbon", source.path, "-o", executable.path]
+        try compiler.run(); compiler.waitUntilExit()
+        #expect(compiler.terminationStatus == 0)
+
+        let writer = Process(), output = Pipe(), errors = Pipe()
+        writer.executableURL = executable
+        writer.arguments = [boardName, "10000"]
+        writer.standardOutput = output; writer.standardError = errors
+        try writer.run()
+        var baseline = native.changeCount
+        var savedInputs = Set<Int>(), savedClipIDs = Set<ClipID>(), captureSkipEvents = 0
+        func accept(_ snapshot: ClipboardSnapshot) async throws {
+            guard let representation = snapshot.payload.items.first?.representations.first(where: { $0.type == SupportedType.string }),
+                  let value = String(data: representation.data, encoding: .utf8), value.hasPrefix("LOCALCLIP-SOAK-"),
+                  let input = Int(value.dropFirst("LOCALCLIP-SOAK-".count)), (0..<10_000).contains(input) else {
+                Issue.record("named-board capture returned malformed content"); return
+            }
+            guard savedInputs.insert(input).inserted else { Issue.record("a soak input was captured twice"); return }
+            switch try await store.ingest(ContentDecoder.decode(snapshot), at: snapshot.capturedAt) {
+            case .inserted(let id): savedClipIDs.insert(id)
+            case .deduplicated: Issue.record("distinct soak input was deduplicated")
+            case .skipped: Issue.record("valid soak entry was rejected by storage")
+            }
+        }
+        let deadline = ContinuousClock.now + .seconds(60)
+        while writer.isRunning && ContinuousClock.now < deadline {
+            switch await client.captureAsync(after: baseline, policy: policy) {
+            case .noChange:
+                try await Task.sleep(for: .milliseconds(1))
+            case .skipped(_, let count):
+                baseline = count; captureSkipEvents += 1
+            case .snapshot(let snapshot):
+                baseline = snapshot.changeCount
+                try await accept(snapshot)
+            }
+        }
+        if writer.isRunning { writer.terminate(); Issue.record("writer exceeded the 60-second soak limit") }
+        writer.waitUntilExit()
+        let writerOutput = String(data: output.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let writerError = String(data: errors.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        if writer.terminationStatus != 0 { Issue.record("writer failed: \(writerError)") }
+        #expect(writer.terminationStatus == 0)
+        #expect(writerOutput == "10000")
+        switch await client.captureAsync(after: baseline, policy: policy) {
+        case .snapshot(let snapshot): try await accept(snapshot)
+        case .skipped: captureSkipEvents += 1
+        case .noChange: break
+        }
+        let writerInputs = Set(0..<10_000)
+        let neverCapturedInputs = writerInputs.subtracting(savedInputs)
+        print("R11 named-pasteboard soak: writes=10000 uniqueInputsCaptured=\(savedInputs.count) captureSkipEvents=\(captureSkipEvents) writesNeverCaptured=\(neverCapturedInputs.count)")
+        #expect(savedInputs.isSubset(of: writerInputs))
+        #expect(savedInputs.count + neverCapturedInputs.count == writerInputs.count)
+        #expect(savedClipIDs.count == savedInputs.count)
+        #expect(try await store.search(.init("LOCALCLIP-SOAK-")).items.count == min(savedInputs.count, 50))
+    }
 }

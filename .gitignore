@@ -77,3 +77,6 @@ __pycache__/
 .venv/
 
 paste-report/*
+debug-log*
+
+changes/active/*

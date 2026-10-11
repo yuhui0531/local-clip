@@ -10,7 +10,11 @@ public enum SearchNormalizer {
     /// 在原文字素上寻找映射后的命中，不拿规范化字节偏移截原文。
     public static func context(_ original: String, literal: String) -> String {
         guard !literal.isEmpty else { return String(original.prefix(180)) }
-        let normalized = normalize(original)
+        return context(original, normalized: normalize(original), literal: literal)
+    }
+    /// 索引正文已经规范化，命中片段复用它，避免再次规范化长文，by AI.Coding。
+    static func context(_ original: String, normalized: String, literal: String) -> String {
+        guard !literal.isEmpty else { return String(original.prefix(180)) }
         guard let range = normalized.range(of: normalize(literal), options: .literal) else { return String(original.prefix(180)) }
         // NFC及ASCII折叠保持字素次序；按字素序号映射，避免每个字符单独规范化。
         let position = normalized[..<range.lowerBound].count

@@ -5,7 +5,14 @@ import LocalClipCore
 @testable import LocalClipMac
 @MainActor final class FakeApplications: ApplicationClient {
     var targetKind: PasteTargetKind = .unknown
-    func pasteTargetKind(_ target: TargetToken) -> PasteTargetKind { targetKind }
+    var classifications = 0
+    var classificationsBeforeRestore = 0
+    var restoreCount = 0
+    func pasteTargetKind(_ target: TargetToken) -> PasteTargetKind {
+        classifications += 1
+        if restoreCount == 0 { classificationsBeforeRestore += 1 }
+        return targetKind
+    }
     var permitted = true
     let remembered = TargetToken(pid: 123, bundleID: "local.target", launchedAt: 100)
     var current: TargetToken?
@@ -24,7 +31,7 @@ import LocalClipCore
     var pasteFailureReason: String? { nil }
     func requestPastePermission() {}
     func isPasteFocusReady(_ target: TargetToken) -> Bool { isFrontmost(target) }
-    func restorePasteFocus(_ target: TargetToken) -> Bool { onRestore?(); return isFrontmost(target) }
+    func restorePasteFocus(_ target: TargetToken) -> Bool { restoreCount += 1; onRestore?(); return isFrontmost(target) }
     func sendPaste(_ target: TargetToken, ifClipboardUnchanged stillValid: () -> Bool) -> Bool { guard stillValid(), permitted, isFrontmost(target) else { return false }; events += 1; return true }
 }
 @MainActor struct EndToEndTests {

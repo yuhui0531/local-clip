@@ -39,6 +39,34 @@ public enum CodeFileReader {
             }
         }
     }
+    public struct IdentitySnapshot: Sendable {
+        fileprivate let identities: [Identity]
+        public func isCurrent() -> Bool { identities.allSatisfy { $0.isCurrent() } }
+        public func matches(_ contents: CodeFileContents) -> Bool { identities == contents.identities }
+    }
+    /// 在恢复目标焦点前只记录文件身份，不读取正文；正文仍在目标确认后读取，by AI.Coding。
+    public static func identitySnapshot(_ urls: [URL]) throws -> IdentitySnapshot {
+        guard !urls.isEmpty, urls.count <= 64 else { throw CodeFileReadError.unsupported }
+        var identities: [Identity] = [], total: Int64 = 0
+        for url in urls {
+            guard url.isFileURL, [nil, "", "localhost"].contains(url.host),
+                  extensions.contains(url.pathExtension.lowercased()) || ["dockerfile", "makefile", "gnumakefile"].contains(url.lastPathComponent.lowercased()) || url.lastPathComponent.lowercased().hasPrefix("dockerfile.") else { throw CodeFileReadError.unsupported }
+            let fd = url.withUnsafeFileSystemRepresentation { path in path.map { open($0, O_RDONLY | O_NONBLOCK | O_NOFOLLOW) } ?? -1 }
+            guard fd >= 0 else { throw CodeFileReadError.unavailable }
+            var identity: Identity?
+            do {
+                defer { close(fd) }
+                var info = stat()
+                guard fstat(fd, &info) == 0, info.st_mode & S_IFMT == S_IFREG else { throw CodeFileReadError.unavailable }
+                guard info.st_size >= 0, info.st_size <= perFileLimit, total + info.st_size <= totalLimit else { throw CodeFileReadError.tooLarge }
+                identity = Identity(url: url, info: info)
+            }
+            guard let identity, identity.isCurrent() else { throw CodeFileReadError.changed }
+            total += identity.size
+            identities.append(identity)
+        }
+        return .init(identities: identities)
+    }
     /// 顺序与每份文本完全保留；多文件仅追加明确的换行分隔，不裁剪或格式化正文，by AI.Coding。
     public static func read(_ urls: [URL]) throws -> String { try snapshot(urls).text }
     public static func snapshot(_ urls: [URL]) throws -> CodeFileContents {

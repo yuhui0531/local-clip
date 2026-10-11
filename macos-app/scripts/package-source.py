@@ -20,6 +20,8 @@ def main() -> None:
     extra_doc = PROJECT / "changes/active/localclip-review-fixes/debug-log-2026-10-11-newest-first-order.md"
     if extra_doc.is_file():
         files.append(extra_doc)
+    files.extend((APP / "docs/review-fixes-r01-r12.md",
+                  PROJECT / "changes/active/localclip-review-r01-r12/tasks.md"))
     plan = PROJECT / "paste-report/implementation-plan-2026-10-10"
     files.extend(plan / name for name in ("README.md", "tasks.md", "report-coverage.csv", "user-checklist.md", "debug-image-drag-2026-10-11.md", "debug-log-2026-10-11-code-file-paste.md"))
     DESTINATION.parent.mkdir(exist_ok=True)

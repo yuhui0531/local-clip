@@ -148,6 +148,12 @@ public struct SettingsSnapshot: Codable, Equatable, Sendable {
     public var defaultAction: PasteAction = .copy
     public var captureEnabled = true
     public var excludedBundleIDs: Set<String> = []
+    // opt-in 编辑器列表默认关闭；缺失字段按空集合处理，by AI.Coding。
+    private var smartPasteEditorBundleIDsValue: Set<String>?
+    public var smartPasteEditorBundleIDs: Set<String> {
+        get { smartPasteEditorBundleIDsValue ?? [] }
+        set { smartPasteEditorBundleIDsValue = newValue }
+    }
     public var shortcut = Shortcut()
     public var revision: Int64 = 0
     public init() {}
@@ -186,7 +192,7 @@ public struct ClipDetail: Sendable {
     public var categoryIDs: Set<String> = []
 }
 // 选择卡片仅读取轻量元数据，避免为了高亮或分类菜单加载图片正文，by AI.Coding。
-public struct ClipMetadata: Sendable {
+public struct ClipMetadata: Equatable, Sendable {
     public var summary: ClipSummary
     public var categoryIDs: Set<String>
     public var hasTextRepresentations: Bool
@@ -247,7 +253,7 @@ public struct ChangePreview: Sendable {
     public var message: String
 }
 public struct ChangeResult: Sendable { public var removed: Int; public var reclaimedBytes: Int64; public var revision: Int64 }
-public struct StorageUsage: Sendable {
+public struct StorageUsage: Equatable, Sendable {
     public var measuredTotal: Int64
     public var favoritePayload: Int64
     public var normalPayload: Int64
@@ -264,6 +270,7 @@ public protocol HistoryRepository: Sendable {
     func ingest(_ snapshot: ClipboardSnapshot, at: Instant) async throws -> IngestResult
     func search(_ request: SearchRequest) async throws -> SearchPage
     func detail(id: ClipID, at: Instant) async throws -> ClipDetail
+    func metadata(id: ClipID, at: Instant) async throws -> ClipMetadata
     func loadPayload(id: ClipID, at: Instant) async throws -> ClipboardPayload
     func settings() async throws -> SettingsSnapshot
     func preview(_ change: HistoryChange) async throws -> ChangePreview
@@ -310,12 +317,18 @@ public enum PasteTargetKind: Sendable { case text, files, unknown }
     func requestPastePermission()
     func target() -> TargetToken?
     func pasteTargetKind(_ target: TargetToken) -> PasteTargetKind
+    func pasteTargetKind(_ target: TargetToken, smartPasteEditorBundleIDs: Set<String>) -> PasteTargetKind
     func isAlive(_ target: TargetToken) -> Bool
     func isFrontmost(_ target: TargetToken) -> Bool
     func activate(_ target: TargetToken) -> Bool
     func restorePasteFocus(_ target: TargetToken) -> Bool
     func isPasteFocusReady(_ target: TargetToken) -> Bool
     func sendPaste(_ target: TargetToken, ifClipboardUnchanged: () -> Bool) -> Bool
+}
+extension ApplicationClient {
+    public func pasteTargetKind(_ target: TargetToken, smartPasteEditorBundleIDs: Set<String>) -> PasteTargetKind {
+        pasteTargetKind(target)
+    }
 }
 public enum ClipKind: String, Codable, Sendable, CaseIterable { case text, url, richText, image, file, mixed }
 public enum OutputFormat: String, Codable, Sendable { case original, plainText }

@@ -7,15 +7,14 @@ public struct HistoryView: View {
     @Environment(\.colorScheme) private var colorScheme
     @State private var categoryContentWidth: CGFloat = 0
     @State private var resizingHeight: Double?
-    @State private var scrollPosition = ScrollPosition(edge: .leading)
-    @State private var scrollWheelState = HistoryScrollWheel.State()
     // 跟随SwiftUI实际外观，避免NSColor按宿主外观解析造成浅色工具栏白字。
     private var toolbarColor: Color { Color(white: colorScheme == .dark ? 0.82 : 0.28) }
     public init(model: HistoryViewModel) { self.model = model }
     /// 首屏查询与实际卡片布局共用边长，窗口/筛选高度变化不会多读固定50条，by AI.Coding。
     static func cardSide(height: CGFloat, filtered: Bool) -> CGFloat {
         let dense = height < 300
-        return min(260, max(1, height - 8 - (dense ? 40 : 48) - 40 - (filtered ? 22 : 0) - (dense ? 36 : 44) - 1 - 20))
+        let available = max(1, height - 8 - (dense ? 40 : 48) - 40 - (filtered ? 22 : 0) - (dense ? 36 : 44) - 1 - 20)
+        return min(340, available)
     }
     /// 直接描画两种小工具图标，避免模板系统图标在材质面板中丢失指定颜色。
     private func toolbarGlyph(filter: Bool) -> some View {
@@ -64,8 +63,7 @@ public struct HistoryView: View {
                     }
                     HStack(spacing: 5) { scope(compact ? "历史" : "剪贴板历史", "clock.arrow.circlepath", false); scope("收藏", "star", true) }
                     Spacer(minLength: 10)
-                    SearchField(text: $model.query, focus: model.focusRequest, onChange: model.searchChanged,
-                        onNavigate: model.navigate, onEnter: { model.focusResults?() }, onEscape: { model.closePanel?() }, onDelete: model.deleteSelected).frame(maxWidth: 310).frame(height: 30)
+                    HistorySearchInput(model: model, input: model.queryState, focus: model.focusRequest).frame(maxWidth: 310).frame(height: 30)
                     Button { model.showingFilters.toggle() } label: { toolbarGlyph(filter: true) }.buttonStyle(.plain).accessibilityLabel("筛选").popover(isPresented: $model.showingFilters) { FilterEditor(model: model) }
                     Button { model.updateSettings { $0.captureEnabled.toggle() } } label: { toolbarGlyph(filter: false) }.buttonStyle(.plain).accessibilityLabel(model.settings.captureEnabled ? "暂停采集" : "恢复采集").help(model.settings.captureEnabled ? "暂停采集" : "恢复采集")
                     Menu { Button(model.settings.hideContents ? "显示内容" : "隐藏内容") { model.updateSettings { $0.hideContents.toggle() } }; Button("筛选…") { model.showingFilters.toggle() }; Button("撤销删除 · ⌘Z") { model.undoDeletion() }; Button("设置…") { model.openSettings?() }; Button("清空普通历史", role: .destructive) { model.change(.clearOrdinary) } }
@@ -96,83 +94,18 @@ public struct HistoryView: View {
                     }
                 }.frame(height: 32).padding(.horizontal, 24).padding(.bottom, 8)
                 if filterHeight > 0 { FilterStrip(model: model) }
-                ZStack {
-                    if model.items.isEmpty {
-                        VStack(spacing: 12) {
-                            Image(systemName: model.query.isEmpty ? "square.on.square" : "magnifyingglass").font(.system(size: 38, weight: .ultraLight)).foregroundStyle(.secondary)
-                            Text(model.loading ? "正在读取历史…" : model.query.isEmpty ? model.categoryID == nil ? "下一次复制，就从这里开始" : "这个分类还没有记录" : "没有匹配的历史").font(.system(size: 18, weight: .semibold))
-                            Text(model.query.isEmpty ? model.categoryID == nil ? "文字、链接、图片、富文本和文件引用，只保存在这台 Mac。" : "回到剪贴板历史，把记录拖到这个分类标签。" : "中文短词、代码符号和链接片段，均按字面查找。").font(.system(size: 12)).foregroundStyle(.secondary)
-                        }.frame(maxWidth: .infinity, maxHeight: .infinity)
-                    } else {
-                        ScrollViewReader { proxy in
-                            ScrollView(.horizontal) {
-                                LazyHStack(spacing: 16) {
-                                    ForEach(Array(model.items.enumerated()), id: \.element.id) { index, item in
-                                        ClipCard(item: item, index: index, selected: model.selectedIDs.contains(item.id), dragging: model.draggedIDs.contains(item.id), height: cardHeight, categoryID: model.categoryID, categories: model.categories, target: model.target, model: model).equatable().id(item.id)
-                                    }
-                                    if model.hasMore {
-                                        Button(action: model.loadMore) {
-                                            VStack(spacing: 10) {
-                                                if model.loading { ProgressView() } else { Image(systemName: "arrow.right").font(.title2) }
-                                                Text(model.loading ? "正在读取…" : "更多历史")
-                                            }.frame(width: 130, height: cardHeight)
-                                        }.buttonStyle(.plain)
-                                    }
-                                }.padding(.horizontal, 24).padding(.vertical, 10)
-                            }.scrollIndicators(.visible)
-                                .scrollPosition($scrollPosition)
-                                .onScrollGeometryChange(for: HistoryScrollMetrics.self) { geometry in
-                                    HistoryScrollMetrics(offset: max(0, geometry.contentOffset.x), maximum: max(0, geometry.contentSize.width - geometry.containerSize.width), viewport: geometry.containerSize.width)
-                                } action: { _, metrics in scrollWheelState.update(metrics); model.historyScrolled(offset: metrics.offset) }
-                                .background(HistoryScrollWheel(state: scrollWheelState) { x in scrollPosition.scrollTo(x: x) })
-                                .onChange(of: model.selectedID) { _, id in
-                                    if let id, let index = model.items.firstIndex(where: { $0.id == id }), scrollWheelState.needsReveal(index: index, cardWidth: cardHeight) {
-                                        proxy.scrollTo(id)
-                                    }
-                                }
-                                .onChange(of: model.scrollRestoration) { _, restore in
-                                    if let restore { scrollPosition.scrollTo(x: restore.offset) }
-                                }
-                        }
-                    }
-                }.frame(maxWidth: .infinity).frame(height: availableCardHeight + 20).clipped().blur(radius: model.settings.hideContents ? 16 : 0).allowsHitTesting(!model.settings.hideContents)
+                HistoryStrip(model: model, list: model.listState, cardHeight: cardHeight,
+                    availableCardHeight: availableCardHeight, categoryID: model.categoryID, categories: model.categories,
+                    target: model.target, draggedIDs: model.draggedIDs, hideContents: model.settings.hideContents, focusRequest: model.focusRequest)
                 Divider().opacity(0.5)
                 HStack(spacing: 12) {
                     Circle().fill(!model.settings.captureEnabled ? Color.gray : model.capture.capacityBlocked ? Color.orange : Color.green).frame(width: 6, height: 6)
                     Text(model.message.isEmpty ? model.status : model.message).font(.system(size: 11, weight: .medium)).lineLimit(1)
                         .help(model.ignoreDescription)
-                    ZStack { if model.loading { ProgressView().controlSize(.small) } }.frame(width: 14, height: 14)
-                    Text("\(model.selectedIDs.count > 1 ? "已选\(model.selectedIDs.count) · " : "")\(model.items.count)\(model.hasMore ? "+" : "") 条")
-                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                    HistoryListStatistics(footer: model.listState.footerState)
                     Spacer()
                     // 始终保留操作栏的位置，加载或切换选择只改启用状态，避免右侧整块出现/消失。
-                    Group {
-                        let selected = model.items.first(where: { $0.id == model.selectedID })
-                        Menu {
-                            ForEach(model.categories) { category in
-                                let included = model.selectedMetadata?.summary.id == selected?.id && model.selectedMetadata?.categoryIDs.contains(category.id) == true
-                                Button { if let selected { model.setCategory(selected.id, categoryID: category.id, included: !included) } } label: {
-                                    if included { Label(category.name, systemImage: "checkmark") } else { Text(category.name) }
-                                }
-                            }
-                            Divider(); Button("新建分类…") { model.editCategory() }
-                        } label: { if compact { Image(systemName: "folder") } else { Label("分类", systemImage: "folder") } }
-                            .menuStyle(.borderlessButton).fixedSize().disabled(selected == nil || model.selectedMetadata?.summary.id != selected?.id)
-                        Button { if let selected { model.change(.favorites(model.orderedSelection, !selected.isFavorite)) } } label: { Image(systemName: selected?.isFavorite == true ? "star.fill" : "star").foregroundStyle(selected?.isFavorite == true ? Color.orange : Color.secondary).frame(width: 18) }.buttonStyle(.plain).help("收藏/取消收藏")
-                        Button { model.showingDetail.toggle() } label: { if compact { Image(systemName: "arrow.up.left.and.arrow.down.right") } else { Label("详情", systemImage: "arrow.up.left.and.arrow.down.right") } }.buttonStyle(.plain)
-                            .popover(isPresented: $model.showingDetail, arrowEdge: .top) { ClipInspector(model: model).frame(width: 590, height: 520) }
-                        Divider().frame(height: 20)
-                        // 窄屏保留所有动作，以图标缩短底栏，避免正文状态把右侧按钮推出视口。
-                        Button { model.perform(.plainText, action: .copy) } label: {
-                            if compact { Image(systemName: "textformat") } else { Text("纯文本复制") }
-                        }.disabled(model.selectedMetadata?.hasTextRepresentations != true).buttonStyle(.plain).foregroundStyle(.secondary).help("纯文本复制")
-                        // 明示面板记住的应用，避免把向后台窗口发送测试输入误认为已激活该应用。
-                        Button { model.perform(action: .directPaste) } label: { if compact { Image(systemName: "arrow.turn.down.left") } else { Label("直接粘贴", systemImage: "arrow.turn.down.left") } }.buttonStyle(.plain)
-                            .help("粘贴到：\(MacApplicationClient.targetName(model.target))；请确认目标输入位置")
-                            .accessibilityLabel("直接粘贴到：\(MacApplicationClient.targetName(model.target))")
-                        Button { model.perform(action: .copy) } label: { HStack(spacing: 12) { Text("复制").fontWeight(.semibold); Text("⌘C").font(.system(size: 10)).opacity(0.7) }.padding(.horizontal, 17).padding(.vertical, 7) }
-                            .buttonStyle(.plain).foregroundStyle(.white).background(Color(red: 0.23, green: 0.43, blue: 0.94), in: Capsule()).keyboardShortcut("c", modifiers: .command)
-                    }.disabled(model.selectedID == nil)
+                    HistorySelectionActions(model: model, footer: model.listState.footerState, compact: compact)
                 }.padding(.horizontal, 24).frame(height: footerHeight)
             // 顶部保留圆角，底边与屏幕贴合，不留可拖动的悬浮窗口边距。
             }.frame(width: viewport.size.width, height: viewport.size.height, alignment: .top)
@@ -183,15 +116,6 @@ public struct HistoryView: View {
                 .onGeometryChange(for: CGSize.self) { CGSize(width: $0.size.width, height: cardHeight) } action: { size in
                     model.configureHistoryViewport(width: size.width, cardWidth: size.height)
                 }
-                .background {
-                    #if DEBUG
-                    if GUIAcceptanceProbe.configuration != nil {
-                        GUIRenderWitness(displayCycle: model.focusRequest, query: model.query, generation: model.guiQueryGeneration, first: model.items.first?.preview, firstID: model.items.first?.id, firstImage: model.items.first?.kind == .image, ready: model.items.first?.kind != .image || GUIAcceptanceProbe.imageReadyIDs.contains(model.items.first?.id ?? ""), loading: model.loading).frame(width: 1, height: 1)
-                    }
-                    #else
-                    EmptyView()
-                    #endif
-                }
                 .onChange(of: model.favorites) { _, _ in model.searchChanged() }
                 .onChange(of: model.categoryID) { _, _ in model.searchChanged() }
                 .onChange(of: model.categoryFilters) { _, _ in model.searchChanged() }
@@ -200,7 +124,6 @@ public struct HistoryView: View {
                 .onChange(of: model.dateFrom) { _, _ in if model.dateFilterEnabled { model.searchChanged() } }
                 .onChange(of: model.dateUntil) { _, _ in if model.dateFilterEnabled { model.searchChanged() } }
                 .onChange(of: model.kind) { _, _ in model.searchChanged() }
-                .onChange(of: model.selectedID) { _, _ in model.showingDetail = false }
                 .onChange(of: model.showingDetail) { _, _ in model.detailVisibilityChanged() }
                 .onChange(of: model.showingCategoryEditor) { _, _ in model.panelInteractionChanged?() }
         }.frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -225,6 +148,162 @@ public struct HistoryView: View {
     }
     /// 类型名称与新增文件筛选保持一致。
     public static func kindName(_ kind: ClipKind) -> String { switch kind { case .text: "文本"; case .url: "链接"; case .richText: "富文本"; case .image: "图片"; case .file: "文件"; case .mixed: "混合" } }
+}
+
+// 输入只让搜索框与列表读取，不引起工具栏、分类行和整条底栏重算，by AI.Coding。
+private struct HistorySearchInput: View {
+    let model: HistoryViewModel
+    @ObservedObject var input: HistoryQueryState
+    let focus: UUID
+    var body: some View {
+        SearchField(text: $input.literal, focus: focus, onChange: model.searchChanged,
+            onNavigate: model.navigate, onEnter: { model.focusResults?() }, onEscape: { model.closePanel?() }, onDelete: model.deleteSelected)
+    }
+}
+private struct HistoryStrip: View {
+    let model: HistoryViewModel
+    @ObservedObject var list: HistoryListState
+    let cardHeight: CGFloat
+    let availableCardHeight: CGFloat
+    let categoryID: String?
+    let categories: [ClipCategory]
+    let target: TargetToken?
+    let draggedIDs: Set<ClipID>
+    let hideContents: Bool
+    let focusRequest: UUID
+    @State private var scrollPosition = ScrollPosition(edge: .leading)
+    @State private var scrollWheelState = HistoryScrollWheel.State()
+    var body: some View {
+        ZStack {
+            if model.items.isEmpty {
+                HistoryEmptyState(input: model.queryState, categoryID: categoryID, loading: list.snapshot.loading)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollViewReader { proxy in
+                    ScrollView(.horizontal) {
+                        LazyHStack(spacing: 16) {
+                            ForEach(Array(model.items.enumerated()), id: \.element.id) { index, item in
+                                ClipCard(item: item, index: index, selected: model.selectedIDs.contains(item.id), dragging: draggedIDs.contains(item.id), height: cardHeight, categoryID: categoryID, categories: categories, target: target, model: model).equatable().id(item.id)
+                            }
+                            if model.hasMore {
+                                Button(action: model.loadMore) {
+                                    VStack(spacing: 10) {
+                                        if model.loading { ProgressView() } else { Image(systemName: "arrow.right").font(.title2) }
+                                        Text(model.loading ? "正在读取…" : "更多历史")
+                                    }.frame(width: 130, height: cardHeight)
+                                }.buttonStyle(.plain)
+                            }
+                        }.padding(.horizontal, 24).padding(.vertical, 10)
+                    }.scrollIndicators(.visible)
+                        .scrollPosition($scrollPosition)
+                        .onScrollGeometryChange(for: HistoryScrollMetrics.self) { geometry in
+                            HistoryScrollMetrics(offset: max(0, geometry.contentOffset.x), maximum: max(0, geometry.contentSize.width - geometry.containerSize.width), viewport: geometry.containerSize.width)
+                        } action: { _, metrics in scrollWheelState.update(metrics); model.historyScrolled(offset: metrics.offset) }
+                        .background(HistoryScrollWheel(state: scrollWheelState) { x in scrollPosition.scrollTo(x: x) })
+                        .onChange(of: model.selectedID) { _, id in
+                            if let id, let index = model.items.firstIndex(where: { $0.id == id }), scrollWheelState.needsReveal(index: index, cardWidth: cardHeight) {
+                                proxy.scrollTo(id)
+                            }
+                        }
+                        .onChange(of: model.scrollRestoration) { _, restore in
+                            if let restore { scrollPosition.scrollTo(x: restore.offset) }
+                        }
+                }
+            }
+        }.frame(maxWidth: .infinity).frame(height: availableCardHeight + 20).clipped().blur(radius: hideContents ? 16 : 0).allowsHitTesting(!hideContents)
+        .background {
+            #if DEBUG
+            if GUIAcceptanceProbe.configuration != nil {
+                GUIRenderWitness(displayCycle: model.focusRequest, query: model.query, generation: model.guiQueryGeneration, first: model.items.first?.preview, firstID: model.items.first?.id, firstImage: model.items.first?.kind == .image, ready: model.items.first?.kind != .image || GUIAcceptanceProbe.imageReadyIDs.contains(model.items.first?.id ?? ""), loading: model.historyBusy).frame(width: 1, height: 1)
+            }
+            #else
+            EmptyView()
+            #endif
+        }
+        .onChange(of: list.snapshot.selectedID) { _, _ in if model.showingDetail { model.showingDetail = false } }
+    }
+}
+/// 搜索词只让空结果提示订阅，避免每个输入字符重建整条卡片列表，by AI.Coding。
+private struct HistoryEmptyState: View {
+    @ObservedObject var input: HistoryQueryState
+    let categoryID: String?
+    let loading: Bool
+    var body: some View {
+        let emptyQuery = input.literal.isEmpty
+        VStack(spacing: 12) {
+            Image(systemName: emptyQuery ? "square.on.square" : "magnifyingglass").font(.system(size: 38, weight: .ultraLight)).foregroundStyle(.secondary)
+            Text(loading ? "正在读取历史…" : emptyQuery ? categoryID == nil ? "下一次复制，就从这里开始" : "这个分类还没有记录" : "没有匹配的历史").font(.system(size: 18, weight: .semibold))
+            Text(emptyQuery ? categoryID == nil ? "文字、链接、图片、富文本和文件引用，只保存在这台 Mac。" : "回到剪贴板历史，把记录拖到这个分类标签。" : "中文短词、代码符号和链接片段，均按字面查找。").font(.system(size: 12)).foregroundStyle(.secondary)
+        }
+    }
+}
+// 底栏只有统计和选择动作订阅列表，状态文本及其他界面不订阅，by AI.Coding。
+private struct HistoryListStatistics: View {
+    @ObservedObject var footer: HistoryFooterState
+    var body: some View {
+        let value = footer.snapshot
+        HStack(spacing: 12) {
+            ZStack { if value.loading { ProgressView().controlSize(.small) } }.frame(width: 14, height: 14)
+            Text("\(value.selectedCount > 1 ? "已选\(value.selectedCount) · " : "")\(value.itemCount)\(value.hasMore ? "+" : "") 条")
+                .font(.system(size: 11)).foregroundStyle(.secondary)
+        }
+    }
+}
+private struct HistorySelectionActions: View {
+    @ObservedObject var model: HistoryViewModel
+    @ObservedObject var footer: HistoryFooterState
+    let compact: Bool
+    var body: some View {
+        let value = footer.snapshot
+            Group {
+                let selected = value.selectedItem
+                if compact {
+                    Menu {
+                        Section("分类") {
+                            ForEach(model.categories) { category in
+                                let included = value.selectedMetadata?.summary.id == selected?.id && value.selectedMetadata?.categoryIDs.contains(category.id) == true
+                                Button { if let selected { model.setCategory(selected.id, categoryID: category.id, included: !included) } } label: {
+                                    if included { Label(category.name, systemImage: "checkmark") } else { Text(category.name) }
+                                }
+                            }
+                            Button("新建分类…") { model.editCategory() }
+                        }
+                        Button(selected?.isFavorite == true ? "取消收藏" : "收藏") {
+                            if let selected { model.change(.favorites(model.orderedSelection, !selected.isFavorite)) }
+                        }.disabled(selected == nil)
+                        Button("纯文本复制") { model.perform(.plainText, action: .copy) }
+                            .disabled(value.selectedMetadata?.hasTextRepresentations != true || selected == nil)
+                    } label: { Label("更多", systemImage: "ellipsis.circle") }
+                        .menuStyle(.borderlessButton).fixedSize().disabled(selected == nil)
+                } else {
+                    Menu {
+                        ForEach(model.categories) { category in
+                            let included = value.selectedMetadata?.summary.id == selected?.id && value.selectedMetadata?.categoryIDs.contains(category.id) == true
+                            Button { if let selected { model.setCategory(selected.id, categoryID: category.id, included: !included) } } label: {
+                                if included { Label(category.name, systemImage: "checkmark") } else { Text(category.name) }
+                            }
+                        }
+                        Divider(); Button("新建分类…") { model.editCategory() }
+                    } label: { Label("分类", systemImage: "folder") }
+                        .menuStyle(.borderlessButton).fixedSize().disabled(selected == nil || value.selectedMetadata?.summary.id != selected?.id)
+                    Button { if let selected { model.change(.favorites(model.orderedSelection, !selected.isFavorite)) } } label: { Image(systemName: selected?.isFavorite == true ? "star.fill" : "star").foregroundStyle(selected?.isFavorite == true ? Color.orange : Color.secondary).frame(width: 18) }.buttonStyle(.plain).help("收藏/取消收藏")
+                }
+                Button { model.showingDetail.toggle() } label: { if compact { Image(systemName: "arrow.up.left.and.arrow.down.right") } else { Label("详情", systemImage: "arrow.up.left.and.arrow.down.right") } }.buttonStyle(.plain)
+                    .accessibilityLabel("详情").help("详情")
+                    .popover(isPresented: $model.showingDetail, arrowEdge: .top) { ClipInspector(model: model).frame(width: 590, height: 520) }
+                Divider().frame(height: 20)
+                if !compact {
+                    Button { model.perform(.plainText, action: .copy) } label: { Text("纯文本复制") }
+                        .disabled(value.selectedMetadata?.hasTextRepresentations != true).buttonStyle(.plain).foregroundStyle(.secondary).help("纯文本复制")
+                }
+                // 明示面板记住的应用，避免把向后台窗口发送测试输入误认为已激活该应用。
+                Button { model.perform(action: .directPaste) } label: { Label("直接粘贴", systemImage: "arrow.turn.down.left") }.buttonStyle(.plain)
+                    .help("粘贴到：\(MacApplicationClient.targetName(model.target))；请确认目标输入位置")
+                    .accessibilityLabel("直接粘贴到：\(MacApplicationClient.targetName(model.target))")
+                Button { model.perform(action: .copy) } label: { HStack(spacing: compact ? 4 : 12) { Text("复制").fontWeight(.semibold); Text("⌘C").font(.system(size: compact ? 9 : 10)).opacity(0.7) }.padding(.horizontal, compact ? 7 : 17).padding(.vertical, 7) }
+                    .buttonStyle(.plain).foregroundStyle(.white).background(Color(red: 0.23, green: 0.43, blue: 0.94), in: Capsule()).keyboardShortcut("c", modifiers: .command)
+            }.disabled(value.selectedID == nil)
+    }
 }
 private struct CategoryEditor: View {
     @ObservedObject var model: HistoryViewModel
@@ -343,7 +422,7 @@ private struct ClipCard: View, Equatable {
             .background {
                 #if DEBUG
                 if GUIAcceptanceProbe.configuration != nil, index == 0 {
-                    GUIRenderWitness(displayCycle: model.focusRequest, query: model.query, generation: model.guiQueryGeneration, first: item.preview, firstID: item.id, firstImage: item.kind == .image, ready: item.kind != .image || thumbnail != nil, loading: model.loading).frame(width: 1, height: 1)
+                    GUIRenderWitness(displayCycle: model.focusRequest, query: model.query, generation: model.guiQueryGeneration, first: item.preview, firstID: item.id, firstImage: item.kind == .image, ready: item.kind != .image || thumbnail != nil, loading: model.historyBusy).frame(width: 1, height: 1)
                 }
                 #else
                 EmptyView()
@@ -428,9 +507,9 @@ private struct ClipCard: View, Equatable {
             VStack(alignment: .leading, spacing: 10) { Image(systemName: "link").font(.system(size: 22, weight: .light)).foregroundStyle(tint); Text(URL(string: item.preview)?.host ?? "链接").font(.system(size: 15, weight: .semibold, design: .rounded)).lineLimit(1); Text(item.context).font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary).lineLimit(4); Spacer(minLength: 0) }.padding(14)
         } else {
             // 卡片正文自动高亮代码，普通内容保持原有排版，by AI.Coding。
-            SyntaxText(text: item.context, size: tiny ? 10 : height < 210 ? 13 : 15, onLanguage: { detectedLanguage = $0 })
+            SyntaxText(text: item.context, size: tiny ? 10 : height < 200 ? 10 : height < 210 ? 13 : 15, onLanguage: { detectedLanguage = $0 })
                 .lineSpacing(tiny ? 0 : 3).frame(maxWidth: .infinity, alignment: .topLeading)
-                .padding(.horizontal, tiny ? 6 : 14).padding(.top, tiny ? 3 : 10).padding(.bottom, tiny ? 0 : 4)
+                .padding(.horizontal, tiny || height < 200 ? 6 : 14).padding(.top, tiny ? 3 : 10).padding(.bottom, tiny ? 0 : 4)
         }
     }
 

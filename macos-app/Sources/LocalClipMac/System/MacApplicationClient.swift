@@ -7,11 +7,16 @@ import LocalClipCore
 @MainActor public final class MacApplicationClient: ApplicationClient {
     private var focusTarget: TargetToken?
     private var rememberedFocus: AXUIElement?
+    private var rememberedTerminalContext: Bool?
     private let logger = Logger(subsystem: "local.localclip.dev", category: "Paste")
     public private(set) var pasteFailureReason: String?
     public init() {}
     /// 只为智能文件转换分类，不收紧原生粘贴焦点检查；不读取输入框正文，by AI.Coding。
     public func pasteTargetKind(_ target: TargetToken) -> PasteTargetKind {
+        pasteTargetKind(target, smartPasteEditorBundleIDs: [])
+    }
+    /// AXWindow仅由用户明确加入的编辑器应用启用，仍拒绝终端应用和终端祖先，by AI.Coding。
+    public func pasteTargetKind(_ target: TargetToken, smartPasteEditorBundleIDs: Set<String>) -> PasteTargetKind {
         guard isAlive(target) else { return .unknown }
         if target.bundleID == "com.apple.finder" { return .files }
         guard permitted, focusTarget == target, let rememberedFocus,
@@ -24,14 +29,20 @@ import LocalClipCore
         if ["AXGroup", "AXDocument", "AXWebArea"].contains(role), editable == nil {
             _ = AXUIElementIsAttributeSettable(focused, kAXSelectedTextRangeAttribute as CFString, &settable)
         }
-        return Self.classifyTextMetadata(role: role, subrole: subrole, editable: editable, selectedRangeSettable: settable.boolValue, bundleID: target.bundleID, terminalContext: terminalContext(focused))
+        let inTerminal = rememberedTerminalContext ?? terminalContext(focused)
+        return Self.classifyTextMetadata(role: role, subrole: subrole, editable: editable, selectedRangeSettable: settable.boolValue,
+                                         bundleID: target.bundleID, terminalContext: inTerminal,
+                                         smartPasteEditorBundleIDs: smartPasteEditorBundleIDs)
     }
     /// 文本角色与明确编辑能力是转换依据；安全文本、只读及未知画布都保持原文件，by AI.Coding。
-    static func classifyTextMetadata(role: String, subrole: String, editable: Bool?, selectedRangeSettable: Bool, bundleID: String = "", terminalContext: Bool = false) -> PasteTargetKind {
+    static func classifyTextMetadata(role: String, subrole: String, editable: Bool?, selectedRangeSettable: Bool,
+                                     bundleID: String = "", terminalContext: Bool = false,
+                                     smartPasteEditorBundleIDs: Set<String> = []) -> PasteTargetKind {
         // 终端的文本角色不能证明是编辑器，未知窗口也不做整文件转换。
         let terminals: Set<String> = ["com.apple.Terminal", "com.googlecode.iterm2", "dev.warp.Warp-Stable", "dev.warp.Warp", "net.kovidgoyal.kitty", "com.mitchellh.ghostty", "org.alacritty", "io.alacritty"]
         guard !terminals.contains(bundleID), !terminalContext else { return .unknown }
         guard subrole != "AXSecureTextField", editable != false else { return .unknown }
+        if role == "AXWindow" { return smartPasteEditorBundleIDs.contains(bundleID) ? .text : .unknown }
         if ["AXTextArea", "AXTextField", "AXSearchField"].contains(role) { return .text }
         if ["AXGroup", "AXDocument", "AXWebArea"].contains(role), editable == true || selectedRangeSettable { return .text }
         return .unknown
@@ -39,12 +50,13 @@ import LocalClipCore
     /// 只查询控件身份/描述及祖先，不读取正文；嵌入式终端保持文件行为。
     private func terminalContext(_ element: AXUIElement) -> Bool {
         var current: AXUIElement? = element
-        for _ in 0..<16 {
+        for _ in 0..<8 {
             guard let node = current else { break }
             for name in ["AXIdentifier", "AXDescription", "AXRoleDescription"] {
                 if let value = attribute(name, of: node) as? String,
                    Self.isTerminalMetadata(value) { return true }
             }
+            if (attribute(kAXRoleAttribute, of: node) as? String) == "AXWindow" { break }
             guard let parent = attribute("AXParent", of: node), CFGetTypeID(parent) == AXUIElementGetTypeID(),
                   !CFEqual(parent, node) else { break }
             current = (parent as! AXUIElement)
@@ -83,7 +95,7 @@ import LocalClipCore
     public func isFrontmost(_ target: TargetToken) -> Bool { isAlive(target) && NSWorkspace.shared.frontmostApplication?.processIdentifier == target.pid }
     /// 打开面板前只记住目标焦点身份，不读取控件内容；无授权时保留复制回退。
     public func rememberFocus(for target: TargetToken?) {
-        focusTarget = target; rememberedFocus = nil; pasteFailureReason = nil
+        focusTarget = target; rememberedFocus = nil; rememberedTerminalContext = nil; pasteFailureReason = nil
         guard let target, permitted, isFrontmost(target) else {
             reject(permitted ? "未记住目标焦点，请在目标应用重新打开历史" : "当前LocalClip尚未获得辅助功能权限")
             return
@@ -91,6 +103,7 @@ import LocalClipCore
         // 不在捕获焦点时切换Electron的辅助模式：实际VS Code会重建AX控件身份，
         // 使原焦点检查失效。直接读取当前已暴露的编辑控件元数据，保持目标状态不变。
         rememberedFocus = focusedElement(in: target)
+        if let rememberedFocus { rememberedTerminalContext = terminalContext(rememberedFocus) }
         logger.notice("stage=remember_focus pid=\(target.pid) captured=\(self.rememberedFocus != nil)")
     }
     /// 核对原焦点即可；编辑器、文档、画布等由目标应用处理原生粘贴。

@@ -10,7 +10,11 @@ struct SearchRetentionQuotaTests {
         let store = try HistoryStore(location: root)
         let original = "before\u{0}After cafe\u{301} 👩🏽‍💻 end"
         let id = insertedID(try await store.ingest(fixture(original), at:SystemClock().now()))
-        for query in ["after", "\u{0}After", "Café", "👩🏽‍💻"] { #expect(try await store.search(.init(query)).items.map(\.id) == [id]) }
+        for query in ["after", "\u{0}After", "Café", "👩🏽‍💻"] {
+            let page = try await store.search(.init(query))
+            #expect(page.items.map(\.id) == [id])
+            #expect(page.items.first?.context == SearchNormalizer.context(original, literal: query))
+        }
         #expect(try await store.detail(id:id,at:SystemClock().now()).payload.items[0].plainText == original)
         #expect(SearchNormalizer.context(original,literal:"Café").contains("cafe\u{301}"))
         #expect(SearchNormalizer.context(original,literal:"👩🏽‍💻").contains("👩🏽‍💻"))
@@ -28,6 +32,7 @@ struct SearchRetentionQuotaTests {
             let page = try await store.search(.init(query))
             #expect(page.items.map(\.id) == [ids[index]])
             #expect(page.items.first?.context.isEmpty == false)
+            #expect(page.items.first?.context == SearchNormalizer.context(texts[index], literal: query))
         }
         for index in 0..<55 { _ = try await store.ingest(fixture("page-\(index)"), at: clock.now()); clock.advance(1) }
         let first = try await store.search(.init("page-")); #expect(first.items.count == 50)
@@ -35,6 +40,62 @@ struct SearchRetentionQuotaTests {
         #expect(Set(first.items.map(\.id)).isDisjoint(with: second.items.map(\.id)))
         _ = try await store.ingest(fixture("page-new"), at: clock.now())
         do { _ = try await store.search(.init("page-", cursor: first.next)); Issue.record("旧分页未失效") } catch { #expect(error as? StoreError == .invalidCursor) }
+    }
+    /// 字面扩展只复查前一结果ID，排序、摘要上下文与全量查询完全一致，by AI.Coding。
+    @Test func extendedLiteralSearchPreservesFullRankingAndContext() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let clock = TestClock(), store = try HistoryStore(location: root, clock: clock)
+        let pairs = [
+            ("需求", "需求管理"), ("代", "代码"), ("foo_bar", "foo_bar ="), ("50%", "50%;"),
+            ("a->b", "a->b;"), ("?a=1&b=2", "?a=1&b=2#section"), ("END-9999", "END-9999-tail"),
+            ("fixture-1234", "fixture-1234 extended"), ("missing-literal", "missing-literal-suffix"),
+            ("The local", "The local clipboard")
+        ]
+        for (literal, extended) in pairs {
+            _ = try await store.ingest(fixture("prefix-only: \(literal)"), at: clock.now()); clock.advance(1)
+            _ = try await store.ingest(fixture("extended: \(extended)"), at: clock.now()); clock.advance(1)
+        }
+        for (literal, extended) in pairs {
+            let previous = try await store.search(.init(literal))
+            #expect(previous.items.count >= 1)
+            #if DEBUG
+            let narrowedBefore = await store.narrowedSearchCount
+            #endif
+            let request = SearchRequest(extended)
+            let narrowed = try await store.search(request)
+            let full = try await store.search(request, onlyIDs: nil)
+            #expect(narrowed.items.map { ($0.id, $0.context) }.map { "\($0.0)|\($0.1)" } == full.items.map { ($0.id, $0.context) }.map { "\($0.0)|\($0.1)" })
+            #if DEBUG
+            #expect(await store.narrowedSearchCount == narrowedBefore + 1)
+            #endif
+        }
+        let longTail = "The local " + String(repeating: "unrelated body ", count: 24) + "The local clipboard destination"
+        let longTailID = insertedID(try await store.ingest(fixture(longTail), at: clock.now())); clock.advance(1)
+        _ = try await store.search(.init("The local"))
+        let tailRequest = SearchRequest("The local clipboard")
+        let narrowedTail = try await store.search(tailRequest)
+        let fullTail = try await store.search(tailRequest, onlyIDs: nil)
+        #expect(narrowedTail.items.map(\.id) == fullTail.items.map(\.id))
+        #expect(narrowedTail.items.contains { $0.id == longTailID })
+        #expect(narrowedTail.items.map(\.context) == fullTail.items.map(\.context))
+        #expect(narrowedTail.items.first { $0.id == longTailID }?.context.contains("destination") == true)
+
+        let sourcePayload = ClipboardPayload([.init([.init(SupportedType.string, Data("source-only marker".utf8))])])
+        let sourceSnapshot = ClipboardSnapshot(payload: sourcePayload, source: .init(bundleID: "test.source", name: "The local clipboard source"))
+        let sourceID = insertedID(try await store.ingest(sourceSnapshot, at: clock.now())); clock.advance(1)
+        _ = try await store.search(.init("The local"))
+        let sourceRequest = SearchRequest("The local clipboard source")
+        let narrowedSource = try await store.search(sourceRequest)
+        let fullSource = try await store.search(sourceRequest, onlyIDs: nil)
+        #expect(narrowedSource.items.map { ($0.id, $0.context) }.map { "\($0.0)|\($0.1)" } == fullSource.items.map { ($0.id, $0.context) }.map { "\($0.0)|\($0.1)" })
+        #expect(narrowedSource.items.first?.id == sourceID)
+        #expect(narrowedSource.items.first?.context == "The local clipboard source")
+        _ = try await store.search(.init("The local"))
+        let updatedSource = ClipboardSnapshot(payload: sourcePayload, source: .init(bundleID: "test.source", name: "The local refreshed source"))
+        _ = try await store.ingest(updatedSource, at: clock.now())
+        let refreshed = try await store.search(.init("The local"))
+        #expect(refreshed.items.first { $0.id == sourceID }?.context == "The local refreshed source")
     }
     /// 到期即不可访问；收藏例外；取消过期收藏需要确认。
     @Test func AC12_AC19_AC20_retentionAndExpiredUnfavorite() async throws {
@@ -96,6 +157,7 @@ struct SearchRetentionQuotaTests {
         clock.advance(1)
         let ordinary = insertedID(try await store.ingest(image(2, 70_000), at: clock.now()))
         settings = try await store.settings(); settings.quotaBytes = try await store.usage().measuredTotal + 64 * 1024
+        await store.waitForPageCacheWarmupForTesting()
         let db = try SQLiteConnection(root.appendingPathComponent("History/history.sqlite")); try db.configure(); try Schema.writeSettings(db, settings); try db.close()
         let old = try Data(contentsOf: root.appendingPathComponent("History/history.sqlite"))
         do { _ = try await store.ingest(image(3, 300_000), at: clock.now()); Issue.record("不可能容量仍成功") } catch { #expect(error as? StoreError == .quotaExceeded) }
@@ -114,6 +176,7 @@ struct SearchRetentionQuotaTests {
         let store = try HistoryStore(location: root)
         let id = insertedID(try await store.ingest(fixture("FULL-TAIL-需求"), at: SystemClock().now()))
         let detail = try await store.detail(id: id, at: SystemClock().now())
+        await store.waitForPageCacheWarmupForTesting()
         let strategy = try CommitStrategy(root: root)
         try strategy.read { try $0.exec("DELETE FROM text_content") }
         #expect(try await store.search(.init("需求")).items.count == 1)

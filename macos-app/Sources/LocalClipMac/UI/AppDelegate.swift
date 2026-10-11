@@ -204,7 +204,7 @@ import LocalClipCore
         model.panelVisibilityChanged(true)
         model.target = lastExternal
         model.revalidateVisibleContent()
-        if model.items.isEmpty && !model.loading { model.refresh() }
+        if model.items.isEmpty && !model.historyBusy { model.refresh() }
         let initialFrame = NSRect(x: rect.minX, y: rect.minY, width: rect.width, height: min(max(280,model.settings.panelHeight), min(520,rect.height)))
         if panel == nil {
             // 非激活面板保留外部应用身份与文档焦点；搜索框仍可成为key接收键盘。

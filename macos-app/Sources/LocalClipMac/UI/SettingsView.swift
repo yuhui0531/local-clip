@@ -28,6 +28,11 @@ public struct SettingsView: View {
                         if let deadline = model.settings.pauseUntil, deadline > SystemClock().now() { Text("暂停至 " + Date(timeIntervalSince1970: Double(deadline)/1000).formatted()).font(.caption) }
                         Toggle("代码文件智能粘贴", isOn: Binding(get: { model.settings.smartCodeFilePaste }, set: { value in model.updateSettings { $0.smartCodeFilePaste = value } }))
                         Text("默认关闭。开启后，确认是文本编辑目标时粘贴代码文件正文；Finder、未知目标或读取失败仍保留原文件。代码片段语法高亮始终启用。多文件按顺序用换行分隔；每文件最多4MiB，合计8MiB。").font(.caption).foregroundStyle(.secondary)
+                        ForEach(model.settings.smartPasteEditorBundleIDs.sorted(), id: \.self) { id in
+                            HStack { Text(id); Spacer(); Button("移除") { model.updateSettings { $0.smartPasteEditorBundleIDs.remove(id) } } }
+                        }
+                        Button("选择可识别的编辑器应用…", action: chooseSmartPasteEditor)
+                        Text("仅将所选应用未暴露文本控件的AXWindow视为编辑器。所选应用的窗口（包括其中未被识别为终端的终端面板）可能收到文件正文；终端应用及已标记的终端上下文仍被排除。默认没有应用获准。").font(.caption).foregroundStyle(.secondary)
                         Toggle("记录时播放提示音", isOn: Binding(get: { model.settings.captureSounds }, set: { value in model.updateSettings { $0.captureSounds = value } }))
                         Toggle("显示菜单栏图标", isOn: Binding(get: { model.settings.showMenuIcon }, set: { value in model.updateSettings { $0.showMenuIcon = value } }))
                         Picker("数字1–9快捷粘贴修饰键", selection: Binding(get: { model.settings.quickModifiers }, set: { value in model.updateSettings { $0.quickModifiers = value } })) { Text("⌘").tag(UInt32(256)); Text("⌥").tag(UInt32(2048)); Text("⌃").tag(UInt32(4096)); Text("⌘⇧").tag(UInt32(768)) }
@@ -80,16 +85,25 @@ public struct SettingsView: View {
                 Text("支持文本、URL、RTF、简单HTML、PNG/TIFF/JPEG和文件引用；每次32项、表示数据50MiB。文件不备份本体，原件删除后无法恢复。Finder中双击文件复制到当前文件夹。RTFD、云同步、OCR、AI不在此版本。").font(.caption).foregroundStyle(.secondary)
             }.padding(24)
         }.frame(minWidth: 640, minHeight: 600)
-        .onAppear { model.actualPanelHeight = max(280, model.settings.panelHeight); retention = String(model.settings.retentionDays); quota = String(model.settings.quotaBytes / MiB); loginStatus = login.message; permitted = MacApplicationClient().permitted }
+        .onAppear { model.settingsVisibilityChanged(true); model.actualPanelHeight = max(280, model.settings.panelHeight); retention = String(model.settings.retentionDays); quota = String(model.settings.quotaBytes / MiB); loginStatus = login.message; permitted = MacApplicationClient().permitted }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in loginStatus = login.message; permitted = MacApplicationClient().permitted }
-        .onDisappear { stopRecording() }
+        .onDisappear { model.settingsVisibilityChanged(false); stopRecording() }
     }
     /// 应用选择器读取 bundleID，不将名称作为唯一键。
     private func chooseApplication() {
-        let picker = NSOpenPanel(); picker.title = "选择要排除的应用"; picker.directoryURL = URL(fileURLWithPath: "/Applications")
-        picker.canChooseFiles = true; picker.canChooseDirectories = false; picker.allowedContentTypes = [.application]
-        guard picker.runModal() == .OK, let url = picker.url, let bundle = Bundle(url: url)?.bundleIdentifier else { return }
+        guard let bundle = chooseBundleID(title: "选择要排除的应用") else { return }
         model.updateSettings { $0.excludedBundleIDs.insert(bundle) }
+    }
+    /// 使用相同的应用选择器，仅把明确选中的 bundleID加入智能粘贴白名单。
+    private func chooseSmartPasteEditor() {
+        guard let bundle = chooseBundleID(title: "选择可识别的编辑器应用") else { return }
+        model.updateSettings { $0.smartPasteEditorBundleIDs.insert(bundle) }
+    }
+    private func chooseBundleID(title: String) -> String? {
+        let picker = NSOpenPanel(); picker.title = title; picker.directoryURL = URL(fileURLWithPath: "/Applications")
+        picker.canChooseFiles = true; picker.canChooseDirectories = false; picker.allowedContentTypes = [.application]
+        guard picker.runModal() == .OK, let url = picker.url else { return nil }
+        return Bundle(url: url)?.bundleIdentifier
     }
     /// 只捕获本设置窗口内用户主动录制的一次按键。
     private func recordShortcut() {

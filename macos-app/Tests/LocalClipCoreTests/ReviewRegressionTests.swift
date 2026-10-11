@@ -69,12 +69,24 @@ struct ReviewStorageRegressionTests {
         let deletion = try await store.preview(.delete([id])); _ = try await store.apply(deletion.token)
         #expect(try await store.cacheThumbnail(id: id, revision: metadata.revision, data: Data([9])) == false)
     }
+    /// 无关提交不会使同一不可变记录的缩略图任务过期，by AI.Coding。
+    @Test func thumbnailSurvivesUnrelatedIngest() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try HistoryStore(location: root)
+        let id = insertedID(try await store.ingest(fixture("thumbnail-stable"), at: SystemClock().now()))
+        let metadata = try await store.metadata(id: id, at: SystemClock().now())
+        _ = try await store.ingest(fixture("thumbnail-unrelated"), at: SystemClock().now() + 1)
+        #expect(try await store.cacheThumbnail(id: id, revision: metadata.revision, data: Data([4, 2])) == true)
+        #expect(try await store.thumbnail(id: id, at: SystemClock().now()) == Data([4, 2]))
+    }
     /// 旧版缺失索引按批补齐，不淘汰正文；查询仍能按原格式回退。
     @Test func missingIndexRebuiltInBoundedBatches() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let store = try HistoryStore(location: root)
         for index in 0..<7 { _ = try await store.ingest(fixture("rebuild-\(index)-tail"), at: SystemClock().now()) }
+        await store.waitForPageCacheWarmupForTesting()
         let db = try SQLiteConnection(root.appendingPathComponent("History/history.sqlite")); try db.configure(); try db.exec("DELETE FROM text_content"); try db.close()
         #expect(try await store.search(.init("tail")).items.count == 7)
         #expect(try await store.rebuildSearchIndex(limit: 3) == 3)

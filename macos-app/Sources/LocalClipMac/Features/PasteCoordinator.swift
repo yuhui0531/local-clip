@@ -1,6 +1,25 @@
 // 原格式恢复与一次直接粘贴尝试，by AI.Coding。
 import Foundation
 import LocalClipCore
+
+struct SmartPastePlan {
+    let target: TargetToken
+    let targetKind: PasteTargetKind
+    let editorOptInBundleID: String?
+    let contents: CodeFileContents
+    let originalPayload: ClipboardPayload
+    let originalFingerprint: String
+    let textPayload: ClipboardPayload
+    let textFingerprint: String
+    /// 所有智能转换复查集中于一个点；真实应用接收仍由目标应用决定，by AI.Coding。
+    func revalidate(settings: SettingsSnapshot, targetIsSame: Bool, targetIdentityReady: Bool,
+                    fileIdentityCurrent: Bool, clipboardUnchanged: Bool) -> Bool {
+        guard case .text = targetKind else { return false }
+        let editorStillAuthorized = editorOptInBundleID.map { settings.smartPasteEditorBundleIDs.contains($0) } ?? true
+        return settings.smartCodeFilePaste && editorStillAuthorized && targetIsSame && targetIdentityReady && fileIdentityCurrent && clipboardUnchanged
+    }
+}
+
 @MainActor public final class PasteCoordinator {
     private let board: any PasteboardClient
     private let applications: any ApplicationClient
@@ -23,55 +42,33 @@ import LocalClipCore
             var records: [ClipboardPayload] = []
             for id in request.ids { records.append(try await store.loadPayload(id: id, at: clock.now())) }
             let started = ContinuousClock.now
-            // 开关关闭保持原组合逻辑；开启也只读取确认文本目标的整组文件，by AI.Coding。
+            // 目标分类延后到应用焦点恢复后；分类前始终保留原文件表示，by AI.Coding。
             let settings = try await store.settings()
             let smartFiles = settings.smartCodeFilePaste && !records.isEmpty && records.allSatisfy { $0.fileURLs != nil }
-            // 复制没有确定接收目标，始终恢复原文件；仅直接粘贴允许转换正文。
-            let eligible = request.action == .directPaste && smartFiles && !copyFilesToFinder && applications.permitted
-                && request.target.map { applications.isAlive($0) && applications.pasteTargetKind($0) == .text
-                    && (applications.target() == nil || applications.target() == $0) } == true
             let raw = try await Task.detached { try OutputComposer.combine(records, format: smartFiles ? .original : request.format) }.value
+            let smartPasteEligible = smartFiles && request.action == .directPaste && !copyFilesToFinder
+                && applications.permitted && request.target != nil
             var payload = raw
-            var codeContents: CodeFileContents?
-            var codeReadAttempted = false
-            if eligible, let urls = raw.fileURLs {
-                codeReadAttempted = true
-                do { codeContents = try await Task.detached(priority: .userInitiated) { try CodeFileReader.snapshot(urls) }.value }
-                catch let error as CodeFileReadError { smartPasteNotice = error.message }
-                catch { smartPasteNotice = "已保留原文件：文件无法读取" }
-                let enabled = try await store.settings().smartCodeFilePaste
-                if enabled, let target = request.target, applications.pasteTargetKind(target) == .text,
-                   (applications.target() == nil || applications.target() == target), let contents = codeContents {
-                    payload = ClipboardPayload([.init([.init(SupportedType.string, Data(contents.text.utf8))], plainText: contents.text)])
-                }
+            var sourceIdentity: CodeFileReader.IdentitySnapshot?
+            var sourceIdentityError: CodeFileReadError?
+            if smartPasteEligible, let urls = raw.fileURLs {
+                do { sourceIdentity = try await Task.detached { try CodeFileReader.identitySnapshot(urls) }.value }
+                catch let error as CodeFileReadError { sourceIdentityError = error }
+                catch { sourceIdentityError = .unavailable }
             }
-            var converted = payload.fileURLs == nil && raw.fileURLs != nil
-            let prepared = payload
-            var fingerprint = await Task.detached { prepared.fingerprint }.value
-            let originalFingerprint = converted ? await Task.detached { raw.fingerprint }.value : fingerprint
-            // await期间用户新复制不能被长文件读取覆盖；转换结果写入前再次确认开关及目标，by AI.Coding。
-            if converted, let target = request.target {
-                let enabled = try await store.settings().smartCodeFilePaste
-                let currentFiles = await Task.detached { [codeContents] in codeContents?.isCurrent() == true }.value
-                if !enabled || !currentFiles || applications.pasteTargetKind(target) != .text || (applications.target() != nil && applications.target() != target) {
-                    payload = raw; converted = false
-                }
-            }
+            var converted = false
+            var fingerprint = await Task.detached { raw.fingerprint }.value
+            let originalFingerprint = fingerprint
+            var smartPlan: SmartPastePlan?
             // 计算期间删除/到期时不允许恢复。取值再次验证，UI不直接触碰存储。
-            for id in request.ids { _ = try await store.detail(id: id, at: clock.now()) }
-            if converted {
-                let enabled = try await store.settings().smartCodeFilePaste
-                if !enabled || request.target.map({ applications.pasteTargetKind($0) == .text && (applications.target() == nil || applications.target() == $0) }) != true {
-                    payload = raw; converted = false
-                }
-            }
+            for id in request.ids { _ = try await store.metadata(id: id, at: clock.now()) }
             guard board.changeCount == initialCount else { return .failed("剪贴板已变化，请重新选择") }
             var receipt = board.write(payload, fingerprint: converted ? fingerprint : originalFingerprint); capture.recordOwnWrite(receipt)
             // 不确定或关闭开关时恢复原文件；只改自己仍持有的剪贴板，不覆盖用户的新复制，by AI.Coding。
             func restoreFiles() -> Bool {
                 guard converted else { return true }
                 guard board.matches(receipt) else { return false }
-                receipt = board.write(raw, fingerprint: originalFingerprint); capture.recordOwnWrite(receipt)
+                receipt = board.write(smartPlan?.originalPayload ?? raw, fingerprint: smartPlan?.originalFingerprint ?? originalFingerprint); capture.recordOwnWrite(receipt)
                 converted = false; return receipt.successful
             }
             func safeFallback(_ reason: String) -> PasteResult {
@@ -82,9 +79,6 @@ import LocalClipCore
             guard receipt.successful else { return .failed("复制失败，请重试") }
             if copyFilesToFinder, let sources = payload.fileURLs {
                 return await copyFiles(sources, request: request, receipt: receipt)
-            }
-            if converted, try await store.settings().smartCodeFilePaste == false {
-                guard restoreFiles() else { return .failed("剪贴板已变化或复制失败，请重新选择") }
             }
             if request.action == .copy { return board.matches(receipt) ? .copied : .failed("剪贴板已变化，请重新选择") }
             // 权限失败留在面板显示原因，不能先关闭面板让用户以为粘贴无响应。
@@ -124,44 +118,62 @@ import LocalClipCore
                 try await Task.sleep(for: .milliseconds(20))
             }
             guard focusReady else { return safeFallback((applications.pasteFailureReason ?? "原目标焦点未恢复") + "，请手动粘贴") }
-            // 非激活面板打开时，某些应用暂不暴露原文本焦点。恢复后必须重新识别，
-            // 不能把面板期间的一次unknown永久当作文件目标；等待期间的新复制仍不可覆盖。
-            if smartFiles, !converted, !codeReadAttempted, applications.pasteTargetKind(target) == .text,
-               try await store.settings().smartCodeFilePaste, let urls = raw.fileURLs {
-                codeReadAttempted = true
-                do { codeContents = try await Task.detached(priority: .userInitiated) { try CodeFileReader.snapshot(urls) }.value }
+            // 焦点恢复后只分类一次；后续异步边界只复查焦点身份与前台应用，by AI.Coding。
+            let pasteSettings = try await store.settings()
+            if smartPasteEligible, let urls = raw.fileURLs,
+               pasteSettings.smartCodeFilePaste,
+               case .text = applications.pasteTargetKind(target, smartPasteEditorBundleIDs: pasteSettings.smartPasteEditorBundleIDs) {
+                do {
+                    if let sourceIdentity, sourceIdentity.isCurrent() {
+                        let contents = try await Task.detached(priority: .userInitiated) { try CodeFileReader.snapshot(urls) }.value
+                        guard sourceIdentity.matches(contents) else { throw CodeFileReadError.changed }
+                        let textPayload = ClipboardPayload([.init([.init(SupportedType.string, Data(contents.text.utf8))], plainText: contents.text)])
+                        let textFingerprint = await Task.detached { textPayload.fingerprint }.value
+                        let plan = SmartPastePlan(target: target, targetKind: .text,
+                                                  editorOptInBundleID: pasteSettings.smartPasteEditorBundleIDs.contains(target.bundleID) ? target.bundleID : nil,
+                                                  contents: contents,
+                                                  originalPayload: raw, originalFingerprint: originalFingerprint,
+                                                  textPayload: textPayload, textFingerprint: textFingerprint)
+                        smartPlan = plan
+                        let currentFiles = await Task.detached { contents.isCurrent() && sourceIdentity.isCurrent() }.value
+                        for id in request.ids { _ = try await store.metadata(id: id, at: clock.now()) }
+                        let currentSettings = try await store.settings()
+                        guard board.matches(receipt) else { return .failed("剪贴板已变化，请重新选择") }
+                        let currentTarget = applications.target()
+                        let sameTarget = currentTarget.map { $0.pid == plan.target.pid && $0.bundleID == plan.target.bundleID && $0.launchedAt == plan.target.launchedAt } ?? false
+                        let identityReady = applications.permitted && applications.isAlive(target) && applications.isFrontmost(target) && applications.isPasteFocusReady(target)
+                        if !identityReady { return safeFallback("目标已变化，请确认输入位置后手动粘贴") }
+                        if plan.revalidate(settings: currentSettings, targetIsSame: sameTarget,
+                                           targetIdentityReady: identityReady, fileIdentityCurrent: currentFiles,
+                                           clipboardUnchanged: board.matches(receipt)) {
+                            payload = plan.textPayload; fingerprint = plan.textFingerprint; converted = true
+                            receipt = board.write(payload, fingerprint: fingerprint); capture.recordOwnWrite(receipt)
+                            guard receipt.successful else { return .failed("复制失败，请重试") }
+                        } else if !currentFiles { smartPasteNotice = CodeFileReadError.changed.message }
+                    } else if let sourceIdentityError { throw sourceIdentityError }
+                    else { throw CodeFileReadError.changed }
+                }
                 catch let error as CodeFileReadError { smartPasteNotice = error.message }
                 catch { smartPasteNotice = "已保留原文件：文件无法读取" }
-                if let contents = codeContents {
-                    let textPayload = ClipboardPayload([.init([.init(SupportedType.string, Data(contents.text.utf8))], plainText: contents.text)])
-                    let textFingerprint = await Task.detached { textPayload.fingerprint }.value
-                    let currentFiles = await Task.detached { contents.isCurrent() }.value
-                    for id in request.ids { _ = try await store.detail(id: id, at: clock.now()) }
-                    let enabled = try await store.settings().smartCodeFilePaste
-                    guard board.matches(receipt) else { return .failed("剪贴板已变化，请重新选择") }
-                    if enabled, currentFiles, applications.permitted, applications.isFrontmost(target),
-                       applications.isPasteFocusReady(target), applications.pasteTargetKind(target) == .text {
-                        payload = textPayload; fingerprint = textFingerprint; converted = true
-                        receipt = board.write(payload, fingerprint: fingerprint); capture.recordOwnWrite(receipt)
-                        guard receipt.successful else { return .failed("复制失败，请重试") }
-                    }
-                }
-            }
-            if converted {
-                let enabled = try await store.settings().smartCodeFilePaste
-                let currentFiles = await Task.detached { [codeContents] in codeContents?.isCurrent() == true }.value
-                guard board.matches(receipt) else { return .failed("剪贴板已变化，请重新选择") }
-                if !enabled || !currentFiles || applications.pasteTargetKind(target) != .text {
-                    guard restoreFiles() else { return .failed("剪贴板已变化或复制失败，请重新选择") }
-                }
-            }
+            } else if smartPasteEligible, let sourceIdentityError { smartPasteNotice = sourceIdentityError.message }
             // 焦点等待期间删除的记录不能重新发往目标，by AI.Coding。
-            for id in request.ids { _ = try await store.detail(id: id, at: clock.now()) }
-            if converted {
-                let enabled = try await store.settings().smartCodeFilePaste
-                if !enabled || applications.pasteTargetKind(target) != .text {
+            for id in request.ids { _ = try await store.metadata(id: id, at: clock.now()) }
+            if let plan = smartPlan {
+                let currentFiles = await Task.detached { plan.contents.isCurrent() && (sourceIdentity?.isCurrent() == true) }.value
+                let currentSettings = try await store.settings()
+                guard board.matches(receipt) else { return .failed("剪贴板已变化，请重新选择") }
+                let currentTarget = applications.target()
+                let sameTarget = currentTarget.map { $0.pid == plan.target.pid && $0.bundleID == plan.target.bundleID && $0.launchedAt == plan.target.launchedAt } ?? false
+                let identityReady = applications.permitted && applications.isAlive(target) && applications.isFrontmost(target) && applications.isPasteFocusReady(target)
+                if !identityReady { return safeFallback("目标已变化，请确认输入位置后手动粘贴") }
+                if !plan.revalidate(settings: currentSettings, targetIsSame: sameTarget,
+                                    targetIdentityReady: identityReady, fileIdentityCurrent: currentFiles,
+                                    clipboardUnchanged: board.matches(receipt)), converted {
                     guard restoreFiles() else { return .failed("剪贴板已变化或复制失败，请重新选择") }
                 }
+            }
+            guard applications.isAlive(target), applications.isFrontmost(target), applications.isPasteFocusReady(target) else {
+                return safeFallback("目标已变化，请确认输入位置后手动粘贴")
             }
             guard applications.sendPaste(target, ifClipboardUnchanged: { self.board.matches(receipt) }) else {
                 return safeFallback((applications.pasteFailureReason ?? "粘贴指令未发出") + "，请手动粘贴")
@@ -199,7 +211,7 @@ import LocalClipCore
         guard applications.isAlive(target), applications.isFrontmost(target), board.matches(receipt) else {
             return fallback("目标或剪贴板已变化，请重新选择", receipt: receipt)
         }
-        do { for id in request.ids { _ = try await store.detail(id: id, at: clock.now()) } }
+        do { for id in request.ids { _ = try await store.metadata(id: id, at: clock.now()) } }
         catch { return .failed("内容已删除或到期，未复制文件") }
         guard case .success(let current) = await finder.destination(), current == destination,
               applications.isFrontmost(target), board.matches(receipt) else {

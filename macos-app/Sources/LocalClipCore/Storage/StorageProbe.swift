@@ -33,6 +33,7 @@ public enum StorageProbe {
         _ = try await store.ingest(input(2,70_000), at: now + 1)
         // 根据当前schema的真实磁盘占用限定fixture，不沿用旧schema的固定页开销，by AI.Coding。
         settings = try await store.settings(); settings.quotaBytes = try await store.usage().measuredTotal + 64 * 1024
+        await store.waitForPageCacheWarmupForTesting()
         let db = try SQLiteConnection(root.appendingPathComponent("History/history.sqlite")); try db.configure(); try Schema.writeSettings(db, settings); try db.close()
         let bytes = try Data(contentsOf: root.appendingPathComponent("History/history.sqlite"))
         try Data(ContentFingerprint.hash(bytes).utf8).write(to: root.appendingPathComponent("before.sha256"))

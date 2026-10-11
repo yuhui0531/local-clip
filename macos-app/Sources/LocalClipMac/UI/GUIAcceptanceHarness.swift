@@ -134,7 +134,7 @@ import LocalClipCore
                 let revision = try await model.store.settings().revision
                 guard case .inserted = try await model.store.ingest(.init(payload:.init([.init([.init(SupportedType.string, Data("gui-search-cold-\(index)".utf8))])]),revision:revision),at:SystemClock().now()) else { throw StoreError.ioFailure }
                 let deadline = ContinuousClock.now + .seconds(8)
-                while model.items.first?.preview != "gui-search-cold-\(index)" || model.loading {
+                while model.items.first?.preview != "gui-search-cold-\(index)" || model.historyBusy {
                     guard ContinuousClock.now < deadline else { throw StoreError.ioFailure }
                     try await Task.sleep(for:.milliseconds(2))
                 }

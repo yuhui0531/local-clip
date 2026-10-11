@@ -85,7 +85,7 @@ import LocalClipCore
             while !predicate(), ContinuousClock.now < until { try await Task.sleep(for: .milliseconds(5)) }
             #expect(predicate())
         }
-        try await wait { !model.loading && model.items.count == payloads.count }
+        try await wait { !model.historyBusy && model.items.count == payloads.count }
         #expect(Set(model.items.map(\.kind)) == Set(ClipKind.allCases))
         let host = CategoryDropHostingView(rootView: HistoryView(model: model), model: model); host.sizingOptions = []
         let window = NSPanel(contentRect: .init(x: 0, y: 0, width: 1400, height: 340), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
@@ -94,7 +94,7 @@ import LocalClipCore
         window.contentView?.layoutSubtreeIfNeeded()
         // 已显示的托管层无需重建，必须接收之后新建分类的实际视图和持久事件，by AI.Coding。
         let category = try await store.createCategory(name: "提示词", colorHex: "AF52DE")
-        try await wait { !model.loading && model.categories.contains { $0.id == category.id } }
+        try await wait { !model.historyBusy && model.categories.contains { $0.id == category.id } }
         window.contentView?.layoutSubtreeIfNeeded(); try await Task.sleep(for: .milliseconds(100))
         func buttons(_ view: NSView) -> [CategoryDropTarget.CategoryButton] { (view as? CategoryDropTarget.CategoryButton).map { [$0] } ?? view.subviews.flatMap(buttons) }
         let button = try #require(buttons(host).first)
@@ -117,12 +117,12 @@ import LocalClipCore
             info.draggingLocation = point
             #expect(host.draggingUpdated(info) == .copy); #expect(host.performDragOperation(info))
             #expect(!host.performDragOperation(info)); host.concludeDragOperation(info); model.finishDrag(cancelled: false)
-            try await wait { model.message.contains("加入") && !model.loading }
+            try await wait { model.message.contains("加入") && !model.historyBusy }
             #expect(try await store.metadata(id: id, at: SystemClock().now()).categoryIDs.contains(category.id))
         }
         let ids = Array(model.items.prefix(2).map(\.id))
         let multi = try await store.createCategory(name: "多选分类", colorHex: "34C759")
-        try await wait { !model.loading && model.categories.contains { $0.id == multi.id } }
+        try await wait { !model.historyBusy && model.categories.contains { $0.id == multi.id } }
         window.contentView?.layoutSubtreeIfNeeded(); try await Task.sleep(for: .milliseconds(100))
         let multiButton = try #require(buttons(host).first { $0.category?.id == multi.id })
         #expect(host.registeredDraggedTypes.contains(.init(HistoryViewModel.categoryDragType)))
@@ -132,7 +132,7 @@ import LocalClipCore
         let token = model.prepareDrag(ids[0])
         let writers = try await ContentExportProvider.writers(ids: model.orderedSelection, store: store, token: token, register: model.registerDragAccess)
         board.clearContents(); #expect(board.writeObjects(writers)); #expect(host.performDragOperation(info))
-        model.finishDrag(cancelled: false); try await wait { !model.loading && model.message.contains("加入") }
+        model.finishDrag(cancelled: false); try await wait { !model.historyBusy && model.message.contains("加入") }
         for item in model.items {
             let memberships = try await store.metadata(id: item.id, at: SystemClock().now()).categoryIDs
             #expect(memberships.contains(category.id)); #expect(memberships.contains(multi.id) == ids.contains(item.id))

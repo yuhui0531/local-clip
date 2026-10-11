@@ -10,15 +10,18 @@ struct CodeFeaturesTests {
     @Test func defaultOffAndPersistence() async throws {
         var settings = SettingsSnapshot()
         #expect(!settings.smartCodeFilePaste)
+        #expect(settings.smartPasteEditorBundleIDs.isEmpty)
         let original = try JSONEncoder().encode(settings)
         #expect(try JSONDecoder().decode(SettingsSnapshot.self, from: original).smartCodeFilePaste == false)
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let store = try HistoryStore(location: root)
         settings.smartCodeFilePaste = true
+        settings.smartPasteEditorBundleIDs.insert("dev.zed.Zed")
         _ = try await store.updateCaptureSettings(settings)
         let reopened = try HistoryStore(location: root)
         #expect(try await reopened.settings().smartCodeFilePaste)
+        #expect(try await reopened.settings().smartPasteEditorBundleIDs == ["dev.zed.Zed"])
         settings = try await reopened.settings(); settings.smartCodeFilePaste = false
         _ = try await reopened.updateCaptureSettings(settings)
         #expect(try await store.settings().smartCodeFilePaste == false)
@@ -55,6 +58,30 @@ struct CodeFeaturesTests {
         #expect(await SyntaxHighlighter.shared.highlight("<!DOCTYPE html><html><body><h1 class=\"title\">Hello</h1></body></html>") != nil)
         #expect(await SyntaxHighlighter.shared.highlight("Please call me tomorrow morning.") == nil)
     }
+    /// 编辑器允许列表在异步读文件期间撤销后，原智能转换计划必须失效，by AI.Coding。
+    @Test func smartPasteEditorOptInRevocationInvalidatesInFlightPlan() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("editor-policy.swift")
+        try Data("let value = 1".utf8).write(to: file)
+        let contents = try CodeFileReader.snapshot([file])
+        let original = ClipboardPayload([.init([.init(SupportedType.fileURL, Data(file.absoluteString.utf8))])])
+        let text = ClipboardPayload([.init([.init(SupportedType.string, Data(contents.text.utf8))])])
+        let target = TargetToken(pid: 123, bundleID: "dev.zed.Zed", launchedAt: 100)
+        let plan = SmartPastePlan(target: target, targetKind: .text, editorOptInBundleID: target.bundleID,
+                                  contents: contents, originalPayload: original, originalFingerprint: original.fingerprint,
+                                  textPayload: text, textFingerprint: text.fingerprint)
+        var authorized = SettingsSnapshot(); authorized.smartCodeFilePaste = true
+        authorized.smartPasteEditorBundleIDs = [target.bundleID]
+        func valid(_ settings: SettingsSnapshot) -> Bool {
+            plan.revalidate(settings: settings, targetIsSame: true, targetIdentityReady: true,
+                            fileIdentityCurrent: true, clipboardUnchanged: true)
+        }
+        #expect(valid(authorized))
+        authorized.smartPasteEditorBundleIDs.remove(target.bundleID)
+        #expect(!valid(authorized))
+    }
 }
 
 @MainActor struct SmartPasteTests {
@@ -73,12 +100,16 @@ struct CodeFeaturesTests {
             guard case .inserted(let id) = try await store.ingest(.init(payload: .init([.init([.init(SupportedType.fileURL, Data(file.absoluteString.utf8))])]), revision: policy.revision), at: SystemClock().now()) else { Issue.record("fixture"); return }
             apps.targetKind = .unknown; apps.current = nil
             apps.onRestore = { apps.targetKind = .text }
+            apps.classifications = 0; apps.classificationsBeforeRestore = 0; apps.restoreCount = 0
             #expect(await paste.perform(.init(ids: [id], action: .directPaste, target: apps.remembered)) == .commandSent)
+            #expect(apps.classifications == 1); #expect(apps.classificationsBeforeRestore == 0)
             #expect(raw.items.first?[SupportedType.string] == Data(text.utf8))
             #expect(raw.items.first?[SupportedType.fileURL] == nil)
             settings = try await store.settings(); settings.smartCodeFilePaste = false; _ = try await store.updateCaptureSettings(settings)
             apps.targetKind = .unknown; apps.current = nil
+            apps.classifications = 0; apps.classificationsBeforeRestore = 0; apps.restoreCount = 0
             #expect(await paste.perform(.init(ids: [id], action: .directPaste, target: apps.remembered)) == .commandSent)
+            #expect(apps.classifications == 0); #expect(apps.classificationsBeforeRestore == 0)
             #expect(raw.items.first?[SupportedType.fileURL] == Data(file.absoluteString.utf8))
             #expect(try Data(contentsOf: file) == Data(text.utf8))
             settings = try await store.settings(); settings.smartCodeFilePaste = true; _ = try await store.updateCaptureSettings(settings)
@@ -328,6 +359,11 @@ struct CodePerformanceTests {
             #expect(MacApplicationClient.classifyTextMetadata(role: role, subrole: "", editable: nil, selectedRangeSettable: false, bundleID: "dev.zed.Zed") == .unknown)
         }
         #expect(MacApplicationClient.classifyTextMetadata(role: "AXWindow", subrole: "AXStandardWindow", editable: nil, selectedRangeSettable: false, bundleID: "dev.zed.Zed") == .unknown)
+        let allowedEditors: Set<String> = ["dev.zed.Zed"]
+        #expect(MacApplicationClient.classifyTextMetadata(role: "AXWindow", subrole: "AXStandardWindow", editable: nil, selectedRangeSettable: false, bundleID: "dev.zed.Zed", smartPasteEditorBundleIDs: allowedEditors) == .text)
+        #expect(MacApplicationClient.classifyTextMetadata(role: "AXWindow", subrole: "AXStandardWindow", editable: nil, selectedRangeSettable: false, bundleID: "com.example.Editor", smartPasteEditorBundleIDs: allowedEditors) == .unknown)
+        #expect(MacApplicationClient.classifyTextMetadata(role: "AXWindow", subrole: "AXStandardWindow", editable: nil, selectedRangeSettable: false, bundleID: "dev.zed.Zed", terminalContext: true, smartPasteEditorBundleIDs: allowedEditors) == .unknown)
+        #expect(MacApplicationClient.classifyTextMetadata(role: "AXWindow", subrole: "AXStandardWindow", editable: nil, selectedRangeSettable: false, bundleID: "com.apple.Terminal", smartPasteEditorBundleIDs: ["com.apple.Terminal"]) == .unknown)
         #expect(MacApplicationClient.classifyTextMetadata(role: "AXWindow", subrole: "", editable: nil, selectedRangeSettable: false, bundleID: "com.apple.finder") == .unknown)
         #expect(MacApplicationClient.classifyTextMetadata(role: "AXWindow", subrole: "", editable: nil, selectedRangeSettable: false, bundleID: "local.unknown") == .unknown)
     }

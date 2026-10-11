@@ -20,6 +20,8 @@ import LocalClipCore
     private var captureEpoch = UUID()
     public var onState: ((String) -> Void)?
     public var onCommit: (() -> Void)?
+    // 通过隐私策略后只使来源缓存失效，提交事件发布列表后才读取来源，by AI.Coding。
+    public var onSourcePending: ((SourceAttribution) -> Void)?
     public init(board: any PasteboardClient, store: any HistoryRepository, clock: any ClipClock = SystemClock()) {
         self.board = board; self.store = store; self.clock = clock; baseline = board.changeCount
     }
@@ -122,6 +124,7 @@ import LocalClipCore
                         result = .skipped(reason); break
                     }
                     snapshot.policyRevision = persisted.revision
+                    onSourcePending?(snapshot.source)
                     do { result = try await store.ingest(snapshot, at: snapshot.capturedAt); break }
                     catch StoreError.policyChanged { continue }
                 }

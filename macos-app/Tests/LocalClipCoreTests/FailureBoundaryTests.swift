@@ -12,6 +12,7 @@ struct FailureBoundaryTests {
         let oldID = insertedID(try await initial.ingest(.init(payload: .init([.init([.init(SupportedType.png, Data(repeating: 9, count: 128 * 1024))])])), at: SystemClock().now()))
         var settings = try await initial.settings(); settings.quotaBytes = try await initial.usage().measuredTotal
         // 专用fixture注入精确小上限；正式设置仍接受100–4096MiB。
+        await initial.waitForPageCacheWarmupForTesting()
         let db = try SQLiteConnection(root.appendingPathComponent("History/history.sqlite")); try db.configure(); try Schema.writeSettings(db, settings); try db.close()
         let store = try HistoryStore(location: root)
         let file = root.appendingPathComponent("History/history.sqlite"), before = try Data(contentsOf: file)

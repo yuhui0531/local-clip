@@ -22,14 +22,14 @@ import LocalClipCore
         let store = try HistoryStore(location: root), raw = RawBoard()
         for text in ["drag-A", "drag-B", "drag-C"] { _ = try await store.ingest(.init(payload: .init([.init([.init(SupportedType.string, Data(text.utf8))])])), at: SystemClock().now()) }
         let model = model(store, raw); try await model.start(); model.capture.stop()
-        try await until { model.items.count == 3 && !model.loading }
+        try await until { model.items.count == 3 && !model.historyBusy }
         let source = model.items[1].id, other = model.items[0].id
         model.choose(source, modifiers: []); _ = model.prepareDrag(source)
         let access = try await store.exportAccess(id: source); model.registerDragAccess(access)
         model.choose(other, modifiers: []); model.select(other); model.navigate(1)
         #expect(model.selectedID == source); #expect(model.draggedIDs == [source])
         _ = try await store.ingest(.init(payload: .init([.init([.init(SupportedType.string, Data("new-during-drag".utf8))])])), at: SystemClock().now()+1000)
-        try await until { model.items.first?.preview == "new-during-drag" && !model.loading }
+        try await until { model.items.first?.preview == "new-during-drag" && !model.historyBusy }
         #expect(model.selectedID == source)
         #expect(try access.itemData(index: 0, type: SupportedType.string) == Data("drag-B".utf8))
         model.finishDrag(cancelled: true)
@@ -47,13 +47,13 @@ import LocalClipCore
             _ = try await store.ingest(.init(payload: .init([.init([.init(SupportedType.string, Data("removed-drag-\(index)".utf8))])])), at: at + Int64(index))
         }
         let model = model(store, RawBoard()); try await model.start(); model.capture.stop()
-        try await until { model.items.count == 3 && !model.loading }
+        try await until { model.items.count == 3 && !model.historyBusy }
         let source = model.items[1].id, neighbor = model.items[2].id
         if removal == "expire" {
             for id in model.items.map(\.id) where id != source {
                 let preview = try await store.preview(.favorite(id, true)); _ = try await store.apply(preview.token)
             }
-            try await until { model.items.filter { $0.id != source }.allSatisfy(\.isFavorite) && !model.loading }
+            try await until { model.items.filter { $0.id != source }.allSatisfy(\.isFavorite) && !model.historyBusy }
         }
         model.choose(source, modifiers: []); model.showingDetail = true; model.detailVisibilityChanged()
         try await until { model.detail?.summary.id == source }
@@ -63,7 +63,7 @@ import LocalClipCore
             let preview = try await store.preview(.delete(removal == "all" ? model.items.map(\.id) : [source]))
             _ = try await store.apply(preview.token)
         }
-        try await until { !model.items.contains { $0.id == source } && !model.loading }
+        try await until { !model.items.contains { $0.id == source } && !model.historyBusy }
         #expect(model.selectedID == source); #expect(model.draggedIDs == [source])
         model.finishDrag(cancelled: removal != "expire")
         #expect(!model.dragActive); #expect(model.draggedIDs.isEmpty)
@@ -79,22 +79,22 @@ import LocalClipCore
         let store = try HistoryStore(location: root), at = SystemClock().now()
         for index in 0..<count { _ = try await store.ingest(.init(payload: .init([.init([.init(SupportedType.string, Data("growth-\(index)".utf8))])])), at: at + Int64(index)) }
         let model = model(store, RawBoard()); try await model.start(); model.capture.stop()
-        try await until { model.items.count == 50 && !model.loading }
+        try await until { model.items.count == 50 && !model.historyBusy }
         let selected = model.items.first!.id
         for index in 0..<8 {
             let text = "growth-new-\(index)"
             _ = try await store.ingest(.init(payload: .init([.init([.init(SupportedType.string, Data(text.utf8))])])), at: at + 1000 + Int64(index))
-            try await until { model.items.first?.preview == text && !model.loading }
+            try await until { model.items.first?.preview == text && !model.historyBusy }
             #expect(model.items.count == 51 + index); #expect(model.selectedID == selected)
         }
         let pagedCount = min(108, count + 8)
-        model.loadMore(); try await until { model.items.count == pagedCount && !model.loading }
+        model.loadMore(); try await until { model.items.count == pagedCount && !model.historyBusy }
         #expect(model.items.map(\.id) == Array(try await allIDs(store).prefix(pagedCount)))
         let tail = model.items.last!.id
         for index in 8..<11 {
             let text = "growth-new-\(index)"
             _ = try await store.ingest(.init(payload: .init([.init([.init(SupportedType.string, Data(text.utf8))])])), at: at + 1000 + Int64(index))
-            try await until { model.items.first?.preview == text && !model.loading }
+            try await until { model.items.first?.preview == text && !model.historyBusy }
             #expect(model.items.count == pagedCount + index - 7); #expect(model.items.contains { $0.id == tail }); #expect(model.selectedID == selected)
         }
         #expect(model.items.map(\.id) == Array(try await allIDs(store).prefix(pagedCount + 3)))
@@ -114,24 +114,24 @@ import LocalClipCore
         let store = try HistoryStore(location: root), at = SystemClock().now()
         for index in 0..<200 { _ = try await store.ingest(.init(payload: .init([.init([.init(SupportedType.string, Data("boundary-\(index)".utf8))])])), at: at + Int64(index)) }
         let model = model(store, RawBoard()); try await model.start(); model.capture.stop()
-        try await until { model.items.count == 50 && !model.loading }
-        if window == 100 { model.loadMore(); try await until { model.items.count == 100 && !model.loading } }
+        try await until { model.items.count == 50 && !model.historyBusy }
+        if window == 100 { model.loadMore(); try await until { model.items.count == 100 && !model.historyBusy } }
         let oldWindow = Set(model.items.map(\.id)), selected = model.items[window - 1].id
         model.select(selected); model.showingDetail = true; model.detailVisibilityChanged()
         try await until { model.detail?.summary.id == selected }
         _ = try await store.ingest(.init(payload: .init([.init([.init(SupportedType.string, Data("boundary-new".utf8))])])), at: at + 1000)
-        try await until { model.items.first?.preview == "boundary-new" && !model.loading }
+        try await until { model.items.first?.preview == "boundary-new" && !model.historyBusy }
         #expect(oldWindow.isSubset(of: Set(model.items.map(\.id))))
         #expect(model.selectedID == selected); #expect(model.selectedIDs.contains(selected)); #expect(model.detail?.summary.id == selected)
         model.panelVisibilityChanged(false)
         let previousCount = model.items.count
         for index in 0..<75 { _ = try await store.ingest(.init(payload: .init([.init([.init(SupportedType.string, Data("burst-\(index)".utf8))])])), at: at + 2000 + Int64(index)) }
         model.panelVisibilityChanged(true)
-        try await until { model.items.first?.preview == "burst-74" && !model.loading }
+        try await until { model.items.first?.preview == "burst-74" && !model.historyBusy }
         #expect(model.items.count >= previousCount + 75)
         #expect(model.selectedID == selected); #expect(model.detail?.summary.id == selected)
         let deletion = try await store.preview(.delete([selected])); _ = try await store.apply(deletion.token)
-        try await until { !model.items.contains { $0.id == selected } && !model.loading }
+        try await until { !model.items.contains { $0.id == selected } && !model.historyBusy }
         #expect(model.selectedID != selected); #expect(!model.selectedIDs.contains(selected))
     }
     /// 三页浏览与详情在空维护、后台采集及无关收藏提交后仍保持。
@@ -141,22 +141,22 @@ import LocalClipCore
         let store = try HistoryStore(location: root)
         for index in 0..<130 { _ = try await store.ingest(.init(payload: .init([.init([.init(SupportedType.string, Data("history-\(index)".utf8))])])), at: SystemClock().now() + Int64(index)) }
         let model = model(store, RawBoard()); try await model.start(); model.capture.stop()
-        try await until { model.items.count == 50 && !model.loading }
-        model.loadMore(); try await until { model.items.count == 100 && !model.loading }
-        model.loadMore(); try await until { model.items.count == 130 && !model.loading }
+        try await until { model.items.count == 50 && !model.historyBusy }
+        model.loadMore(); try await until { model.items.count == 100 && !model.historyBusy }
+        model.loadMore(); try await until { model.items.count == 130 && !model.historyBusy }
         let selected = model.items[120].id
         model.select(selected); model.showingDetail = true; model.detailVisibilityChanged()
         try await until { model.detail?.summary.id == selected }
         await model.maintenance()
         #expect(model.items.count == 130); #expect(model.selectedID == selected); #expect(model.detail?.summary.id == selected)
         _ = try await store.ingest(.init(payload: .init([.init([.init(SupportedType.string, Data("unrelated-new-copy".utf8))])])), at: SystemClock().now() + 1000)
-        try await until { model.items.first?.preview == "unrelated-new-copy" && !model.loading }
+        try await until { model.items.first?.preview == "unrelated-new-copy" && !model.historyBusy }
         #expect(model.items.count >= 130); #expect(model.selectedID == selected); #expect(model.detail?.summary.id == selected)
         let favorite = try await store.preview(.favorite(model.items[0].id, true)); _ = try await store.apply(favorite.token)
-        try await until { model.items.first?.isFavorite == true && !model.loading }
+        try await until { model.items.first?.isFavorite == true && !model.historyBusy }
         #expect(model.selectedID == selected); #expect(model.detail?.summary.id == selected)
         let deletion = try await store.preview(.delete([selected])); _ = try await store.apply(deletion.token)
-        try await until { !model.items.contains { $0.id == selected } && !model.loading }
+        try await until { !model.items.contains { $0.id == selected } && !model.historyBusy }
         #expect(model.selectedID != model.items.first?.id); #expect(!model.selectedIDs.contains(selected)); #expect(model.detail?.summary.id != selected)
     }
     /// 不变策略和UI偏好保存都不能清空队列；真正暂停清空旧复制。

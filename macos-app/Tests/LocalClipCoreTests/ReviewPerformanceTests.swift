@@ -3,6 +3,86 @@ import Foundation
 import Testing
 @testable import LocalClipCore
 struct ReviewPerformanceTests {
+    /// 延迟至少500ms测捕获后的首个字面查询，并保留提交、冷首查及热查的完整样本，by AI.Coding。
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["LOCALCLIP_R02_WARMUP_BENCHMARK"] == "1"))
+    func pageCacheWarmupBenchmark() async throws {
+        let output = URL(fileURLWithPath: ProcessInfo.processInfo.environment["LOCALCLIP_REVIEW_OUTPUT"]!)
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        let root = output.appendingPathComponent("fixture-store")
+        let manifest = try BenchmarkGenerator.seed(root, output: output)
+        let store = try HistoryStore(location: root)
+        let queries = ["需求", "代", "foo_bar", "50%", "a->b", "?a=1&b=2", "END-9999", "fixture-1234", "missing-literal", "The local"]
+        func milliseconds(_ start: ContinuousClock.Instant) -> Double {
+            let duration = start.duration(to: .now)
+            return Double(duration.components.seconds) * 1000 + Double(duration.components.attoseconds) / 1e15
+        }
+        var warm: [Double] = [], firstAfterCapture: [Double] = [], ingest: [Double] = []
+        for _ in 0..<10 { _ = try await store.search(.init("The local")) }
+        for index in 0..<30 {
+            let query = queries[index % queries.count]
+            let snapshot = ClipboardSnapshot(payload: .init([.init([.init(SupportedType.string, Data("r02-reprobe-\(index) delayed search fixture".utf8))])]), revision: try await store.settings().revision)
+            let ingestStart = ContinuousClock.now
+            guard case .inserted = try await store.ingest(snapshot, at: SystemClock().now()) else { Issue.record("capture not inserted"); return }
+            ingest.append(milliseconds(ingestStart))
+            try await Task.sleep(for: .milliseconds(500))
+            let searchStart = ContinuousClock.now
+            _ = try await store.search(.init(query))
+            firstAfterCapture.append(milliseconds(searchStart))
+        }
+        for index in 0..<100 {
+            let searchStart = ContinuousClock.now
+            _ = try await store.search(.init(queries[index % queries.count]))
+            warm.append(milliseconds(searchStart))
+        }
+        let verified = try SQLiteConnection(root.appendingPathComponent("History/history.sqlite"), readonly: true)
+        let integrity = try verified.scalarText("PRAGMA integrity_check")
+        let foreignKeys = try verified.rows("PRAGMA foreign_key_check")
+        try verified.close()
+        #expect(integrity == "ok"); #expect(foreignKeys.isEmpty)
+        try BenchmarkGenerator.write([
+            "build": "Release", "fixture": manifest["generator"] ?? "", "seed": manifest["seed"] ?? "",
+            "boundary": "HistoryStore service calls; each first literal search starts at least 500ms after its successful capture",
+            "queries": queries, "postCaptureDelayMs": 500, "firstLiteralSearchAfterIngest": BenchmarkGenerator.metrics(firstAfterCapture),
+            "warmSearch": BenchmarkGenerator.metrics(warm), "ingestCommit": BenchmarkGenerator.metrics(ingest),
+            "integrityCheck": integrity, "foreignKeyViolations": foreignKeys.count
+        ], to: output.appendingPathComponent("page-cache-warmup-results.json"))
+    }
+    /// 固定v2数据集上测已预热前缀扩展的服务延迟，原样保留每个样本，by AI.Coding。
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["LOCALCLIP_SEARCH_NARROW_BENCHMARK"] == "1"))
+    func warmExtendedLiteralSearch() async throws {
+        let output = URL(fileURLWithPath: ProcessInfo.processInfo.environment["LOCALCLIP_REVIEW_OUTPUT"]!)
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        let root = output.appendingPathComponent("fixture-store")
+        let manifest = try BenchmarkGenerator.seed(root, output: output)
+        let store = try HistoryStore(location: root)
+        let pairs = [
+            ("需求", "需求，"), ("代", "代码"), ("foo_bar", "foo_bar ="), ("50%", "50%;"),
+            ("a->b", "a->b;"), ("?a=1&b=2", "?a=1&b=2#section"), ("END-9999", "END-9999x"),
+            ("fixture-1234", "fixture-1234 https://"), ("missing-literal", "missing-literalx"),
+            ("The local", "The local clipboard")
+        ]
+        func milliseconds(_ start: ContinuousClock.Instant) -> Double {
+            let duration = start.duration(to: .now)
+            return Double(duration.components.seconds) * 1000 + Double(duration.components.attoseconds) / 1e15
+        }
+        var samples: [Double] = []
+        for index in 0..<100 {
+            let (prefix, extended) = pairs[index % pairs.count]
+            _ = try await store.search(.init(prefix))
+            let started = ContinuousClock.now
+            _ = try await store.search(.init(extended))
+            samples.append(milliseconds(started))
+        }
+        let sorted = samples.sorted()
+        try BenchmarkGenerator.write([
+            "build": "Release", "fixture": manifest["generator"] ?? "", "seed": manifest["seed"] ?? "",
+            "boundary": "HistoryStore.search return; each measured extended literal follows its prefix search",
+            "queries": pairs.map { ["prefix": $0.0, "extended": $0.1] },
+            "samplesMs": samples, "n": samples.count,
+            "p95Ms": sorted[Int(ceil(Double(sorted.count) * 0.95)) - 1], "meanMs": samples.reduce(0, +) / Double(samples.count),
+            "maxMs": sorted.last!
+        ], to: output.appendingPathComponent("extended-search-results.json"))
+    }
     /// 固定真实编码图像给隔离GUI包，生成成本不算粘贴延迟，by AI.Coding。
     @Test(.enabled(if: ProcessInfo.processInfo.environment["LOCALCLIP_GUI_FIXTURES"] == "1"))
     func prepareGUIFixtures() throws {

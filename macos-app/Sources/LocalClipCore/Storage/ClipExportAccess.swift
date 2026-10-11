@@ -33,6 +33,8 @@ public final class ClipExportAccess: Sendable {
         guard try db.scalarInt("PRAGMA user_version") == Schema.version else { throw StoreError.stalePreview }
         guard try db.scalarText("SELECT contentHash FROM clips WHERE id=?", [.text(id)]) == contentHash else { throw StoreError.notFound }
         let settings = try Schema.readSettings(db)
-        guard try db.scalarInt("SELECT COUNT(*) FROM clips WHERE id=? AND (isFavorite=1 OR EXISTS(SELECT 1 FROM clip_categories WHERE clipID=clips.id) OR lastCopiedAtMs>?)", [.text(id), .integer(settings.retentionDays == 0 ? Int64.min : SystemClock().now() - Int64(settings.retentionDays)*dayMS)]) == 1 else { throw StoreError.notFound }
+        let cutoff = retentionCutoff(settings: settings, at: SystemClock().now())
+        guard try db.scalarInt("SELECT COUNT(*) FROM clips WHERE id=? AND (? IS NULL OR (\(protectedSQL)) OR lastCopiedAtMs>?)",
+                               [.text(id), cutoff.map(SQLValue.integer) ?? .null, cutoff.map(SQLValue.integer) ?? .null]) == 1 else { throw StoreError.notFound }
     }
 }

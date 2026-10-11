@@ -7,7 +7,9 @@ import LocalClipCore
     public let capture: CaptureCoordinator
     public let paste: PasteCoordinator
     public let derived: DerivedContentService
-    @Published public var query = ""
+    let queryState = HistoryQueryState()
+    let listState = HistoryListState()
+    public var query: String { get { queryState.literal } set { queryState.literal = newValue } }
     @Published public var favorites = false
     @Published public var categoryID: String?
     @Published public private(set) var categories: [ClipCategory] = []
@@ -16,9 +18,11 @@ import LocalClipCore
     @Published public var dateFilterEnabled = false
     @Published public var dateFrom = Date()
     @Published public var dateUntil = Date()
-    @Published public var showingFilters = false
+    @Published public var showingFilters = false {
+        didSet { if showingFilters && !oldValue { requestSourceSuggestions() } }
+    }
     @Published public private(set) var sourceSuggestions: [SourceAttribution] = []
-    @Published public private(set) var selectedIDs: Set<ClipID> = []
+    public private(set) var selectedIDs: Set<ClipID> { get { listState[\.selectedIDs] } set { listState[\.selectedIDs] = newValue } }
     @Published public var categoryColor = "34C759"
     @Published public var actualPanelHeight = 340.0
     @Published public var dragActive = false
@@ -31,19 +35,19 @@ import LocalClipCore
     public var settingsChanged: (() -> Void)?
     public var resizePanel: ((Double, Bool) -> Void)?
     @Published public var kind: ClipKind?
-    @Published public private(set) var items: [ClipSummary] = []
-    @Published public private(set) var selectedID: ClipID?
-    @Published public private(set) var selectedMetadata: ClipMetadata?
+    public private(set) var items: [ClipSummary] { get { listState[\.items] } set { listState[\.items] = newValue } }
+    public private(set) var selectedID: ClipID? { get { listState[\.selectedID] } set { listState[\.selectedID] = newValue } }
+    public private(set) var selectedMetadata: ClipMetadata? { get { listState.selectedMetadata } set { listState.selectedMetadata = newValue } }
     @Published public private(set) var detailLoading = false
     @Published public private(set) var detail: ClipDetail?
     @Published public private(set) var image: NSImage?
     @Published public private(set) var previewMessage = ""
     @Published public var status = "准备中"
     @Published public var message = ""
-    @Published public private(set) var loading = false
+    public private(set) var loading: Bool { get { listState[\.loading] } set { listState[\.loading] = newValue } }
     @Published public private(set) var confirmingChange = false
     struct ScrollRestoration: Equatable { var generation = UUID(); var offset: CGFloat }
-    @Published private(set) var scrollRestoration: ScrollRestoration?
+    private(set) var scrollRestoration: ScrollRestoration? { get { listState[\.scrollRestoration] } set { listState[\.scrollRestoration] = newValue } }
     private var viewportPageSize = 50
     private var historyViewport: CGFloat = 0
     private var historyStride: CGFloat = 195
@@ -65,13 +69,19 @@ import LocalClipCore
     private var queryID = UUID()
     #if DEBUG
     var guiQueryGeneration: UUID { queryID }
+    private(set) var historyWindowQueryCount = 0
+    private(set) var historyWindowRefreshCount = 0
     /// 验收包只通过生产持久化设置更新采集策略，by AI.Coding。
     func guiApplySettings(_ value: SettingsSnapshot) { settings = value; capture.updatePolicy(value) }
     #endif
     private var detailID = UUID()
-    private var cursor: SearchCursor?
+    private var cursor: SearchCursor? { get { listState[\.cursor] } set { listState[\.cursor] = newValue } }
     private var pageRevision: Int64 = 0
     private var searching: Task<Void, Never>?
+    private var queryPending = false
+    private var activeSearchSignature: String?
+    private var delayedLoading: Task<Void, Never>?
+    var historyBusy: Bool { queryPending || paging != nil || loading }
     private var detailing: Task<Void, Never>?
     private var metadataTask: Task<Void, Never>?
     private var selectionGeneration = UUID()
@@ -87,6 +97,14 @@ import LocalClipCore
     private var pendingSettingsEdits: [(inout SettingsSnapshot) -> Void] = []
     public private(set) var panelVisible = true
     private var hiddenChanges = false
+    private var settingsVisible = false
+    private var sourcesNeeded = false
+    private var sourcesTask: Task<Void, Never>?
+    private var cheapMetadataTask: Task<Void, Error>?
+    private var cheapMetadataGeneration = UUID()
+    private var metadataNeedsRetry = false
+    private struct CaptureNotice: Equatable { var reason: SkipReason; var at: Instant }
+    @Published private var captureNotice: CaptureNotice?
     public nonisolated static let categoryDragType = "local.localclip.history-item"
     private var dragAccesses: [ClipExportAccess] = []
     private var categoryDrag: (token: String, ids: [ClipID], expiresAt: Instant)?
@@ -98,12 +116,16 @@ import LocalClipCore
     public init(store: HistoryStore, capture: CaptureCoordinator, paste: PasteCoordinator, derived: DerivedContentService, clock: any ClipClock = SystemClock()) {
         self.store = store; self.capture = capture; self.paste = paste; self.derived = derived; self.clock = clock
     }
-    /// 订阅仅作为刷新信号，事实仍从 HistoryStore 读取。
+    /// 列表先刷新；来源和空间仅在相关入口读取，事实仍来自存储，by AI.Coding。
     public func start() async throws {
-        settings = try await store.settings(); usage = try await store.usage()
+        settings = try await store.settings()
         configureHistoryViewport(width: historyViewport, cardWidth: HistoryView.cardSide(height: settings.panelHeight, filtered: sourceFilter != nil || dateFilterEnabled))
-        categories = try await store.categories(); sourceSuggestions = try await store.sources()
-        capture.onState = { [weak self] state in self?.status = state }
+        categories = try await store.categories()
+        capture.onState = { [weak self] state in self?.acceptCaptureState(state) }
+        capture.onSourcePending = { [weak self] source in
+            guard let self, !self.sourceSuggestions.contains(where: { $0.bundleID == source.bundleID }) else { return }
+            self.sourcesNeeded = true
+        }
         // 持久变更流已负责刷新，避免同一次采集同时触发两轮查询和布局。
         try await capture.start(); status = capture.state
         let stream = await store.events()
@@ -111,23 +133,30 @@ import LocalClipCore
             for await event in stream {
                 guard let self, !Task.isCancelled else { return }
                 if case .derived = event {
-                    if !self.panelVisible { self.hiddenChanges = true; continue }
-                    do { self.usage = try await self.store.usage() } catch { self.message = "空间计量失败" }
+                    if self.settingsVisible { await self.refreshUsage() }
                     continue
                 }
                 if case .unavailable = event { self.message = "提交后存储不可用，请重启。已提交操作不会重放。" }
                 if !self.panelVisible {
                     self.hiddenChanges = true
-                    do { self.settings = try await self.store.settings(); self.capture.updatePolicy(self.settings) }
+                    do { self.acceptSettings(try await self.store.settings()) }
                     catch { self.message = "存储状态读取失败" }
+                    if self.settingsVisible { await self.refreshUsage() }
                     continue
                 }
-                // 更新事实后保留已加载窗口；无关记录变更不清空选中项的详情。
-                do { self.categories = try await self.store.categories(); self.pruneCategoryFilters(); self.sourceSuggestions = try await self.store.sources(); self.settings = try await self.store.settings(); self.usage = try await self.store.usage(); self.capture.updatePolicy(self.settings); self.refresh(); self.reconcileSelection() }
+                // 不让全表元数据扫描挡住新卡片；保留原窗口与详情，by AI.Coding。
+                self.refresh()
+                let metadata = self.prepareEventMetadata()
+                do {
+                    try await metadata.value; self.reconcileSelection()
+                    if self.showingFilters { self.requestSourceSuggestions() }
+                    if self.settingsVisible { await self.searching?.value; await self.refreshUsage() }
+                }
                 catch { self.message = "存储状态读取失败" }
             }
         }
         started = true; refresh()
+        if showingFilters { requestSourceSuggestions() }
         // 旧版缺索引只在后台有界修复；空间不足仍从原格式检索，不删除历史。
         indexRepair = Task { [weak self] in
             while let self, !Task.isCancelled {
@@ -137,84 +166,185 @@ import LocalClipCore
             }
         }
     }
-    /// 隐藏时不重复查询列表/来源/空间；打开时一次更新并保留浏览窗口。
+    /// 隐藏期间只记失效；重新打开先展示列表再读廉价元数据，by AI.Coding。
     public func panelVisibilityChanged(_ visible: Bool) {
         panelVisible = visible
         guard visible, hiddenChanges else { return }
         hiddenChanges = false
+        refresh()
+        let metadata = prepareEventMetadata()
         Task {
-            do { settings = try await store.settings(); categories = try await store.categories(); pruneCategoryFilters(); sourceSuggestions = try await store.sources(); usage = try await store.usage(); refresh() }
+            do {
+                try await metadata.value
+                if showingFilters || sourcesNeeded { requestSourceSuggestions() }
+            }
             catch { message = "存储状态读取失败" }
         }
     }
+    /// 同值不发送Published通知，减少无关界面的重新计算，by AI.Coding。
+    private func assignIfChanged<Value: Equatable>(_ keyPath: ReferenceWritableKeyPath<HistoryViewModel, Value>, _ value: Value) {
+        if self[keyPath: keyPath] != value { self[keyPath: keyPath] = value }
+    }
+    /// 状态文字相同时仍发布新的忽略原因/时间，供非Observable采集器更新提示，by AI.Coding。
+    private func acceptCaptureState(_ value: String) {
+        assignIfChanged(\.status, value)
+        assignIfChanged(\.captureNotice, capture.lastIgnored.map { CaptureNotice(reason: $0.0, at: $0.1) })
+    }
+    /// 仅廉价事实在SQL前完成，分类裁剪与查询签名一致；来源/空间不进入此屏障，by AI.Coding。
+    private func prepareEventMetadata() -> Task<Void, Error> {
+        let generation = UUID(); cheapMetadataGeneration = generation
+        let task = Task { [weak self] in
+            guard let self else { return }
+            // 完成的屏障不保留失败；旧任务不能清除更新任务，重试仍先校正廉价事实，by AI.Coding。
+            defer { if self.cheapMetadataGeneration == generation { self.cheapMetadataTask = nil } }
+            do {
+                self.assignIfChanged(\.categories, try await self.store.categories()); self.pruneCategoryFilters()
+                self.acceptSettings(try await self.store.settings())
+                if self.cheapMetadataGeneration == generation { self.metadataNeedsRetry = false }
+            } catch {
+                if self.cheapMetadataGeneration == generation { self.metadataNeedsRetry = true }
+                throw error
+            }
+        }
+        cheapMetadataTask = task
+        return task
+    }
+    /// 策略改变才通知采集器，保留既有暂停与队列规则，by AI.Coding。
+    private func acceptSettings(_ value: SettingsSnapshot) {
+        guard value != settings else { return }
+        assignIfChanged(\.settings, value); capture.updatePolicy(value)
+    }
+    /// 合并来源读取并等列表发布；隐藏时保留失效标记到下一次打开，by AI.Coding。
+    private func requestSourceSuggestions() {
+        sourcesNeeded = true
+        guard started, panelVisible || showingFilters, sourcesTask == nil else { return }
+        sourcesTask = Task { [weak self] in
+            guard let self else { return }
+            defer { self.sourcesTask = nil }
+            while self.sourcesNeeded, !Task.isCancelled, self.panelVisible || self.showingFilters {
+                self.sourcesNeeded = false
+                await self.searching?.value
+                do { self.assignIfChanged(\.sourceSuggestions, try await self.store.sources()) }
+                catch { self.message = "来源读取失败" }
+            }
+        }
+    }
+    /// 设置窗口显示时读取真实占用，不让后台捕获重复全量计量，by AI.Coding。
+    public func settingsVisibilityChanged(_ visible: Bool) {
+        settingsVisible = visible
+        if visible { Task { await refreshUsage() } }
+    }
+    /// 所有空间发布复用同值检查；失败不伪造释放结果，by AI.Coding。
+    private func refreshUsage() async {
+        do { assignIfChanged(\.usage, try await store.usage()) }
+        catch { message = "空间计量失败" }
+    }
     /// 更新输入立即作废旧queryID，防抖20ms给检索和绘制保留延迟预算。
-    public func searchChanged() { if recordUndoQuery != query { recordUndoQuery = nil }; selectedIDs.removeAll(); anchorID = nil; search(debounce: true) }
+    public func searchChanged() {
+        // 同一在途请求合并分类行的多个属性观察，不打断定位或重复查询，by AI.Coding。
+        if queryPending, activeSearchSignature == currentSearchSignature { return }
+        if let recordUndoQuery, recordUndoQuery != query { self.recordUndoQuery = nil }
+        search(debounce: true)
+    }
     /// 捕获/删除/到期刷新不额外防抖。
     public func refresh() { search(debounce: false, preserveWindow: true) }
+    private var currentSearchSignature: String {
+        SearchRequest(query, favorites: favorites, kind: kind, categoryIDs: activeCategories, sourceBundleID: sourceFilter, from: dateBounds?.0, until: dateBounds?.1).signature
+    }
+    /// 每个查询所有者独立计时；旧加载任务不能向新查询发布，by AI.Coding。
+    private func beginQueryLoading(_ generation: UUID) {
+        queryPending = true; delayedLoading?.cancel()
+        delayedLoading = Task { [weak self] in
+            do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
+            guard let self, generation == self.queryID, self.queryPending else { return }
+            self.loading = true
+        }
+    }
     /// 查询乱序保护与清晰加载/失败状态。
     private func search(debounce: Bool, preserveWindow: Bool = false) {
+        #if DEBUG
+        if preserveWindow { historyWindowRefreshCount += 1 }
+        #endif
         let windowSize = preserveWindow ? max(viewportPageSize, items.count) : viewportPageSize
         let previousSelection = selectedID
         let previousIndex = items.firstIndex { $0.id == previousSelection } ?? 0
         let tailCandidates = preserveWindow ? items.suffix(50).map(\.id) : []
         let previousSelections = preserveWindow ? selectedIDs.union(Set(previousSelection.map { [$0] } ?? [])) : []
         searching?.cancel(); paging?.cancel(); paging = nil; pendingPageNavigation = nil; queryID = UUID(); let id = queryID
-        if !preserveWindow { scrollAnchor = nil; historyOffset = 0; scrollRestoration = .init(offset: 0) }
-        let request = SearchRequest(query, favorites: favorites, kind: kind, queryID: id, pageSize: preserveWindow ? min(50, max(viewportPageSize, windowSize)) : viewportPageSize, categoryIDs: activeCategories, sourceBundleID: sourceFilter, from: dateBounds?.0, until: dateBounds?.1)
-        loading = true; cursor = nil
+        if !preserveWindow { scrollAnchor = nil; historyOffset = 0 }
+        activeSearchSignature = currentSearchSignature; beginQueryLoading(id)
         searching = Task { [weak self] in
             guard let self else { return }
+            defer {
+                if id == queryID { queryPending = false; delayedLoading?.cancel(); delayedLoading = nil }
+            }
             do {
                 // 服务P95约57ms；输入防抖缩至20ms，避免单防抖就耗尽100ms预算。
                 if debounce { try await Task.sleep(for: .milliseconds(20)) }
+                let metadata = cheapMetadataTask ?? (metadataNeedsRetry ? prepareEventMetadata() : nil)
+                try await metadata?.value
+                try Task.checkCancellation()
+                guard id == queryID else { return }
+                // 廉价元数据裁剪完成后才固定请求，避免已删分类发布旧空结果，by AI.Coding。
+                let request = SearchRequest(query, favorites: favorites, kind: kind, queryID: id, pageSize: preserveWindow ? min(50, max(viewportPageSize, windowSize)) : viewportPageSize, categoryIDs: activeCategories, sourceBundleID: sourceFilter, from: dateBounds?.0, until: dateBounds?.1)
+                activeSearchSignature = request.signature
                 let started = ContinuousClock.now
                 let matching = preserveWindow ? try await store.matchingIDs(Set(tailCandidates).union(previousSelections), in: request) : nil
                 var anchors = previousSelections.intersection(matching?.ids ?? [])
                 let tail = tailCandidates.last(where: { matching?.ids.contains($0) == true })
                 if let tail { anchors.insert(tail) }
+                #if DEBUG
+                historyWindowQueryCount += 1
+                #endif
                 var page = try await store.search(request)
                 if let matching, matching.revision != page.revision { throw StoreError.invalidCursor }
                 var values = page.items
+                var pages = [page]
                 var loadedIDs = Set(values.map(\.id))
-                var consumedCursor = page.next
                 // 读到仍可见的原窗口尾部和选择；新增项推过50/100边界也不能替换详情。
                 while values.count < max(windowSize, viewportPageSize) || !anchors.isSubset(of: loadedIDs), let next = page.next {
-                    consumedCursor = next
                     var following = request; following.cursor = next
                     // 查询期间窗口放大时只补当前缺口，不用旧视口留下半空首屏，by AI.Coding。
                     if anchors.isSubset(of: loadedIDs) { following.pageSize = min(50, max(1, max(windowSize, viewportPageSize) - values.count)) }
-                    page = try await store.search(following); values += page.items
+                    page = try await store.search(following); pages.append(page); values += page.items
                     loadedIDs.formUnion(page.items.map(\.id))
                     try Task.checkCancellation()
                 }
                 if settings.timingEnabled { StageTiming.record("history_query", since: started, count: page.items.count) }
                 guard !Task.isCancelled, queryID == page.queryID else { return }
                 // 只发布原窗口及锚点需要的精确范围；下一页从截断位置续读，不跳过超取行。
-                let anchorEnd = values.lastIndex { anchors.contains($0.id) }.map { $0 + 1 } ?? 0
-                let retainedCount = min(values.count, max(windowSize, viewportPageSize, anchorEnd))
-                var nextCursor = page.next
-                if retainedCount < values.count {
-                    nextCursor = consumedCursor; nextCursor?.offset = retainedCount
-                    values.removeLast(values.count - retainedCount)
-                }
-                let visible = values.filter(isVisible)
+                let window = planHistoryWindow(pages: pages, windowSize: max(windowSize, viewportPageSize), anchors: anchors)
+                let visible = window.items.filter(isVisible)
                 // 新记录插入头部时保留正在浏览的卡片与卡内偏移，不用旧像素位置显示别的记录，by AI.Coding。
                 if preserveWindow, historyOffset > 0,
                    let anchor = scrollAnchor, let index = visible.firstIndex(where: { $0.id == anchor.id }) {
                     let offset = max(0, 24 + CGFloat(index) * historyStride + anchor.relative)
                     if abs(offset - historyOffset) > 0.5 { scrollRestoration = .init(offset: offset) }
                 }
-                items = visible; cursor = nextCursor; pageRevision = page.revision; loading = false
-                selectedIDs.formIntersection(Set(items.map(\.id)))
-                if let selectedID, items.contains(where: { $0.id == selectedID }) { select(selectedID, preserveSelection: true) }
-                else { select(items.isEmpty ? nil : items[min(previousIndex, items.count - 1)].id) }
+                listState.update {
+                    if !preserveWindow {
+                        selectedIDs.removeAll()
+                        anchorID = nil
+                        scrollRestoration = .init(offset: 0)
+                    }
+                    items = visible; cursor = window.cursor; pageRevision = page.revision; loading = false
+                    if preserveWindow {
+                        selectedIDs.formIntersection(Set(items.map(\.id)))
+                        if let selectedID, items.contains(where: { $0.id == selectedID }) { select(selectedID, preserveSelection: true) }
+                        else { select(items.isEmpty ? nil : items[min(previousIndex, items.count - 1)].id) }
+                    } else {
+                        select(items.first?.id)
+                    }
+                }
+                queryPending = false
                 scheduleVisibilityDeadline()
                 fillHistoryViewport()
+                if sourcesNeeded { requestSourceSuggestions() }
             } catch StoreError.invalidCursor { if id == queryID { refresh() } }
             catch is CancellationError { /* 旧输入取消无需报错。 */ }
             catch {
                 guard id == queryID else { return }
-                loading = false; items = []; select(nil); message = "历史查询失败，请重试"
+                listState.update { loading = false; items = []; cursor = nil; select(nil) }; message = "历史查询失败，请重试"
             }
         }
     }
@@ -228,7 +358,7 @@ import LocalClipCore
     }
     /// 发布后复核最新视口；补屏查询只取缺少的行，零偏移也不会一直留空，by AI.Coding。
     private func fillHistoryViewport() {
-        if started, !loading, hasMore, items.count < viewportPageSize { loadMore(advanceSelection: false, pageSize: viewportPageSize - items.count) }
+        if started, !historyBusy, hasMore, items.count < viewportPageSize { loadMore(advanceSelection: false, pageSize: viewportPageSize - items.count) }
     }
     /// 只在实际滚动后预读一屏距离内的下一批；首屏布局/卡片appear不能级联加载，by AI.Coding。
     func historyScrolled(offset: CGFloat) {
@@ -238,7 +368,7 @@ import LocalClipCore
             let index = min(items.count - 1, max(0, Int(floor((historyOffset - 24) / historyStride))))
             scrollAnchor = (items[index].id, historyOffset - (24 + CGFloat(index) * historyStride))
         }
-        guard historyOffset > 1, !dragActive, !loading, hasMore else { return }
+        guard historyOffset > 1, !dragActive, !historyBusy, hasMore else { return }
         let end = 48 + CGFloat(items.count) * historyStride - 16
         if end - (historyOffset + historyViewport) < historyViewport { loadMore() }
     }
@@ -247,7 +377,7 @@ import LocalClipCore
     /// 键盘到达页尾时延续选择，不能把第50条当成历史终点。
     private func loadMore(advanceSelection:Bool, extend: Bool = false, pageSize: Int? = nil) {
         guard let cursor else { return }
-        if loading {
+        if historyBusy {
             // 预读正在进行时记住页尾方向键，页面返回后继续选择，不要求用户再按一次，by AI.Coding。
             if advanceSelection, paging != nil { pendingPageNavigation = (selectedID, extend) }
             return
@@ -348,7 +478,9 @@ import LocalClipCore
     }
     /// 数据变更先使已展示派生内容失效。
     private func invalidateDetail() {
-        detailing?.cancel(); detailing = nil; detailID = UUID(); detail = nil; image = nil; richPreview = nil; previewMessage = ""; detailLoading = false
+        detailing?.cancel(); detailing = nil; detailID = UUID()
+        if detail != nil { detail = nil }; if image != nil { image = nil }; if richPreview != nil { richPreview = nil }
+        if !previewMessage.isEmpty { previewMessage = "" }; if detailLoading { detailLoading = false }
     }
     /// 已发布卡片与详情也必须在到期边界消失，不能等待每分钟物理清理。
     private func isVisible(_ item: ClipSummary) -> Bool {
@@ -432,7 +564,7 @@ import LocalClipCore
                     confirmingChange = false; panelInteractionChanged?()
                     guard accepted else { return }
                 }
-                searching?.cancel(); queryID = UUID(); cursor = nil; loading = false
+                searching?.cancel(); delayedLoading?.cancel(); queryPending = false; queryID = UUID(); cursor = nil; loading = false
                 invalidateSelection()
                 if case .delete(let ids) = change {
                     // 确认后仅撤销被删记录，保留相邻卡片；在途旧查询也受删除集合过滤。
@@ -441,11 +573,14 @@ import LocalClipCore
                     select(items.isEmpty ? nil : items[min(previous, items.count - 1)].id)
                 } else { selectedMetadata = nil }
                 let result = try await store.apply(preview.token)
-                // 提交点之后再次作废期间查询，清除删除集合也不能让提交前快照复活。
-                searching?.cancel(); queryID = UUID()
+                // 提交前查询已作废；提交事件拥有刷新，不能在返回时取消新版本查询，by AI.Coding。
                 pendingDeletion.removeAll()
-                settings = try await store.settings(); capture.updatePolicy(settings)
-                await capture.refreshCapacity(); usage = try await store.usage()
+                await capture.refreshCapacity()
+                // 删除和容量/期限操作后更新计量，其他变更只在设置窗口可见时读取，by AI.Coding。
+                switch change {
+                case .delete, .clearOrdinary, .quota, .retention, .deleteCategory: await refreshUsage()
+                default: if settingsVisible { await refreshUsage() }
+                }
                 let undo = await store.undoAvailable()
                 let deleted = { if case .delete = change { return true }; return false }()
                 if deleted { recordUndoQuery = undo ? query : nil }
@@ -456,7 +591,6 @@ import LocalClipCore
                 } else {
                     message = (undo ? "可按⌘Z撤销（30秒） · " : deleted ? "本次删除不可撤销（超过内存预算或无可恢复内容） · " : "") + "已保存变更，删除\(result.removed)条，实际释放\(Self.bytes(result.reclaimedBytes))"
                 }
-                refresh()
             } catch StoreError.stalePreview { pendingDeletion.removeAll(); message = "历史已变化，请重新预览并确认"; refresh() }
             catch { pendingDeletion.removeAll(); message = "变更未完成，旧内容保持或存储不可用，请检查状态"; refresh() }
         }
@@ -481,14 +615,13 @@ import LocalClipCore
             do {
                 if let category {
                     try await store.renameCategory(id: category.id, name: name, colorHex: categoryColor)
-                    categories = try await store.categories(); message = "分类已重命名"
+                    message = "分类已重命名"
                 } else {
                     let created = try await store.createCategory(name: name, colorHex: categoryColor)
-                    categories = try await store.categories(); selectCategories([created.id])
+                    selectCategories([created.id])
                     message = "分类已创建；把历史卡片拖到分类标签即可加入"
                 }
                 showingCategoryEditor = false
-                refresh()
             } catch let error as CategoryError { categoryError = error.message }
             catch { categoryError = "分类保存失败，请检查容量或存储状态" }
         }
@@ -593,13 +726,18 @@ import LocalClipCore
     public func maintenance() async {
         do { try await store.cleanExports() } catch { message = "导出临时文件回收未完成，仍计入容量" }
         revalidateVisibleContent()
-        do { let expired = try await store.expire(at: clock.now()); await capture.refreshCapacity(); usage = try await store.usage(); if expired.removed > 0 { refresh() } }
+        do {
+            let expired = try await store.expire(at: clock.now()); await capture.refreshCapacity()
+            if settingsVisible || expired.removed > 0 { await refreshUsage() }
+            if expired.removed > 0 { refresh() }
+        }
         catch { message = "清理失败，未报告已释放" }
     }
     /// 二进制容量单位与真实计量一致。
     public static func bytes(_ value: Int64) -> String { ByteCountFormatter.string(fromByteCount: value, countStyle: .binary) }
     public var ignoreDescription: String {
-        guard let (reason, time) = capture.lastIgnored else { return "" }
+        guard let captureNotice else { return "" }
+        let reason = captureNotice.reason, time = captureNotice.at
         let names: [SkipReason: String] = [.sensitive:"敏感/临时标记", .unsupported:"无支持格式、无效文件引用或文件promise", .tooLarge:"超过32项或50MiB", .paused:"采集暂停或配置变化", .excluded:"声明来源被排除", .changedDuringRead:"读取期间内容持续变化", .accessUnavailable:"剪贴板访问或表示读取失败", .busy:"处理繁忙，未记录", .selfWrite:"自身恢复，未新增历史"]
         return "最近忽略：\(names[reason] ?? reason.rawValue) · \(Date(timeIntervalSince1970: Double(time)/1000).formatted(date: .omitted, time: .shortened))"
     }
@@ -646,6 +784,7 @@ import LocalClipCore
         choose(items[max(0,min(items.count-1,index+delta))].id, modifiers: .shift)
     }
     public func selectAllResults() {
+        guard !queryPending else { return }
         selectedIDs.formUnion(items.map(\.id)); select(items.first?.id, preserveSelection: true)
         guard let cursor else { return }
         searching?.cancel(); paging?.cancel(); pendingPageNavigation = nil; queryID = UUID(); let generation = queryID; loading = true
@@ -664,6 +803,7 @@ import LocalClipCore
         }
     }
     public func edgeSelection(_ last: Bool, extend: Bool) {
+        guard !queryPending else { return }
         if last && hasMore {
             // End接管在途预读；重复按键更新代次，不产生多个同游标循环，by AI.Coding。
             searching?.cancel(); paging?.cancel(); pendingPageNavigation = nil; queryID = UUID()
@@ -710,27 +850,36 @@ import LocalClipCore
     }
     public func moveSelected(_ delta: Int) {
         guard let categoryID, let selectedID else { return }
-        Task { do { try await store.moveItem(id: selectedID, categoryID: categoryID, delta: delta); refresh() } catch { message = "记录排序未保存" } }
+        Task { do { try await store.moveItem(id: selectedID, categoryID: categoryID, delta: delta) } catch { message = "记录排序未保存" } }
     }
     public func undoDeletion() {
-        Task { do { try await store.undoDelete(); recordUndoQuery = nil; pendingDeletion.removeAll(); refresh(); message = "已撤销删除" } catch { message = "不能撤销：期限、容量、策略或内容已变化" } }
+        Task { do { try await store.undoDelete(); recordUndoQuery = nil; pendingDeletion.removeAll(); message = "已撤销删除" } catch { message = "不能撤销：期限、容量、策略或内容已变化" } }
     }
     /// 依据当前记录ID逐页定位，不使用旧偏移。
     public func jumpToHistory(category: String? = nil) {
         guard let wanted = selectedID else { return }
-        Task {
+        searching?.cancel(); paging?.cancel(); paging = nil; pendingPageNavigation = nil
+        queryID = UUID(); let generation = queryID
+        query = ""; favorites = false; kind = nil; sourceFilter = nil; dateFilterEnabled = false; categoryID = category; categoryFilters = Set(category.map { [$0] } ?? [])
+        activeSearchSignature = currentSearchSignature; beginQueryLoading(generation)
+        // 定位也拥有完整查询生命周期；取消、失败和空结果都释放逻辑忙碌状态，by AI.Coding。
+        searching = Task {
+            defer {
+                if generation == queryID { queryPending = false; delayedLoading?.cancel(); delayedLoading = nil; loading = false }
+            }
             do {
                 _ = try await store.metadata(id: wanted, at: clock.now())
-                query = ""; favorites = false; kind = nil; sourceFilter = nil; dateFilterEnabled = false; categoryID = category; categoryFilters = Set(category.map { [$0] } ?? [])
-                searching?.cancel(); paging?.cancel(); paging = nil; pendingPageNavigation = nil; queryID = UUID(); let generation = queryID
+                try Task.checkCancellation(); guard generation == queryID else { return }
                 var next: SearchCursor?; var found: [ClipSummary] = []
                 repeat {
                     let page = try await store.search(SearchRequest(cursor: next, queryID: generation, categoryIDs: activeCategories))
-                    guard generation == queryID else { return }; found += page.items; next = page.next; pageRevision = page.revision
+                    guard !Task.isCancelled, generation == queryID else { return }; found += page.items; next = page.next; pageRevision = page.revision
                 } while !found.contains(where: { $0.id == wanted }) && next != nil
                 guard found.contains(where: { $0.id == wanted }) else { message = "记录已删除、到期或离开分类"; return }
-                items = found.filter(isVisible); cursor = next; loading = false; select(wanted); focusResults?()
-            } catch { message = "无法定位：记录已变化" }
+                listState.update { items = found.filter(isVisible); cursor = next; loading = false; select(wanted) }
+                focusResults?()
+            } catch is CancellationError { }
+            catch { if generation == queryID { message = "无法定位：记录已变化" } }
         }
     }
     /// Space按需预览文件；其他格式使用详情，不提前读取正文。

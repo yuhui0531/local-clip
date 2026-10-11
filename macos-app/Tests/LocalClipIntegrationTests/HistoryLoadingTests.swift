@@ -25,26 +25,27 @@ import LocalClipCore
         let store = try HistoryStore(location: root); try await seed(store, count: 160)
         let model = makeModel(store); model.configureHistoryViewport(width: 1000, cardWidth: 200)
         try await model.start(); model.capture.stop()
-        try await until { !model.loading && model.items.count == 5 }
+        try await until { !model.historyBusy && model.items.count == 5 }
         let first = model.selectedID, expected = try await store.search(.init()).items.map(\.id)
         for _ in 0..<100 { model.historyScrolled(offset: 0) }
         try await Task.sleep(for: .milliseconds(60)); #expect(model.items.count == 5)
         for _ in 0..<100 { model.historyScrolled(offset: 30) }
-        try await until { !model.loading && model.items.count == 15 }
+        try await until { !model.historyBusy && model.items.count == 15 }
         try await Task.sleep(for: .milliseconds(60))
         #expect(model.items.count == 15); #expect(model.selectedID == first)
         #expect(model.items.map(\.id) == Array(expected.prefix(15)))
         model.select(model.items.last?.id); model.navigate(1)
-        try await until { !model.loading && model.items.count == 25 }
+        try await until { !model.historyBusy && model.items.count == 25 }
         #expect(model.selectedID == expected[15])
-        model.loadMore(); model.query = "page-item-149"; model.searchChanged()
-        try await until { !model.loading && model.items.count == 1 }
+        model.loadMore(); model.query = "page-item-14"; model.searchChanged()
+        model.query = "page-item-149"; model.searchChanged()
+        try await until { !model.historyBusy && model.items.count == 1 }
         #expect(model.items[0].preview == "page-item-149")
         #expect(model.scrollRestoration?.offset == 0)
-        model.query = ""; model.searchChanged(); try await until { !model.loading && model.items.count == 5 }
+        model.query = ""; model.searchChanged(); try await until { !model.historyBusy && model.items.count == 5 }
         #expect(model.items.map(\.id) == Array(expected.prefix(5)))
         model.select(model.items.last?.id); model.historyScrolled(offset: 30); model.extendNavigation(1)
-        try await until { !model.loading && model.items.count == 15 }
+        try await until { !model.historyBusy && model.items.count == 15 }
         #expect(model.selectedID == expected[5]); #expect(model.selectedIDs == [expected[4], expected[5]])
     }
     /// 捕获插入不能移动正在浏览的卡片；详情和多选仍以原ID保存，by AI.Coding。
@@ -53,25 +54,25 @@ import LocalClipCore
         defer { try? FileManager.default.removeItem(at: root) }
         let store = try HistoryStore(location: root); try await seed(store, count: 80)
         let model = makeModel(store); model.configureHistoryViewport(width: 1000, cardWidth: 200)
-        try await model.start(); model.capture.stop(); try await until { !model.loading && model.items.count == 5 }
+        try await model.start(); model.capture.stop(); try await until { !model.historyBusy && model.items.count == 5 }
         model.configureHistoryViewport(width: 1000, cardWidth: 200)
-        model.historyScrolled(offset: 500); try await until { !model.loading && model.items.count == 15 }
+        model.historyScrolled(offset: 500); try await until { !model.historyBusy && model.items.count == 15 }
         let selected = model.items[2].id, second = model.items[3].id
         model.choose(selected, modifiers: []); model.choose(second, modifiers: .command)
         model.showingDetail = true; model.detailVisibilityChanged()
         try await until { model.detail?.summary.id == second }
         _ = try await store.ingest(.init(payload: .init([.init([.init(SupportedType.string, Data("new-page-head".utf8))])])), at: SystemClock().now() + 1000)
-        try await until { !model.loading && model.items.first?.preview == "new-page-head" }
+        try await until { !model.historyBusy && model.items.first?.preview == "new-page-head" }
         #expect(model.scrollRestoration?.offset == 716)
         #expect(model.selectedID == second); #expect(model.selectedIDs == [selected, second])
         #expect(model.detail?.summary.id == second); #expect(model.items.count == 16)
         model.historyScrolled(offset: 716)
         let beforeAnchor = model.items[1].id
         let preview = try await store.preview(.delete([beforeAnchor])); _ = try await store.apply(preview.token)
-        try await until { !model.loading && !model.items.contains { $0.id == beforeAnchor } }
+        try await until { !model.historyBusy && !model.items.contains { $0.id == beforeAnchor } }
         #expect(model.items.first?.preview == "new-page-head"); #expect(model.scrollRestoration?.offset == 500)
         #expect(model.selectedIDs == [selected, second]); #expect(model.detail?.summary.id == second)
-        model.loadMore(); try await until { !model.loading && model.items.count == 26 }
+        model.loadMore(); try await until { !model.historyBusy && model.items.count == 26 }
         #expect(Set(model.items.map(\.id)).count == model.items.count)
     }
     /// 查询或预读期间视口增大，补屏只取缺口，不能多取两整屏，by AI.Coding。
@@ -82,9 +83,9 @@ import LocalClipCore
         let model = makeModel(store); model.configureHistoryViewport(width: 1000, cardWidth: 200)
         try await model.start(); model.capture.stop()
         model.configureHistoryViewport(width: 1800, cardWidth: 200)
-        try await until { !model.loading && model.items.count == 9 }
+        try await until { !model.historyBusy && model.items.count == 9 }
         model.loadMore(); model.configureHistoryViewport(width: 3000, cardWidth: 80)
-        try await until { !model.loading && model.items.count == 31 }
+        try await until { !model.historyBusy && model.items.count == 31 }
         #expect(Set(model.items.map(\.id)).count == 31)
     }
     /// End/全选接管预读且可重复按，不重复追加同一页或漏掉末尾记录，by AI.Coding。
@@ -93,14 +94,14 @@ import LocalClipCore
         defer { try? FileManager.default.removeItem(at: root) }
         let store = try HistoryStore(location: root); try await seed(store, count: 100)
         let model = makeModel(store); model.configureHistoryViewport(width: 1000, cardWidth: 200)
-        try await model.start(); model.capture.stop(); try await until { !model.loading && model.items.count == 5 }
+        try await model.start(); model.capture.stop(); try await until { !model.historyBusy && model.items.count == 5 }
         model.historyScrolled(offset: 30); model.edgeSelection(true, extend: false); model.edgeSelection(true, extend: false)
-        try await until { !model.loading && !model.hasMore }
+        try await until { !model.historyBusy && !model.hasMore }
         #expect(model.items.count == 100); #expect(Set(model.items.map(\.id)).count == 100)
         #expect(model.selectedID == model.items.last?.id)
-        model.searchChanged(); try await until { !model.loading && model.items.count == 5 }
+        model.searchChanged(); try await until { !model.historyBusy && model.items.count == 5 }
         model.historyScrolled(offset: 30); model.selectAllResults(); model.selectAllResults()
-        try await until { !model.loading && !model.hasMore }
+        try await until { !model.historyBusy && !model.hasMore }
         #expect(model.items.count == 100); #expect(Set(model.items.map(\.id)).count == 100)
         #expect(model.selectedIDs.count == 100)
     }
@@ -121,7 +122,7 @@ import LocalClipCore
         let store = try HistoryStore(location: root); try await seed(store, count: 3)
         let category = try await store.createCategory(name: "Drag target", colorHex: "34C759")
         let model = makeModel(store); try await model.start(); model.capture.stop()
-        try await until { !model.loading && model.items.count == 3 && model.categories.contains { $0.id == category.id } }
+        try await until { !model.historyBusy && model.items.count == 3 && model.categories.contains { $0.id == category.id } }
         let ids = [model.items[0].id, model.items[1].id]
         model.choose(ids[0], modifiers: []); model.choose(ids[1], modifiers: .command)
         let token = model.prepareDrag(ids[0])
@@ -136,7 +137,7 @@ import LocalClipCore
         #expect(target.acceptedToken(from: board) == token)
         #expect(target.performCategoryDrop(from: board)); #expect(!target.performCategoryDrop(from: board))
         model.finishDrag(cancelled: false)
-        try await until { model.message.contains("加入") && !model.loading }
+        try await until { model.message.contains("加入") && !model.historyBusy }
         for id in ids { #expect(try await store.metadata(id: id, at: SystemClock().now()).categoryIDs.contains(category.id)) }
         #expect(try await store.metadata(id: model.items[2].id, at: SystemClock().now()).categoryIDs.isEmpty)
         board.clearContents(); #expect(board.setData(Data(UUID().uuidString.utf8), forType: type))
