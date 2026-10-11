@@ -53,7 +53,8 @@ import LocalClipCore
         let view: AnyView = codeDetail
             ? AnyView(VStack(alignment: .leading, spacing: 12) { Text("代码详情 · JSON").font(.headline); SyntaxDetailPreview(content: NSAttributedString(string: codeFixtures[0])) }.padding(24).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).background(Color(nsColor: .windowBackgroundColor)))
             : AnyView(HistoryView(model: model))
-        let host = NSHostingView(rootView: view); host.sizingOptions = []
+        // 离屏窗口不会可靠传播外观变化；显式传递指定主题才能验证同主题的SwiftUI颜色。
+        let host = NSHostingView(rootView: view.environment(\.colorScheme, dark ? .dark : .light)); host.sizingOptions = []
         let window = NSWindow(contentRect: .init(x: 0, y: 0, width: width, height: height), styleMask: [.borderless], backing: .buffered, defer: false)
         window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
         window.contentView = host; host.frame = .init(x: 0, y: 0, width: width, height: height)

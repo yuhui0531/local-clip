@@ -9,6 +9,7 @@ import LocalClipCore
     private let clock: any ClipClock
     private let finder = FinderFileService()
     private var performing = false
+    public private(set) var smartPasteNotice: String?
     public var closePanel: (() -> Void)?
     public init(board: any PasteboardClient, applications: any ApplicationClient, store: any HistoryRepository, capture: CaptureCoordinator, clock: any ClipClock = SystemClock()) {
         self.board = board; self.applications = applications; self.store = store; self.capture = capture; self.clock = clock
@@ -16,7 +17,7 @@ import LocalClipCore
     /// 输出格式与操作动作正交；写失败或剪贴板变更不虚报已复制。
     public func perform(_ request: PasteRequest, copyFilesToFinder: Bool = false) async -> PasteResult {
         guard !performing else { return .failed("正在处理，请稍后") }
-        performing = true; defer { performing = false }
+        performing = true; smartPasteNotice = nil; defer { performing = false }
         do {
             let initialCount = board.changeCount
             var records: [ClipboardPayload] = []
@@ -25,14 +26,19 @@ import LocalClipCore
             // 开关关闭保持原组合逻辑；开启也只读取确认文本目标的整组文件，by AI.Coding。
             let settings = try await store.settings()
             let smartFiles = settings.smartCodeFilePaste && !records.isEmpty && records.allSatisfy { $0.fileURLs != nil }
-            let eligible = smartFiles && !copyFilesToFinder && applications.permitted
+            // 复制没有确定接收目标，始终恢复原文件；仅直接粘贴允许转换正文。
+            let eligible = request.action == .directPaste && smartFiles && !copyFilesToFinder && applications.permitted
                 && request.target.map { applications.isAlive($0) && applications.pasteTargetKind($0) == .text
                     && (applications.target() == nil || applications.target() == $0) } == true
             let raw = try await Task.detached { try OutputComposer.combine(records, format: smartFiles ? .original : request.format) }.value
             var payload = raw
             var codeContents: CodeFileContents?
+            var codeReadAttempted = false
             if eligible, let urls = raw.fileURLs {
-                codeContents = try? await Task.detached(priority: .userInitiated) { try CodeFileReader.snapshot(urls) }.value
+                codeReadAttempted = true
+                do { codeContents = try await Task.detached(priority: .userInitiated) { try CodeFileReader.snapshot(urls) }.value }
+                catch let error as CodeFileReadError { smartPasteNotice = error.message }
+                catch { smartPasteNotice = "已保留原文件：文件无法读取" }
                 let enabled = try await store.settings().smartCodeFilePaste
                 if enabled, let target = request.target, applications.pasteTargetKind(target) == .text,
                    (applications.target() == nil || applications.target() == target), let contents = codeContents {
@@ -120,9 +126,12 @@ import LocalClipCore
             guard focusReady else { return safeFallback((applications.pasteFailureReason ?? "原目标焦点未恢复") + "，请手动粘贴") }
             // 非激活面板打开时，某些应用暂不暴露原文本焦点。恢复后必须重新识别，
             // 不能把面板期间的一次unknown永久当作文件目标；等待期间的新复制仍不可覆盖。
-            if smartFiles, !converted, codeContents == nil, applications.pasteTargetKind(target) == .text,
+            if smartFiles, !converted, !codeReadAttempted, applications.pasteTargetKind(target) == .text,
                try await store.settings().smartCodeFilePaste, let urls = raw.fileURLs {
-                codeContents = try? await Task.detached(priority: .userInitiated) { try CodeFileReader.snapshot(urls) }.value
+                codeReadAttempted = true
+                do { codeContents = try await Task.detached(priority: .userInitiated) { try CodeFileReader.snapshot(urls) }.value }
+                catch let error as CodeFileReadError { smartPasteNotice = error.message }
+                catch { smartPasteNotice = "已保留原文件：文件无法读取" }
                 if let contents = codeContents {
                     let textPayload = ClipboardPayload([.init([.init(SupportedType.string, Data(contents.text.utf8))], plainText: contents.text)])
                     let textFingerprint = await Task.detached { textPayload.fingerprint }.value
@@ -182,7 +191,7 @@ import LocalClipCore
             return fallback("目标或剪贴板已变化，请重新选择", receipt: receipt)
         }
         let destination: FinderDestination
-        switch finder.destination() {
+        switch await finder.destination() {
         case .success(let value): destination = value
         case .failure(let error): return fallback(error.message, receipt: receipt)
         }
@@ -192,7 +201,7 @@ import LocalClipCore
         }
         do { for id in request.ids { _ = try await store.detail(id: id, at: clock.now()) } }
         catch { return .failed("内容已删除或到期，未复制文件") }
-        guard case .success(let current) = finder.destination(), current == destination,
+        guard case .success(let current) = await finder.destination(), current == destination,
               applications.isFrontmost(target), board.matches(receipt) else {
             return fallback("Finder目录或剪贴板已变化，请重新选择", receipt: receipt)
         }

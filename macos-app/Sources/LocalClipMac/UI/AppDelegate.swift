@@ -81,6 +81,7 @@ import LocalClipCore
             let paste = PasteCoordinator(board: board, applications: applications, store: store, capture: capture)
             let model = HistoryViewModel(store: store, capture: capture, paste: paste, derived: DerivedContentService(store: store))
             self.model = model; lastExternal = applications.target()
+            model.panelVisibilityChanged(false)
             model.closePanel = { [weak self] in self?.dismissHistory() }
             model.panelInteractionChanged = { [weak self] in self?.scheduleFocusDismissal() }
             model.openSettings = { [weak self] in self?.showSettings() }
@@ -174,12 +175,13 @@ import LocalClipCore
         } else if panel?.isKeyWindow != true {
             applications.rememberFocus(for: nil)
         }
+        model.panelVisibilityChanged(true)
         model.target = lastExternal
         model.revalidateVisibleContent()
         if model.items.isEmpty { model.refresh() }
         let screen = targetScreen()
         let rect = screen?.frame ?? NSRect(x: 0, y: 0, width: 1400, height: 380)
-        let initialFrame = NSRect(x: rect.minX, y: rect.minY, width: rect.width, height: min(max(220,model.settings.panelHeight), min(520,rect.height)))
+        let initialFrame = NSRect(x: rect.minX, y: rect.minY, width: rect.width, height: min(max(280,model.settings.panelHeight), min(520,rect.height)))
         if panel == nil {
             // 非激活面板保留外部应用身份与文档焦点；搜索框仍可成为key接收键盘。
             // 先确定最终屏幕尺寸再挂载SwiftUI，避免1400pt初始布局到全宽的可见跳变。
@@ -192,12 +194,12 @@ import LocalClipCore
             // 窗口尺寸由屏幕和高度设置唯一决定，不让SwiftUI固有尺寸改变内容视口。
             let host = NSHostingView(rootView: HistoryView(model: model))
             host.sizingOptions = []
-            panel.contentView = host; panel.minSize = NSSize(width: 680, height: 220)
+            panel.contentView = host; panel.minSize = NSSize(width: 680, height: 280)
             self.panel = panel
         }
         if let panel {
             pinnedScreenID = screen?.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber
-            model.actualPanelHeight = min(max(220,model.settings.panelHeight), min(520,rect.height))
+            model.actualPanelHeight = min(max(280,model.settings.panelHeight), min(520,rect.height))
             panel.sharingType = model.settings.excludeFromSharing ? .none : .readOnly
             pinPanel(to: screen)
             panel.contentView?.layoutSubtreeIfNeeded()
@@ -210,7 +212,7 @@ import LocalClipCore
     private func pinPanel(to screen: NSScreen?) {
         guard let panel, let rect = screen?.frame else { return }
         // 紧凑布局380pt，只有尺寸确实变化才重排；隐藏阶段不触发显示更新。
-        let frame = NSRect(x: rect.minX, y: rect.minY, width: rect.width, height: min(max(220,model?.actualPanelHeight ?? model?.settings.panelHeight ?? 340), min(520,rect.height)))
+        let frame = NSRect(x: rect.minX, y: rect.minY, width: rect.width, height: min(max(280,model?.actualPanelHeight ?? model?.settings.panelHeight ?? 340), min(520,rect.height)))
         if panel.frame != frame { panel.setFrame(frame, display: panel.isVisible) }
     }
     /// 外部焦点所在窗口优先决定显示器，取不到时才回退鼠标位置。
@@ -237,7 +239,7 @@ import LocalClipCore
     /// 调高只改变底部固定面板尺寸，结束手势后持久化一次。
     private func resizeHistory(_ height: Double, persist: Bool) {
         guard let model else { return }
-        model.actualPanelHeight = min(max(220,height),min(520,panel?.screen?.frame.height ?? 520))
+        model.actualPanelHeight = min(max(280,height),min(520,panel?.screen?.frame.height ?? 520))
         pinPanel(to: panel?.screen)
         if persist { model.updateSettings { $0.panelHeight = model.actualPanelHeight } }
     }
@@ -252,6 +254,7 @@ import LocalClipCore
     }
     /// 隐藏历史和其详情，不激活旧目标，也不改变系统剪贴板。
     private func dismissHistory() {
+        model?.panelVisibilityChanged(false)
         focusDismissal?.cancel(); model?.showingDetail = false; model?.showingCategoryEditor = false; model?.showingFilters = false
         panel?.orderOut(nil)
     }
@@ -360,7 +363,7 @@ import LocalClipCore
             }
         }
         wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
-            Task { @MainActor in guard let model = self?.model else { return }; model.capture.updatePolicy(model.settings); await model.maintenance() }
+            Task { @MainActor in guard let model = self?.model else { return }; model.capture.rebaseline(); model.capture.updatePolicy(model.settings); await model.maintenance() }
         }
     }
     /// 仅面板本地按键；Esc优先关闭，其余组合输入交给输入法，不使用全局监听。
@@ -392,6 +395,8 @@ import LocalClipCore
             if carbon == model.settings.quickModifiers, let number = [UInt16(18),19,20,21,23,22,26,28,25].firstIndex(of: event.keyCode), model.items.indices.contains(number) {
                 model.select(model.items[number].id); model.perform(action: .directPaste); return nil
             }
+            // 搜索文字未改变且最后动作是记录删除时，仍可撤销该记录。
+            if flags == [.command], event.keyCode == 6, editing, model.canUndoFromSearch { model.undoDeletion(); return nil }
             if flags == [.command] && !editing {
                 switch event.keyCode {
                 case 0: model.selectAllResults(); return nil
@@ -409,8 +414,8 @@ import LocalClipCore
                 if flags.contains(.shift), [UInt16(123),124,125,126].contains(event.keyCode) { model.extendNavigation([UInt16(123),126].contains(event.keyCode) ? -1 : 1); return nil }
             }
             if event.keyCode == 51 || event.keyCode == 117 {
-                // 有搜索文字时保留正常退格/删除；空搜索或卡片焦点删除当前记录。
-                if let editor = event.window?.firstResponder as? NSTextView, editor.isEditable, !editor.string.isEmpty { return event }
+                // 搜索框即使为空也只处理文字编辑；切到结果区后才允许删除历史。
+                if editing { return event }
                 guard !event.isARepeat else { return nil }
                 model.deleteSelected(); return nil
             }

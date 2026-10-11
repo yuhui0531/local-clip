@@ -1,8 +1,10 @@
-> 当前0.2.0说明见[本地体验交付](local-experience-delivery.md)。以下保留为旧版记录，不能认证本轮功能、接收或性能；本轮产品验收由用户自测。
+> Current fix status and verification limits: [review-fixes.md](review-fixes.md). The records below describe older versions.
+
+> 历史0.2.0说明见[本地体验交付](local-experience-delivery.md)。以下保留为旧版记录，不能认证本轮功能、接收或性能；本轮产品验收由用户自测。
 
 # AC01–AC27 实际验收记录
 
-> 当前交付0.1.14（构建15）：历史卡片可拖到自定义分类标签，拖入高亮，复用持久化归属。保留同行类型分类/＋编辑及380pt底部布局；无升级兼容代码。本轮仅Release构建/严格签名检查，未启动应用或执行功能、GUI、SQLite、性能测试。
+> 历史交付0.1.14（构建15）：历史卡片可拖到自定义分类标签，拖入高亮，复用持久化归属。保留同行类型分类/＋编辑及380pt底部布局；无升级兼容代码。本轮仅Release构建/严格签名检查，未启动应用或执行功能、GUI、SQLite、性能测试。
 
 2026-10-10；macOS15.7.5/M2 Max/32GB/Swift6.2.4。U规则、I真实文件集成、M真实目标应用、P性能分别记录。**整体首版验收未完成。**
 

@@ -10,7 +10,8 @@ public final class ClipExportAccess: Sendable {
     public func cancel() { active.withLock { $0 = false } }
     public func checkValid() throws { let db = try SQLiteConnection(database, readonly: true); defer { try? db.close() }; try validate(db) }
     private let database: URL
-    init(database: URL, id: ClipID, revision: Int64, types: [String]) { self.database = database; self.id = id; self.revision = revision; self.types = types }
+    private let contentHash: String
+    init(database: URL, id: ClipID, revision: Int64, types: [String], contentHash: String) { self.database = database; self.id = id; self.revision = revision; self.types = types; self.contentHash = contentHash }
     /// 每个项目独立延迟读取，版本复查后才向目标返回真实格式。
     public func itemData(index: Int, type: String) throws -> Data {
         let db = try SQLiteConnection(database, readonly: true); defer { try? db.close() }; try validate(db)
@@ -28,7 +29,9 @@ public final class ClipExportAccess: Sendable {
     }
     private func validate(_ db: SQLiteConnection) throws {
         guard active.withLock({ $0 }), SystemClock().now() < expires else { throw StoreError.notFound }
-        guard try db.scalarInt("PRAGMA user_version") == Schema.version, try db.scalarInt("SELECT storeRevision FROM store_meta") == revision else { throw StoreError.stalePreview }
+        // 拖放验证不可变内容身份；无关采集或设置提交不使当前记录失效。
+        guard try db.scalarInt("PRAGMA user_version") == Schema.version else { throw StoreError.stalePreview }
+        guard try db.scalarText("SELECT contentHash FROM clips WHERE id=?", [.text(id)]) == contentHash else { throw StoreError.notFound }
         let settings = try Schema.readSettings(db)
         guard try db.scalarInt("SELECT COUNT(*) FROM clips WHERE id=? AND (isFavorite=1 OR EXISTS(SELECT 1 FROM clip_categories WHERE clipID=clips.id) OR lastCopiedAtMs>?)", [.text(id), .integer(settings.retentionDays == 0 ? Int64.min : SystemClock().now() - Int64(settings.retentionDays)*dayMS)]) == 1 else { throw StoreError.notFound }
     }

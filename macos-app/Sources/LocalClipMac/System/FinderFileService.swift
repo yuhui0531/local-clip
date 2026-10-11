@@ -12,7 +12,11 @@ public struct FinderDestination: Equatable, Sendable {
     /// 构造时不访问Finder，不提前触发授权。
     public init() {}
     /// 仅在用户执行文件操作后查询Finder；虚拟目录、无窗口和拒绝授权均不猜目录。
-    public func destination() -> Result<FinderDestination, FinderLookupError> {
+    public func destination() async -> Result<FinderDestination, FinderLookupError> {
+        // 自动化授权与AppleEvent等待移出主线程，保持热键及采集响应。
+        await Task.detached(priority: .userInitiated) { Self.lookupDestination() }.value
+    }
+    private nonisolated static func lookupDestination() -> Result<FinderDestination, FinderLookupError> {
         let source = """
         with timeout of 3 seconds
             tell application id "com.apple.finder"

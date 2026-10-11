@@ -4,11 +4,35 @@ import SwiftUI
 import LocalClipCore
 public struct HistoryView: View {
     @ObservedObject var model: HistoryViewModel
+    @Environment(\.colorScheme) private var colorScheme
     @State private var categoryContentWidth: CGFloat = 0
     @State private var resizingHeight: Double?
     @State private var scrollPosition = ScrollPosition(edge: .leading)
     @State private var scrollWheelState = HistoryScrollWheel.State()
+    // 跟随SwiftUI实际外观，避免NSColor按宿主外观解析造成浅色工具栏白字。
+    private var toolbarColor: Color { Color(white: colorScheme == .dark ? 0.82 : 0.28) }
     public init(model: HistoryViewModel) { self.model = model }
+    /// 直接描画两种小工具图标，避免模板系统图标在材质面板中丢失指定颜色。
+    private func toolbarGlyph(filter: Bool) -> some View {
+        let enabled = model.settings.captureEnabled, color = toolbarColor
+        return Canvas { context, size in
+            let scale = size.width / 20
+            context.scaleBy(x: scale, y: scale)
+            context.stroke(Path(ellipseIn: CGRect(x: 1, y: 1, width: 18, height: 18)), with: .color(color), lineWidth: 1.4)
+            var path = Path()
+            if filter {
+                for (y, left, right) in [(6.5, 5.0, 15.0), (10.0, 6.5, 13.5), (13.5, 8.0, 12.0)] {
+                    path.move(to: CGPoint(x: left, y: y)); path.addLine(to: CGPoint(x: right, y: y))
+                }
+            } else if enabled {
+                for x in [8.0, 12.0] { path.move(to: CGPoint(x: x, y: 6)); path.addLine(to: CGPoint(x: x, y: 14)) }
+            } else {
+                path.move(to: CGPoint(x: 8, y: 6)); path.addLine(to: CGPoint(x: 14, y: 10)); path.addLine(to: CGPoint(x: 8, y: 14)); path.closeSubpath()
+                context.fill(path, with: .color(color)); return
+            }
+            context.stroke(path, with: .color(color), style: StrokeStyle(lineWidth: filter ? 1.4 : 2, lineCap: .round))
+        }.frame(width: 20, height: 20).accessibilityHidden(true)
+    }
     public var body: some View {
         // 根布局只接受真实窗口视口；卡片最小内容尺寸不能反过来扩大托管视图。
         GeometryReader { viewport in
@@ -37,8 +61,8 @@ public struct HistoryView: View {
                     Spacer(minLength: 10)
                     SearchField(text: $model.query, focus: model.focusRequest, onChange: model.searchChanged,
                         onNavigate: model.navigate, onEnter: { model.focusResults?() }, onEscape: { model.closePanel?() }, onDelete: model.deleteSelected).frame(maxWidth: 310).frame(height: 30)
-                    Button { model.showingFilters.toggle() } label: { Image(systemName: "line.3.horizontal.decrease.circle").font(.system(size: 19)) }.buttonStyle(.plain).popover(isPresented: $model.showingFilters) { FilterEditor(model: model) }
-                    Button { model.updateSettings { $0.captureEnabled.toggle() } } label: { Image(systemName: model.settings.captureEnabled ? "pause.circle" : "play.circle").font(.system(size: 20, weight: .light)) }.buttonStyle(.plain).help(model.settings.captureEnabled ? "暂停采集" : "恢复采集")
+                    Button { model.showingFilters.toggle() } label: { toolbarGlyph(filter: true) }.buttonStyle(.plain).accessibilityLabel("筛选").popover(isPresented: $model.showingFilters) { FilterEditor(model: model) }
+                    Button { model.updateSettings { $0.captureEnabled.toggle() } } label: { toolbarGlyph(filter: false) }.buttonStyle(.plain).accessibilityLabel(model.settings.captureEnabled ? "暂停采集" : "恢复采集").help(model.settings.captureEnabled ? "暂停采集" : "恢复采集")
                     Menu { Button(model.settings.hideContents ? "显示内容" : "隐藏内容") { model.updateSettings { $0.hideContents.toggle() } }; Button("筛选…") { model.showingFilters.toggle() }; Button("撤销删除 · ⌘Z") { model.undoDeletion() }; Button("设置…") { model.openSettings?() }; Button("清空普通历史", role: .destructive) { model.change(.clearOrdinary) } }
                         label: { Image(systemName: "ellipsis.circle").font(.system(size: 20, weight: .light)) }.menuStyle(.borderlessButton).fixedSize()
                     Button { model.closePanel?() } label: { Image(systemName: "xmark").font(.system(size: 11, weight: .semibold)).frame(width: 24, height: 24).background(.primary.opacity(0.06), in: Circle()) }.buttonStyle(.plain).help("关闭 · Escape")
@@ -221,11 +245,12 @@ private struct ClipCard: View, Equatable {
     let model: HistoryViewModel
     @State private var characterCount: Int?
     @State private var thumbnail: NSImage?
+    @State private var detectedLanguage: String?
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.item == rhs.item && lhs.index == rhs.index && lhs.selected == rhs.selected && lhs.height == rhs.height
             && lhs.categoryID == rhs.categoryID && lhs.categories == rhs.categories && lhs.target == rhs.target
     }
-    private var code: Bool { item.kind == .text && (item.preview.contains("->") || item.preview.contains("{") || item.preview.contains("foo_bar")) }
+    private var code: Bool { item.kind == .text && detectedLanguage != nil }
     private var tint: Color { switch item.kind {
         case .text: Color(red: 0, green: 0.48, blue: 1)
         case .url: Color(red: 0.24, green: 0.50, blue: 0.88)
@@ -358,7 +383,7 @@ private struct ClipCard: View, Equatable {
             VStack(alignment: .leading, spacing: 10) { Image(systemName: "link").font(.system(size: 22, weight: .light)).foregroundStyle(tint); Text(URL(string: item.preview)?.host ?? "链接").font(.system(size: 15, weight: .semibold, design: .rounded)).lineLimit(1); Text(item.context).font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary).lineLimit(4); Spacer(minLength: 0) }.padding(14)
         } else {
             // 卡片正文自动高亮代码，普通内容保持原有排版，by AI.Coding。
-            SyntaxText(text: item.context, size: tiny ? 10 : height < 210 ? 13 : 15)
+            SyntaxText(text: item.context, size: tiny ? 10 : height < 210 ? 13 : 15, onLanguage: { detectedLanguage = $0 })
                 .lineSpacing(tiny ? 0 : 3).frame(maxWidth: .infinity, alignment: .topLeading)
                 .padding(.horizontal, tiny ? 6 : 14).padding(.top, tiny ? 3 : 10).padding(.bottom, tiny ? 0 : 4)
         }

@@ -71,7 +71,7 @@ public struct SettingsView: View {
                 }
                 GroupBox("面板与诊断") {
                     VStack(alignment: .leading, spacing: 10) {
-                        HStack { Text("面板高度"); Slider(value: Binding(get: { model.settings.panelHeight }, set: { value in model.resizePanel?(value, true) }), in: 220...520, step: 10); Text("\(Int(model.settings.panelHeight)) pt").monospacedDigit() }
+                        HStack { Text("面板高度"); Slider(value: Binding(get: { model.actualPanelHeight }, set: { value in model.resizePanel?(value, false) }), in: 280...520, step: 10, onEditingChanged: { editing in if !editing { model.resizePanel?(model.actualPanelHeight, true) } }); Text("\(Int(model.actualPanelHeight)) pt").monospacedDigit() }
                         Toggle("启用本机阶段计时日志", isOn: Binding(get: { model.settings.timingEnabled }, set: { value in model.updateSettings { $0.timingEnabled = value } }))
                         Text("只记录阶段、条数和毫秒，不含正文、文件路径、URL或搜索词；性能仍需您实测。数据目录：LocalClip-LocalEdition。全新数据模型，不兼容或迁移旧库。").font(.caption).foregroundStyle(.secondary)
                     }.padding(10)
@@ -80,7 +80,7 @@ public struct SettingsView: View {
                 Text("支持文本、URL、RTF、简单HTML、PNG/TIFF/JPEG和文件引用；每次32项、表示数据50MiB。文件不备份本体，原件删除后无法恢复。Finder中双击文件复制到当前文件夹。RTFD、云同步、OCR、AI不在此版本。").font(.caption).foregroundStyle(.secondary)
             }.padding(24)
         }.frame(minWidth: 640, minHeight: 600)
-        .onAppear { retention = String(model.settings.retentionDays); quota = String(model.settings.quotaBytes / MiB); loginStatus = login.message; permitted = MacApplicationClient().permitted }
+        .onAppear { model.actualPanelHeight = max(280, model.settings.panelHeight); retention = String(model.settings.retentionDays); quota = String(model.settings.quotaBytes / MiB); loginStatus = login.message; permitted = MacApplicationClient().permitted }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in loginStatus = login.message; permitted = MacApplicationClient().permitted }
         .onDisappear { stopRecording() }
     }

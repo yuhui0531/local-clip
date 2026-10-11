@@ -77,6 +77,6 @@ import LocalClipCore
         let raw = RawBoard(); raw.items = [[SupportedType.string: Data("a".utf8), SupportedType.html: Data("<b>a</b>".utf8)]]
         raw.onRead = { _, _ in raw.count += 1 }
         if case .skipped(.changedDuringRead, _) = MacPasteboardClient(access: raw).capture(after: 0, policy: .init()) {} else { Issue.record("竞态未拒绝") }
-        #expect(raw.reads.count == 6)
+        #expect(raw.reads.count == 3) // 世代变化后不再读取同一轮的下一表示。
     }
 }

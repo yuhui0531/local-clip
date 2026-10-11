@@ -4,6 +4,16 @@ import Darwin
 
 public enum CodeFileReadError: Error, Equatable, Sendable {
     case unsupported, unavailable, tooLarge, binaryOrEncoding, changed
+    /// 智能转换失败的具体原因，向用户说明已保留原文件。
+    public var message: String {
+        switch self {
+        case .unsupported: "已保留原文件：文件类型不支持正文转换"
+        case .unavailable: "已保留原文件：文件无法读取或已移动"
+        case .tooLarge: "已保留原文件：单文件超过4MiB或合计超过8MiB"
+        case .binaryOrEncoding: "已保留原文件：二进制内容或编码不支持"
+        case .changed: "已保留原文件：读取期间文件已变化"
+        }
+    }
 }
 public struct CodeFileContents: Sendable {
     public let text: String
@@ -14,7 +24,7 @@ public struct CodeFileContents: Sendable {
 public enum CodeFileReader {
     public static let perFileLimit = 4 * 1024 * 1024
     public static let totalLimit = 8 * 1024 * 1024
-    public static let extensions: Set<String> = ["json", "jsonc", "java", "py", "pyw", "js", "mjs", "cjs", "jsx", "ts", "tsx", "yaml", "yml", "xml", "html", "htm", "css", "scss", "sass", "sh", "bash", "zsh", "swift", "c", "h", "cc", "cpp", "hpp", "cs", "go", "rs", "rb", "php", "sql", "toml", "md", "dockerfile"]
+    public static let extensions: Set<String> = ["json", "jsonc", "java", "py", "pyw", "js", "mjs", "cjs", "jsx", "ts", "tsx", "yaml", "yml", "xml", "html", "htm", "css", "scss", "sass", "sh", "bash", "zsh", "swift", "c", "h", "cc", "cpp", "hpp", "cs", "go", "rs", "rb", "php", "sql", "toml", "md", "dockerfile", "kt", "kts", "m", "mm", "vue", "svelte", "lua", "pl", "r", "scala", "dart", "ini", "cfg", "conf", "gradle", "ps1", "graphql", "gql", "proto", "tf"]
     struct Identity: Sendable, Equatable {
         let url: URL, device: UInt64, inode: UInt64, size: Int64, seconds: Int64, nanos: Int64
         init(url: URL, info: stat) {
@@ -35,7 +45,7 @@ public enum CodeFileReader {
         guard !urls.isEmpty, urls.count <= 64 else { throw CodeFileReadError.unsupported }
         var texts: [String] = [], identities: [Identity] = [], total = 0
         for url in urls {
-            guard url.isFileURL, [nil, "", "localhost"].contains(url.host), extensions.contains(url.pathExtension.lowercased()) || url.lastPathComponent.lowercased() == "dockerfile" else { throw CodeFileReadError.unsupported }
+            guard url.isFileURL, [nil, "", "localhost"].contains(url.host), extensions.contains(url.pathExtension.lowercased()) || ["dockerfile", "makefile", "gnumakefile"].contains(url.lastPathComponent.lowercased()) || url.lastPathComponent.lowercased().hasPrefix("dockerfile.") else { throw CodeFileReadError.unsupported }
             let fd = url.withUnsafeFileSystemRepresentation { path in path.map { open($0, O_RDONLY | O_NONBLOCK | O_NOFOLLOW) } ?? -1 }
             guard fd >= 0 else { throw CodeFileReadError.unavailable }
             defer { close(fd) }
@@ -71,7 +81,7 @@ public enum CodeFileReader {
         else if bytes.starts(with: [0xff,0xfe]) { skip = 2; encoding = .utf16LittleEndian }
         let body = Data(input.dropFirst(skip))
         guard let text = String(data: body, encoding: encoding), text.data(using: encoding) == body,
-              !text.unicodeScalars.contains(where: { $0.value == 0 || ($0.value < 32 && ![9,10,13].contains($0.value)) || $0.value == 127 }) else { throw CodeFileReadError.binaryOrEncoding }
+              !text.unicodeScalars.contains(where: { $0.value == 0 || ($0.value < 32 && ![9,10,12,13,27].contains($0.value)) || $0.value == 127 }) else { throw CodeFileReadError.binaryOrEncoding }
         return text
     }
 }

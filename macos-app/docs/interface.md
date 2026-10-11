@@ -1,4 +1,6 @@
-> 当前0.2.0说明见[本地体验交付](local-experience-delivery.md)。以下保留为旧版记录，不能认证本轮功能、接收或性能；本轮产品验收由用户自测。
+> Current fix status and verification limits: [review-fixes.md](review-fixes.md). The records below describe older versions.
+
+> 历史0.2.0说明见[本地体验交付](local-experience-delivery.md)。以下保留为旧版记录，不能认证本轮功能、接收或性能；本轮产品验收由用户自测。
 
 # 界面实现
 

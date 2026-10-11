@@ -41,8 +41,8 @@ public struct SearchField: NSViewRepresentable {
             if textView.hasMarkedText() { return false }
             switch commandSelector {
             case #selector(NSResponder.deleteBackward(_:)), #selector(NSResponder.deleteForward(_:)):
-                guard textView.string.isEmpty else { return false }
-                parent.onDelete(); return true
+                // 空搜索也保留文字编辑语义，不能误删历史记录。
+                return false
             case #selector(NSResponder.insertTab(_:)): parent.onEnter(); return true
             case #selector(NSResponder.insertNewline(_:)): parent.onEnter(); return true
             case #selector(NSResponder.moveDown(_:)): parent.onNavigate(1); return true

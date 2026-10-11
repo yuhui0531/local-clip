@@ -295,8 +295,13 @@ public struct WriteReceipt: Sendable, Equatable { public var count: Int; public 
 @MainActor public protocol PasteboardClient: AnyObject {
     var changeCount: Int { get }
     func capture(after: Int, policy: SettingsSnapshot) -> CaptureOutcome
+    func captureAsync(after: Int, policy: SettingsSnapshot) async -> CaptureOutcome
     func write(_ payload: ClipboardPayload, fingerprint: String) -> WriteReceipt
     func matches(_ receipt: WriteReceipt) -> Bool
+}
+extension PasteboardClient {
+    /// 测试边界可同步读取，实际系统适配器覆写后台正文读取。
+    public func captureAsync(after: Int, policy: SettingsSnapshot) async -> CaptureOutcome { capture(after: after, policy: policy) }
 }
 public enum PasteTargetKind: Sendable { case text, files, unknown }
 @MainActor public protocol ApplicationClient: AnyObject {

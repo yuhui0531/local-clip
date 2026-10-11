@@ -60,9 +60,15 @@ import LocalClipCore
     private var pendingDeletion: Set<ClipID> = []
     private var changingHistory = false
     private var subscription: Task<Void, Never>?
+    private var indexRepair: Task<Void, Never>?
     private var visibilityDeadline: Task<Void, Never>?
     private let clock: any ClipClock
     private var savingSettings = false
+    @Published public private(set) var recordUndoQuery: String?
+    public var canUndoFromSearch: Bool { recordUndoQuery != nil && recordUndoQuery == query }
+    private var pendingSettingsEdits: [(inout SettingsSnapshot) -> Void] = []
+    public private(set) var panelVisible = true
+    private var hiddenChanges = false
     public nonisolated static let categoryDragType = "local.localclip.history-item"
     private var dragAccesses: [ClipExportAccess] = []
     private var categoryDrag: (token: String, ids: [ClipID], expiresAt: Instant)?
@@ -86,39 +92,96 @@ import LocalClipCore
             for await event in stream {
                 guard let self, !Task.isCancelled else { return }
                 if case .derived = event {
+                    if !self.panelVisible { self.hiddenChanges = true; continue }
                     do { self.usage = try await self.store.usage() } catch { self.message = "空间计量失败" }
                     continue
                 }
                 if case .unavailable = event { self.message = "提交后存储不可用，请重启。已提交操作不会重放。" }
-                self.invalidateSelection(); self.refresh()
-                do { self.categories = try await self.store.categories(); self.pruneCategoryFilters(); self.sourceSuggestions = try await self.store.sources(); self.settings = try await self.store.settings(); self.usage = try await self.store.usage(); self.revalidateVisibleContent(); self.reconcileSelection() }
+                if !self.panelVisible {
+                    self.hiddenChanges = true
+                    do { self.settings = try await self.store.settings(); self.capture.updatePolicy(self.settings) }
+                    catch { self.message = "存储状态读取失败" }
+                    continue
+                }
+                // 更新事实后保留已加载窗口；无关记录变更不清空选中项的详情。
+                do { self.categories = try await self.store.categories(); self.pruneCategoryFilters(); self.sourceSuggestions = try await self.store.sources(); self.settings = try await self.store.settings(); self.usage = try await self.store.usage(); self.capture.updatePolicy(self.settings); self.refresh(); self.reconcileSelection() }
                 catch { self.message = "存储状态读取失败" }
             }
         }
         refresh()
+        // 旧版缺索引只在后台有界修复；空间不足仍从原格式检索，不删除历史。
+        indexRepair = Task { [weak self] in
+            while let self, !Task.isCancelled {
+                do { if try await self.store.rebuildSearchIndex() == 0 { return } }
+                catch { return }
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+        }
     }
-    /// 更新输入立即作废旧queryID，防抖60ms包含在用户延迟中。
-    public func searchChanged() { selectedIDs.removeAll(); anchorID = nil; search(debounce: true) }
+    /// 隐藏时不重复查询列表/来源/空间；打开时一次更新并保留浏览窗口。
+    public func panelVisibilityChanged(_ visible: Bool) {
+        panelVisible = visible
+        guard visible, hiddenChanges else { return }
+        hiddenChanges = false
+        Task {
+            do { settings = try await store.settings(); categories = try await store.categories(); pruneCategoryFilters(); sourceSuggestions = try await store.sources(); usage = try await store.usage(); refresh() }
+            catch { message = "存储状态读取失败" }
+        }
+    }
+    /// 更新输入立即作废旧queryID，防抖20ms给检索和绘制保留延迟预算。
+    public func searchChanged() { if recordUndoQuery != query { recordUndoQuery = nil }; selectedIDs.removeAll(); anchorID = nil; search(debounce: true) }
     /// 捕获/删除/到期刷新不额外防抖。
-    public func refresh() { search(debounce: false) }
+    public func refresh() { search(debounce: false, preserveWindow: true) }
     /// 查询乱序保护与清晰加载/失败状态。
-    private func search(debounce: Bool) {
+    private func search(debounce: Bool, preserveWindow: Bool = false) {
+        let windowSize = preserveWindow ? max(50, items.count) : 50
+        let previousSelection = selectedID
+        let previousIndex = items.firstIndex { $0.id == previousSelection } ?? 0
+        let tailCandidates = preserveWindow ? items.suffix(50).map(\.id) : []
+        let previousSelections = preserveWindow ? selectedIDs.union(Set(previousSelection.map { [$0] } ?? [])) : []
         searching?.cancel(); queryID = UUID(); let id = queryID
         let request = SearchRequest(query, favorites: favorites, kind: kind, queryID: id, categoryIDs: activeCategories, sourceBundleID: sourceFilter, from: dateBounds?.0, until: dateBounds?.1)
         loading = true; cursor = nil
         searching = Task { [weak self] in
             guard let self else { return }
             do {
-                if debounce { try await Task.sleep(for: .milliseconds(60)) }
+                // 服务P95约57ms；输入防抖缩至20ms，避免单防抖就耗尽100ms预算。
+                if debounce { try await Task.sleep(for: .milliseconds(20)) }
                 let started = ContinuousClock.now
-                let page = try await store.search(request)
+                let matching = preserveWindow ? try await store.matchingIDs(Set(tailCandidates).union(previousSelections), in: request) : nil
+                var anchors = previousSelections.intersection(matching?.ids ?? [])
+                let tail = tailCandidates.last(where: { matching?.ids.contains($0) == true })
+                if let tail { anchors.insert(tail) }
+                var page = try await store.search(request)
+                if let matching, matching.revision != page.revision { throw StoreError.invalidCursor }
+                var values = page.items
+                var loadedIDs = Set(values.map(\.id))
+                var consumedCursor = page.next
+                // 读到仍可见的原窗口尾部和选择；新增项推过50/100边界也不能替换详情。
+                while values.count < windowSize || !anchors.isSubset(of: loadedIDs), let next = page.next {
+                    consumedCursor = next
+                    var following = request; following.cursor = next
+                    page = try await store.search(following); values += page.items
+                    loadedIDs.formUnion(page.items.map(\.id))
+                    try Task.checkCancellation()
+                }
                 if settings.timingEnabled { StageTiming.record("history_query", since: started, count: page.items.count) }
                 guard !Task.isCancelled, queryID == page.queryID else { return }
-                items = page.items.filter(isVisible); cursor = page.next; pageRevision = page.revision; loading = false
+                // 只发布原窗口及锚点需要的精确范围；下一页从截断位置续读，不跳过超取行。
+                let anchorEnd = values.lastIndex { anchors.contains($0.id) }.map { $0 + 1 } ?? 0
+                let retainedCount = min(values.count, max(windowSize, anchorEnd))
+                var nextCursor = page.next
+                if retainedCount < values.count {
+                    nextCursor = consumedCursor; nextCursor?.offset = retainedCount
+                    values.removeLast(values.count - retainedCount)
+                }
+                items = values.filter(isVisible); cursor = nextCursor; pageRevision = page.revision; loading = false
+                selectedIDs.formIntersection(Set(items.map(\.id)))
                 if let selectedID, items.contains(where: { $0.id == selectedID }) { select(selectedID, preserveSelection: true) }
-                else { select(items.first?.id) }
+                else { select(items.isEmpty ? nil : items[min(previousIndex, items.count - 1)].id) }
                 scheduleVisibilityDeadline()
-            } catch is CancellationError { /* 旧输入取消无需报错。 */ }
+            } catch StoreError.invalidCursor { if id == queryID { refresh() } }
+            catch is CancellationError { /* 旧输入取消无需报错。 */ }
             catch {
                 guard id == queryID else { return }
                 loading = false; items = []; select(nil); message = "历史查询失败，请重试"
@@ -149,8 +212,19 @@ import LocalClipCore
     /// 高亮立即更新；快速连续选择取消旧元数据请求，完整正文仅在详情打开时读取。
     public func select(_ id: ClipID?, preserveSelection: Bool = false) {
         if !preserveSelection { selectedIDs = Set(id.map { [$0] } ?? []); anchorID = id }
-        if selectedID == id, let metadata = selectedMetadata,
-           metadata.summary == items.first(where: { $0.id == id }) { return }
+        if selectedID == id {
+            guard let id else { return }
+            // 同一ID的原始内容不可变；只更新元数据，不释放正在浏览的正文。
+            metadataTask?.cancel()
+            let generation = selectionGeneration
+            metadataTask = Task {
+                guard let latest = try? await store.metadata(id: id, at: clock.now()),
+                      !Task.isCancelled, selectedID == id, generation == selectionGeneration else { return }
+                selectedMetadata = latest
+                if var detail, detail.summary.id == id { detail.summary = latest.summary; detail.categoryIDs = latest.categoryIDs; detail.revision = latest.revision; self.detail = detail }
+            }
+            return
+        }
         invalidateSelection(); selectedID = id
         guard let id else { return }
         let generation = selectionGeneration
@@ -190,7 +264,7 @@ import LocalClipCore
                 }.value
                 guard !Task.isCancelled, generation == detailID, selectedID == id else { return }
                 let latest = try await store.metadata(id: id, at: clock.now())
-                guard generation == detailID, selectedID == id, latest.revision == detail.revision, isVisible(latest.summary) else { return }
+                guard generation == detailID, selectedID == id, isVisible(latest.summary), !pendingDeletion.contains(id) else { return }
                 self.detail = detail; detailLoading = false; richPreview = NSAttributedString(rich)
                 if detail.summary.kind == .image || detail.summary.kind == .mixed {
                     let bytes = await Task.detached { RichContent.fullImage(detail.payload) }.value
@@ -253,7 +327,7 @@ import LocalClipCore
         guard !ids.isEmpty else { return }
         Task {
             let result = await paste.perform(.init(ids: ids, format: format ?? settings.defaultFormat, action: action ?? settings.defaultAction, target: target))
-            message = result.message
+            message = result.message + (paste.smartPasteNotice.map { "；" + $0 } ?? "")
             notifyPasteResult(result)
         }
     }
@@ -268,14 +342,15 @@ import LocalClipCore
         Task {
             message = copyFiles ? "正在复制文件到Finder…" : "正在复制并粘贴…"
             let result = await paste.perform(.init(ids: ids, format: settings.defaultFormat, action: copyFiles ? .copy : .directPaste, target: rememberedTarget), copyFilesToFinder: copyFiles)
-            message = result.message
+            message = result.message + (paste.smartPasteNotice.map { "；" + $0 } ?? "")
             notifyPasteResult(result)
         }
     }
     /// 仅在失败或回退时提示；发出粘贴指令后不弹窗打断使用。
     private func notifyPasteResult(_ result: PasteResult) {
         switch result {
-        case .fallback, .failed: showPasteFeedback?(result.message)
+        case .fallback, .failed: showPasteFeedback?(message)
+        case .commandSent where paste.smartPasteNotice != nil: showPasteFeedback?(message)
         default: break
         }
     }
@@ -310,6 +385,7 @@ import LocalClipCore
                 await capture.refreshCapacity(); usage = try await store.usage()
                 let undo = await store.undoAvailable()
                 let deleted = { if case .delete = change { return true }; return false }()
+                if deleted { recordUndoQuery = undo ? query : nil }
                 // 分类归属成功后明确目标名称；只有提交完成才报告加入成功。
                 if case .category(let ids, let categoryID, true) = change {
                     let name = categories.first(where: { $0.id == categoryID })?.name ?? "分类"
@@ -388,14 +464,21 @@ import LocalClipCore
         change(.category(ids, categoryID, included))
     }
     /// 设置持久化成功后才更新开关与采集策略。
-    public func updateSettings(_ edit: (inout SettingsSnapshot) -> Void) {
-        guard !savingSettings else { message = "正在保存设置，请稍候"; return }
+    public func updateSettings(_ edit: @escaping (inout SettingsSnapshot) -> Void) {
+        // 保存期间累计编辑，下一次合并到最新事实，最终滑块值不会被丢弃。
+        guard !savingSettings else { pendingSettingsEdits.append(edit); return }
         var next = settings; edit(&next)
         if !next.showMenuIcon, registerShortcut?(next.shortcut) != true { message = "快捷键注册失败，不能隐藏菜单栏入口"; return }
         savingSettings = true
         if settings.captureEnabled && !next.captureEnabled { capture.requestPause() }
         Task {
-            defer { savingSettings = false }
+            defer {
+                savingSettings = false
+                if !pendingSettingsEdits.isEmpty {
+                    let edits = pendingSettingsEdits; pendingSettingsEdits.removeAll()
+                    updateSettings { value in for edit in edits { edit(&value) } }
+                }
+            }
             let previous = settings
             if next.shortcut != previous.shortcut, registerShortcut?(next.shortcut) != true { capture.updatePolicy(previous); message = "快捷键注册冲突，菜单栏仍可使用"; return }
             do {
@@ -419,7 +502,7 @@ import LocalClipCore
     public func maintenance() async {
         do { try await store.cleanExports() } catch { message = "导出临时文件回收未完成，仍计入容量" }
         revalidateVisibleContent()
-        do { _ = try await store.expire(at: clock.now()); await capture.refreshCapacity(); usage = try await store.usage(); refresh() }
+        do { let expired = try await store.expire(at: clock.now()); await capture.refreshCapacity(); usage = try await store.usage(); if expired.removed > 0 { refresh() } }
         catch { message = "清理失败，未报告已释放" }
     }
     /// 二进制容量单位与真实计量一致。
@@ -533,7 +616,7 @@ import LocalClipCore
         Task { do { try await store.moveItem(id: selectedID, categoryID: categoryID, delta: delta); refresh() } catch { message = "记录排序未保存" } }
     }
     public func undoDeletion() {
-        Task { do { try await store.undoDelete(); pendingDeletion.removeAll(); refresh(); message = "已撤销删除" } catch { message = "不能撤销：期限、容量、策略或内容已变化" } }
+        Task { do { try await store.undoDelete(); recordUndoQuery = nil; pendingDeletion.removeAll(); refresh(); message = "已撤销删除" } catch { message = "不能撤销：期限、容量、策略或内容已变化" } }
     }
     /// 依据当前记录ID逐页定位，不使用旧偏移。
     public func jumpToHistory(category: String? = nil) {

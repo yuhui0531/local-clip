@@ -112,14 +112,32 @@ struct HistoryDragBridge: NSViewRepresentable {
     @MainActor final class DragView: NSView, NSDraggingSource {
         weak var model: HistoryViewModel?
         var id: ClipID = ""
-        private var monitor: Any?
+        // 所有卡片共享一次面板事件订阅，拖动事件直接送往按下时命中的卡片。
+        private static var monitor: Any?
+        private static let views = NSHashTable<DragView>.weakObjects()
+        private static weak var active: DragView?
         private var start: NSPoint?
         private var preparing = false
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
         /// 阈值前保留原生点击；开始拖动后由AppKit完整接管源和目标会话。
         func install() {
-            monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown,.leftMouseDragged,.leftMouseUp]) { [weak self] event in
-                guard let self, event.window === self.window, let model = self.model else { return event }
+            Self.views.add(self)
+            guard Self.monitor == nil else { return }
+            Self.monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown,.leftMouseDragged,.leftMouseUp]) { event in
+                if event.type == .leftMouseDown {
+                    Self.active = Self.views.allObjects.first { view in
+                        event.window === view.window && view.visibleRect.contains(view.convert(event.locationInWindow, from: nil))
+                    }
+                }
+                guard let active = Self.active else { return event }
+                let result = active.handle(event)
+                if event.type == .leftMouseUp { Self.active = nil }
+                return result
+            }
+        }
+        /// 只处理当前拖动来源，保留SwiftUI点击和双击语义。
+        private func handle(_ event: NSEvent) -> NSEvent? {
+                guard event.window === window, let model else { return event }
                 let point = self.convert(event.locationInWindow, from: nil)
                 // 滚动裁剪之外的卡片不能抢到相邻控件的按下事件。
                 if event.type == .leftMouseDown { self.start = self.visibleRect.contains(point) ? point : nil; return event }
@@ -143,10 +161,12 @@ struct HistoryDragBridge: NSViewRepresentable {
                     } catch { model.finishDrag(cancelled: true); model.message = "拖出失败，记录或容量已变化" }
                 }
                 return nil
-            }
         }
         func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation { .copy }
         func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) { model?.finishDrag(cancelled: operation.isEmpty) }
-        isolated deinit { if let monitor { NSEvent.removeMonitor(monitor) } }
+        isolated deinit {
+            Self.views.remove(self)
+            if Self.views.allObjects.isEmpty, let monitor = Self.monitor { NSEvent.removeMonitor(monitor); Self.monitor = nil }
+        }
     }
 }

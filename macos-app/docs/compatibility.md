@@ -1,8 +1,10 @@
-> 当前0.2.0说明见[本地体验交付](local-experience-delivery.md)。以下保留为旧版记录，不能认证本轮功能、接收或性能；本轮产品验收由用户自测。
+> Current fix status and verification limits: [review-fixes.md](review-fixes.md). The records below describe older versions.
+
+> 历史0.2.0说明见[本地体验交付](local-experience-delivery.md)。以下保留为旧版记录，不能认证本轮功能、接收或性能；本轮产品验收由用户自测。
 
 # 实际兼容矩阵
 
-> 当前交付0.1.14（构建15）：历史卡片可拖到自定义分类标签，拖入高亮，复用持久化归属。保留同行类型分类/＋编辑及380pt底部布局；无升级兼容代码。本轮仅Release构建/严格签名检查，未启动应用或执行功能、GUI、SQLite、性能测试。
+> 历史交付0.1.14（构建15）：历史卡片可拖到自定义分类标签，拖入高亮，复用持久化归属。保留同行类型分类/＋编辑及380pt底部布局；无升级兼容代码。本轮仅Release构建/严格签名检查，未启动应用或执行功能、GUI、SQLite、性能测试。
 
 实际系统macOS15.7.5(24G624)/M2 Max/32GB/Swift6.2.4。部署目标15.0/arm64；最低15.0及其他系统没有实测。CLT测试不是XCUITest。
 

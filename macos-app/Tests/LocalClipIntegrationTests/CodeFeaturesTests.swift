@@ -109,7 +109,7 @@ struct CodeFeaturesTests {
         #expect(raw.items.first?[SupportedType.fileURL] == nil)
         #expect(try await store.loadPayload(id: id, at: SystemClock().now()).items.map(\.representations) == original.items.map(\.representations))
         #expect(await paste.perform(.init(ids: [id], format: .plainText, action: .copy, target: apps.remembered)) == .copied)
-        #expect(raw.items.first?[SupportedType.string] == Data(text.utf8))
+        #expect(raw.items.first?[SupportedType.fileURL] == Data(file.absoluteString.utf8))
         apps.targetKind = .files
         #expect(await paste.perform(.init(ids: [id], format: .plainText, action: .copy, target: apps.remembered)) == .copied)
         #expect(raw.items.first?[SupportedType.fileURL] != nil)
@@ -202,6 +202,8 @@ struct CodeFileBoundaryTests {
         let capture = CaptureCoordinator(board: board, store: store), paste = PasteCoordinator(board: board, applications: apps, store: store, capture: capture)
         let request = PasteRequest(ids: [id], action: .copy, target: apps.remembered)
         #expect(await paste.perform(request) == .copied)
+        #expect(raw.items.count == 2); #expect(raw.items.first?[SupportedType.fileURL] == Data(first.absoluteString.utf8))
+        #expect(await paste.perform(.init(ids: [id], action: .directPaste, target: apps.remembered)) == .commandSent)
         #expect(raw.items.first?[SupportedType.string] == Data("const first = 1;\n\n{\"second\": 2}".utf8))
         try Data([0x00,0x01]).write(to: second)
         #expect(await paste.perform(request) == .copied)
@@ -264,6 +266,8 @@ struct CodeFileBoundaryTests {
         #expect(native.pasteboardItems?.first?.string(forType: .fileURL) == file.absoluteString)
         var settings = try await store.settings(); settings.smartCodeFilePaste = true; _ = try await store.updateCaptureSettings(settings)
         #expect(await paste.perform(request) == .copied)
+        #expect(native.pasteboardItems?.first?.string(forType: .fileURL) == file.absoluteString)
+        #expect(await paste.perform(.init(ids: [id], action: .directPaste, target: apps.remembered)) == .commandSent)
         #expect(native.string(forType: .string) == text); #expect(native.pasteboardItems?.first?.data(forType: .fileURL) == nil)
         apps.targetKind = .files
         #expect(await paste.perform(request) == .copied)
@@ -323,7 +327,7 @@ struct CodePerformanceTests {
             #expect(MacApplicationClient.classifyTextMetadata(role: role, subrole: "", editable: true, selectedRangeSettable: true) == .unknown)
             #expect(MacApplicationClient.classifyTextMetadata(role: role, subrole: "", editable: nil, selectedRangeSettable: false, bundleID: "dev.zed.Zed") == .unknown)
         }
-        #expect(MacApplicationClient.classifyTextMetadata(role: "AXWindow", subrole: "AXStandardWindow", editable: nil, selectedRangeSettable: false, bundleID: "dev.zed.Zed") == .text)
+        #expect(MacApplicationClient.classifyTextMetadata(role: "AXWindow", subrole: "AXStandardWindow", editable: nil, selectedRangeSettable: false, bundleID: "dev.zed.Zed") == .unknown)
         #expect(MacApplicationClient.classifyTextMetadata(role: "AXWindow", subrole: "", editable: nil, selectedRangeSettable: false, bundleID: "com.apple.finder") == .unknown)
         #expect(MacApplicationClient.classifyTextMetadata(role: "AXWindow", subrole: "", editable: nil, selectedRangeSettable: false, bundleID: "local.unknown") == .unknown)
     }

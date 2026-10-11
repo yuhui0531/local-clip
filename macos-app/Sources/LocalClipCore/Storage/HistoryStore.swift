@@ -7,14 +7,6 @@ public actor HistoryStore: HistoryRepository {
     var listeners: [UUID: AsyncStream<HistoryEvent>.Continuation] = [:]
     var previews: [UUID: ChangePreview] = [:]
     var unavailable = false
-    private struct SearchDocument {
-        let row: [String: SQLValue]
-        let body: String
-        let normalized: Data
-        let source: Data
-    }
-    private var searchRevision: Int64 = -1
-    private var searchDocuments: [SearchDocument] = []
     // 仅缓存有限数量的字符统计，不保留正文；记录ID／指纹和可见性仍每次复查。
     private var characterCounts: [ClipID: (hash: String, count: Int)] = [:]
     /// 高版本检查先于 pragma、恢复与任何写操作。
@@ -85,22 +77,31 @@ public actor HistoryStore: HistoryRepository {
     }
     /// 共用候选配额算法，预览与实际执行不能采用不同淘汰规则。
     private func fitCandidate(_ db: SQLiteConnection, pending: Int64, quota: Int64, protectedID: ClipID?, allowOverQuota: Bool) throws {
+        // 只丢可重建缩略图；存活记录的检索文字始终保留，避免永久全文退化。
         if try db.scalarInt("PRAGMA page_count") * db.scalarInt("PRAGMA page_size") + pending > quota {
             try db.exec("BEGIN IMMEDIATE; DELETE FROM thumbnails; COMMIT")
         }
-        if try db.scalarInt("PRAGMA page_count") * db.scalarInt("PRAGMA page_size") + pending > quota {
-            // 全文索引也是可重建缓存，空间不足先丢缓存，搜索从原始格式回退。
-            try db.exec("BEGIN IMMEDIATE; DELETE FROM text_content; COMMIT")
-        }
         while try db.scalarInt("PRAGMA page_count") * db.scalarInt("PRAGMA page_size") + pending > quota {
-            let candidate = try db.scalarText("SELECT id FROM clips WHERE isFavorite=0 AND NOT EXISTS(SELECT 1 FROM clip_categories WHERE clipID=clips.id) AND id<>? ORDER BY lastCopiedAtMs,firstCopiedAtMs,id LIMIT 1", [.text(protectedID ?? "")])
-            if candidate.isEmpty {
-                if allowOverQuota { break }
-                throw StoreError.quotaExceeded
-            }
+            // 同一候选事务逐条淘汰，以空闲页估算截断后的占用；只提交一次再检查实际大小。
+            // 原库及唯一rename提交点不变，避免每条淘汰都fsync和全库孤儿扫描。
             try db.exec("BEGIN IMMEDIATE")
-            try db.run("DELETE FROM clips WHERE id=?", [.text(candidate)])
-            try garbageCollect(db); try db.exec("COMMIT")
+            var exhausted = false
+            do {
+                while try (db.scalarInt("PRAGMA page_count") - db.scalarInt("PRAGMA freelist_count")) * db.scalarInt("PRAGMA page_size") + pending > quota {
+                    let candidate = try db.scalarText("SELECT id FROM clips WHERE isFavorite=0 AND NOT EXISTS(SELECT 1 FROM clip_categories WHERE clipID=clips.id) AND id<>? ORDER BY lastCopiedAtMs,firstCopiedAtMs,id LIMIT 1", [.text(protectedID ?? "")])
+                    if candidate.isEmpty {
+                        if allowOverQuota { exhausted = true; break }
+                        throw StoreError.quotaExceeded
+                    }
+                    let digests = try db.rows("SELECT DISTINCT blobDigest FROM representations WHERE clipID=?", [.text(candidate)]).map { $0.text("blobDigest") }
+                    try db.run("DELETE FROM clips WHERE id=?", [.text(candidate)])
+                    for digest in digests {
+                        try db.run("DELETE FROM blobs WHERE digest=? AND NOT EXISTS(SELECT 1 FROM representations WHERE blobDigest=blobs.digest)", [.text(digest)])
+                    }
+                }
+                try db.exec("COMMIT")
+            } catch { try? db.exec("ROLLBACK"); throw error }
+            if exhausted { return }
         }
     }
     /// 单一候选变更入口；淘汰只发生于候选，对外发布仍是一个原子点。
@@ -123,7 +124,15 @@ public actor HistoryStore: HistoryRepository {
             unavailable = true; publish(.unavailable(.postCommitUnavailable)); throw StoreError.postCommitUnavailable
         }
         let revision = try strategy.read { try self.revision($0) }
-        searchRevision = -1; searchDocuments.removeAll()
+        // 删除后立即释放内存派生正文，不能等下一次访问才回收。
+        let cachedIDs = Set(thumbnailOrder).union(characterCounts.keys)
+        if !cachedIDs.isEmpty {
+            let parameters = cachedIDs.map(SQLValue.text), placeholders = cachedIDs.map { _ in "?" }.joined(separator: ",")
+            let liveIDs = try strategy.read { Set(try $0.rows("SELECT id FROM clips WHERE id IN(" + placeholders + ")", parameters).map { $0.text("id") }) }
+            for id in thumbnailOrder where !liveIDs.contains(id) { thumbnailBytes -= thumbnailCache.removeValue(forKey: id)?.count ?? 0 }
+            thumbnailOrder.removeAll { !liveIDs.contains($0) }
+            characterCounts = characterCounts.filter { liveIDs.contains($0.key) }
+        }
         publish(.changed(revision))
     }
     /// 入库前再复查持久化策略；敏感内容从未进入正文、预览或索引。
@@ -177,7 +186,7 @@ public actor HistoryStore: HistoryRepository {
                         try db.run("INSERT INTO representations VALUES(?,?,?,?)", [.text(id), .integer(Int64(index)), .text(representation.type), .text(digest)])
                     }
                     if let text = extractedText(item) {
-                        try db.run("INSERT INTO text_content VALUES(?,?,?,?)", [.text(id), .integer(Int64(index)), .text(text), .text(SearchNormalizer.normalize(text))])
+                        try db.run("INSERT INTO text_content VALUES(?,?,?,?)", [.text(id), .integer(Int64(index)), .text(text.utf8.count > MiB && item.representations.contains(where: { $0.type == SupportedType.string }) ? "" : text), .text(SearchNormalizer.normalize(text))])
                     }
                 }
             }
@@ -208,7 +217,7 @@ public actor HistoryStore: HistoryRepository {
             }
             let declared = try JSONDecoder().decode([String].self, from: Data(row.text("declaredTypes").utf8))
             var item = PasteboardItemValue(reps, declaredTypes: declared)
-            item.plainText = try db.rows("SELECT plainText FROM text_content WHERE clipID=? AND itemIndex=?", [.text(id), .integer(Int64(index))]).first?.text("plainText") ?? extractedText(item)
+            item.plainText = try db.rows("SELECT plainText FROM text_content WHERE clipID=? AND itemIndex=?", [.text(id), .integer(Int64(index))]).first?.text("plainText").nonEmpty ?? extractedText(item)
             values.append(item)
         }
         let payload = ClipboardPayload(values)
@@ -259,7 +268,7 @@ public actor HistoryStore: HistoryRepository {
             var texts: [String] = []
             for index in indices {
                 let itemIndex = index.int("itemIndex")
-                if let text = indexed.first(where: { $0.int("itemIndex") == itemIndex }) {
+                if let text = indexed.first(where: { $0.int("itemIndex") == itemIndex }), !text.text("plainText").isEmpty {
                     texts.append(text.text("plainText")); continue
                 }
                 // 派生索引可能被容量策略回收；只恢复文字表示，绝不读取同项目的图片字节。
@@ -289,11 +298,32 @@ public actor HistoryStore: HistoryRepository {
     }
     /// 全文字面子串；缺索引时从可提取原始表示回退，不能丢长文尾部。
     public func search(_ request: SearchRequest) throws -> SearchPage {
+        try search(request, onlyIDs: nil)
+    }
+    /// 刷新前核对浏览锚点是否仍属于查询，删除/筛选移除的ID不能迫使扫描完整历史。
+    public func matchingIDs(_ ids: Set<ClipID>, in request: SearchRequest) throws -> (ids: Set<ClipID>, revision: Int64) {
+        var matching: Set<ClipID> = []
+        let revision = try strategy.read { try self.revision($0) }
+        let values = Array(ids)
+        for start in stride(from: 0, to: values.count, by: 50) {
+            var query = request; query.cursor = nil; query.pageSize = 50
+            let page = try search(query, onlyIDs: Set(values[start..<min(start + 50, values.count)]))
+            guard page.revision == revision else { throw StoreError.invalidCursor }
+            matching.formUnion(page.items.map(\.id))
+        }
+        return (matching, revision)
+    }
+    private func search(_ request: SearchRequest, onlyIDs: Set<ClipID>?) throws -> SearchPage {
         let settings = try settings(); let at = clock.now()
         return try strategy.read { db in
             let revision = try self.revision(db)
             if let cursor = request.cursor, cursor.revision != revision || cursor.signature != request.signature { throw StoreError.invalidCursor }
-            let (condition, filters, order) = searchCondition(request, settings: settings, at: at)
+            var (condition, filters, order) = searchCondition(request, settings: settings, at: at)
+            if let onlyIDs {
+                let ids = onlyIDs.sorted()
+                condition += " AND id IN (" + ids.map { _ in "?" }.joined(separator: ",") + ")"
+                filters += ids.map { .text($0) }
+            }
             let needle = SearchNormalizer.normalize(request.literal)
             let offset = request.cursor?.offset ?? 0; let size = min(50, max(1, request.pageSize))
             guard offset >= 0 else { throw StoreError.invalidCursor }
@@ -303,57 +333,70 @@ public actor HistoryStore: HistoryRepository {
                 let rows = try db.rows("SELECT *, (isFavorite=1 OR EXISTS(SELECT 1 FROM clip_categories WHERE clipID=clips.id)) AS isProtected FROM clips WHERE " + condition + " ORDER BY " + order + " LIMIT ? OFFSET ?", filters + (request.categoryIDs.count == 1 ? [.text(request.categoryIDs.first!)] : []) + [.integer(Int64(size)), .integer(Int64(offset))])
                 return SearchPage(queryID: request.queryID, revision: revision, items: rows.map { summary($0) }, next: offset + rows.count < count ? .init(revision: revision, offset: offset + rows.count, signature: request.signature) : nil)
             }
-            // 内存仅缓存当前SQLite revision的派生全文；任何提交先失效，所有可见性逐次检查。
-            if searchRevision != revision {
-                let metadata = try db.rows("SELECT *, (isFavorite=1 OR EXISTS(SELECT 1 FROM clip_categories WHERE clipID=clips.id)) AS isProtected FROM clips")
-                let textRows = try db.rows("SELECT * FROM text_content ORDER BY clipID,itemIndex")
-                let grouped = Dictionary(grouping: textRows) { $0.text("clipID") }
-                let expected = try db.rows("SELECT clipID,COUNT(DISTINCT itemIndex) AS n FROM representations WHERE type IN('public.utf8-plain-text','public.url','public.rtf','public.html') GROUP BY clipID")
-                let counts = Dictionary(uniqueKeysWithValues: expected.map { ($0.text("clipID"),$0.int("n")) })
-                var documents: [SearchDocument] = []
-                for row in metadata {
-                    let id = row.text("id"), cached = grouped[row.text("id")] ?? []
-                    let body: String, normalized: String
-                    if Int64(cached.count) < (counts[id] ?? 0) {
-                        body = try readPayload(db,id:id).items.compactMap(\.plainText).joined(separator:"\n")
-                        normalized = SearchNormalizer.normalize(body)
-                    } else {
-                        body = cached.map { $0.text("plainText") }.joined(separator:"\n")
-                        normalized = cached.map { $0.text("normalizedText") }.joined(separator:"\n")
+            // 按SQLite页缓存扫描有界结果，不在Swift中常驻全部正文/规范化副本。
+            // BLOB instr保持NUL及UTF-8字节字面语义，不使用LIKE/FTS通配规则。
+            let repairIDs = onlyIDs?.sorted() ?? []
+            let repairFilter = onlyIDs == nil ? "" : " AND r.clipID IN (" + repairIDs.map { _ in "?" }.joined(separator: ",") + ")"
+            let missing = try db.rows("SELECT DISTINCT r.clipID FROM representations r LEFT JOIN text_content t ON t.clipID=r.clipID AND t.itemIndex=r.itemIndex WHERE t.clipID IS NULL AND r.type IN('public.utf8-plain-text','public.url','public.rtf','public.html','public.file-url')" + repairFilter, repairIDs.map { .text($0) })
+            // 旧库缺失索引先在只读连接的临时表补齐，原始载荷仍是最终依据。
+            if !missing.isEmpty {
+                try db.exec("CREATE TEMP TABLE search_repair(clipID TEXT,itemIndex INTEGER,plainText TEXT,normalizedText TEXT)")
+                for row in missing {
+                    let payload = try readPayload(db, id: row.text("clipID"))
+                    for (index, item) in payload.items.enumerated() {
+                        guard try db.scalarInt("SELECT COUNT(*) FROM text_content WHERE clipID=? AND itemIndex=?", [.text(row.text("clipID")), .integer(Int64(index))]) == 0 else { continue }
+                        let text = extractedText(item) ?? ""
+                        try db.run("INSERT INTO search_repair VALUES(?,?,?,?)", [.text(row.text("clipID")), .integer(Int64(index)), .text(text), .text(SearchNormalizer.normalize(text))])
                     }
-                    documents.append(.init(row:row,body:body,normalized:Data(normalized.utf8),source:Data(SearchNormalizer.normalize(row.text("sourceName")).utf8)))
                 }
-                searchDocuments = documents; searchRevision = revision
             }
-            var candidates: [(Int, [String: SQLValue], String?)] = []
-            let filteredRows = try db.rows("SELECT id FROM clips WHERE " + condition, filters)
-            let members = Set(filteredRows.map { $0.text("id") })
-            let needleBytes = Data(needle.utf8)
-            for document in searchDocuments {
-                let row = document.row
-                guard members.contains(row.text("id")), visible(row, at: at, settings: settings) else { continue }
-                let rank: Int
-                // 两边均已NFC/ASCII规范化；UTF-8字节边界不会匹配到多字节字符内部。
-                if let match = document.normalized.range(of:needleBytes) { rank = match.lowerBound == 0 ? (document.normalized.count == needleBytes.count ? 0 : 1) : 2 }
-                else if document.source.range(of:needleBytes) != nil { rank = 3 }
-                else { continue }
-                candidates.append((rank,row,document.body))
-            }
-            candidates.sort {
-                if $0.0 != $1.0 { return $0.0 < $1.0 }
-                if $0.1.int("lastCopiedAtMs") != $1.1.int("lastCopiedAtMs") { return $0.1.int("lastCopiedAtMs") > $1.1.int("lastCopiedAtMs") }
-                return $0.1.text("id") < $1.1.text("id")
-            }
-            guard offset >= 0 && offset <= candidates.count else { throw StoreError.invalidCursor }
-            let end = min(offset + size, candidates.count)
-            let page = try candidates[offset..<end].map { rank, row, fallback in
-                if rank == 3 { return summary(row, context: row.text("sourceName")) }
-                let body = try fallback ?? db.rows("SELECT plainText FROM text_content WHERE clipID=? ORDER BY itemIndex", [.text(row.text("id"))]).map { $0.text("plainText") }.joined(separator: "\n")
+            let indexed = missing.isEmpty ? "text_content" : "(SELECT * FROM text_content UNION ALL SELECT * FROM search_repair)"
+            let sql = """
+            WITH matches AS MATERIALIZED (
+                SELECT clips.*, (isFavorite=1 OR EXISTS(SELECT 1 FROM clip_categories WHERE clipID=clips.id)) AS isProtected,
+                clip_literal_rank(
+                    (SELECT CAST(group_concat(normalizedText,char(10)) AS BLOB)
+                     FROM (SELECT normalizedText FROM \(indexed) WHERE clipID=clips.id ORDER BY itemIndex)),
+                    CAST(? AS BLOB),sourceName) AS matchRank
+                FROM clips WHERE \(condition)
+            ) SELECT * FROM matches WHERE matchRank<4
+              ORDER BY matchRank,lastCopiedAtMs DESC,id LIMIT ? OFFSET ?
+            """
+            let rows = try db.rows(sql, [.text(needle)] + filters + [.integer(Int64(size + 1)), .integer(Int64(offset))])
+            let page = try rows.prefix(size).map { row -> ClipSummary in
+                if onlyIDs != nil { return summary(row) }
+                if row.int("matchRank") == 3 { return summary(row, context: row.text("sourceName")) }
+                let texts = try db.rows("SELECT plainText FROM \(indexed) WHERE clipID=? ORDER BY itemIndex", [.text(row.text("id"))])
+                let body: String
+                if texts.contains(where: { $0.text("plainText").isEmpty }) {
+                    body = try readPayload(db, id: row.text("id")).items.compactMap(\.plainText).joined(separator: "\n")
+                } else { body = texts.map { $0.text("plainText") }.joined(separator: "\n") }
                 return summary(row, context: SearchNormalizer.context(body, literal: request.literal))
             }
             return SearchPage(queryID: request.queryID, revision: revision, items: page,
-                next: end < candidates.count ? .init(revision: revision, offset: end, signature: request.signature) : nil)
+                next: rows.count > size ? .init(revision: revision, offset: offset + size, signature: request.signature) : nil)
         }
+    }
+    /// 旧库曾回收的全文索引以最多200条候选批次补齐；失败不淘汰任何历史。
+    public func rebuildSearchIndex(limit: Int = 200) throws -> Int {
+        let missing = try strategy.read { db in
+            try db.rows("SELECT DISTINCT r.clipID FROM representations r LEFT JOIN text_content t ON t.clipID=r.clipID AND t.itemIndex=r.itemIndex WHERE t.clipID IS NULL AND r.type IN('public.utf8-plain-text','public.url','public.rtf','public.html','public.file-url') LIMIT ?", [.integer(Int64(min(200, max(1, limit))))]).map { $0.text("clipID") }
+        }
+        guard !missing.isEmpty else { return 0 }
+        let settings = try settings()
+        try mutate(quota: settings.quotaBytes) { db in
+            for id in missing {
+                let payload = try readPayload(db, id: id)
+                for (index, item) in payload.items.enumerated() {
+                    guard item.representations.contains(where: { [SupportedType.string, SupportedType.url, SupportedType.fileURL, SupportedType.rtf, SupportedType.html].contains($0.type) }),
+                          try db.scalarInt("SELECT COUNT(*) FROM text_content WHERE clipID=? AND itemIndex=?", [.text(id), .integer(Int64(index))]) == 0 else { continue }
+                    let text = extractedText(item) ?? ""
+                    let compact = text.utf8.count > MiB && item.representations.contains(where: { $0.type == SupportedType.string })
+                    try db.run("INSERT INTO text_content VALUES(?,?,?,?)", [.text(id), .integer(Int64(index)), .text(compact ? "" : text), .text(SearchNormalizer.normalize(text))])
+                }
+            }
+        }
+        return missing.count
     }
     /// 变更预览带数据库/设置版本，确认过期必须重新预览。
     public func preview(_ change: HistoryChange) throws -> ChangePreview {
@@ -494,7 +537,7 @@ public actor HistoryStore: HistoryRepository {
         let settings = try settings(), usage = try usage()
         if usage.measuredTotal < settings.quotaBytes { return true }
         try strategy.commit(quota: settings.quotaBytes, allowOverQuota: true, dryRun: true) { db in
-            try db.exec("DELETE FROM clips WHERE isFavorite=0 AND NOT EXISTS(SELECT 1 FROM clip_categories WHERE clipID=clips.id); DELETE FROM thumbnails; DELETE FROM text_content")
+            try db.exec("DELETE FROM clips WHERE isFavorite=0 AND NOT EXISTS(SELECT 1 FROM clip_categories WHERE clipID=clips.id); DELETE FROM thumbnails")
             try garbageCollect(db)
         }
         return strategy.lastCandidateBytes + (try CommitStrategy.bytes(strategy.staging)) + (try CommitStrategy.bytes(strategy.root.appendingPathComponent("Exports"))) < settings.quotaBytes
@@ -528,36 +571,32 @@ public actor HistoryStore: HistoryRepository {
         let revision = try self.revision(db); try db.close(); unavailable = false
         return .init(revision: revision, pendingBytes: pending)
     }
-    /// 派生提交复查全局版本和可见性；旧任务永远不能重建已删内容。
+    private var thumbnailCache: [ClipID: Data] = [:]
+    private var thumbnailOrder: [ClipID] = []
+    private var thumbnailBytes = 0
+    /// 仅保留至多16MiB的派生内存；旧任务仍核对版本，删除不会重生。
     public func cacheThumbnail(id: ClipID, revision expected: Int64, data: Data) throws -> Bool {
-        let settings = try settings(); let at = clock.now()
-        let allowed = try strategy.read { db in
-            guard try self.revision(db) == expected, let row = try db.rows("SELECT *, (isFavorite=1 OR EXISTS(SELECT 1 FROM clip_categories WHERE clipID=clips.id)) AS isProtected FROM clips WHERE id=?", [.text(id)]).first else { return false }
-            return visible(row, at: at, settings: settings)
+        let metadata = try? metadata(id: id, at: clock.now())
+        guard let metadata, metadata.revision == expected, data.count <= 16 * MiB else { return false }
+        if let previous = thumbnailCache.removeValue(forKey: id) { thumbnailBytes -= previous.count }
+        thumbnailOrder.removeAll { $0 == id }
+        while thumbnailBytes + data.count > 16 * MiB || thumbnailOrder.count >= 256, let old = thumbnailOrder.first {
+            thumbnailOrder.removeFirst(); thumbnailBytes -= thumbnailCache.removeValue(forKey: old)?.count ?? 0
         }
-        guard allowed else { return false }
-        do {
-            try strategy.commit(quota: settings.quotaBytes, estimatedGrowth: Int64(data.count) + 8192) { db in
-                try db.run("INSERT OR REPLACE INTO thumbnails VALUES(?,?,?,?)", [.text(id), .integer(expected), .blob(data), .integer(Int64(data.count))])
-            }
-            publish(.derived(id))
-            return true
-        } catch StoreError.quotaExceeded { return false }
-        catch StoreError.diskFull { return false }
-        catch StoreError.postCommitUnavailable { unavailable = true; publish(.unavailable(.postCommitUnavailable)); throw StoreError.postCommitUnavailable }
+        thumbnailCache[id] = data; thumbnailOrder.append(id); thumbnailBytes += data.count
+        return true
     }
-    /// 缓存缺失是正常情况，恢复永远依赖原始表示。
+    /// 内存命中也复查可见性；持久旧缓存不会产生新写入。
     public func thumbnail(id: ClipID, at: Instant) throws -> Data? {
-        let settings = try settings()
-        return try strategy.read { db in
-            guard let row = try db.rows("SELECT *, (isFavorite=1 OR EXISTS(SELECT 1 FROM clip_categories WHERE clipID=clips.id)) AS isProtected FROM clips WHERE id=?", [.text(id)]).first, visible(row, at: at, settings: settings) else { throw StoreError.notFound }
-            return try db.rows("SELECT encodedImage FROM thumbnails WHERE clipID=?", [.text(id)]).first?.data("encodedImage")
-        }
+        _ = try metadata(id: id, at: at)
+        if let cached = thumbnailCache[id] { return cached }
+        return try strategy.read { try $0.rows("SELECT encodedImage FROM thumbnails WHERE clipID=?", [.text(id)]).first?.data("encodedImage") }
     }
+
     private struct UndoPacket {
-        var expires: Instant
-        var tables: [String: [[String: SQLValue]]]
-        var bytes: Int64
+        let expires: Instant
+        let tables: [String: [[String: SQLValue]]]
+        let bytes: Int64
     }
     private var undoPacket: UndoPacket?
     private var undoExpiry: Task<Void, Never>?
@@ -669,12 +708,12 @@ public actor HistoryStore: HistoryRepository {
     public func exportAccess(id: ClipID) throws -> ClipExportAccess {
         let metadata = try metadata(id: id, at: clock.now())
         let types = try strategy.read { try $0.rows("SELECT DISTINCT type FROM representations WHERE clipID=? ORDER BY type", [.text(id)]).map { $0.text("type") } }
-        return ClipExportAccess(database: strategy.databaseURL, id: id, revision: metadata.revision, types: types)
+        return ClipExportAccess(database: strategy.databaseURL, id: id, revision: metadata.revision, types: types, contentHash: try strategy.read { try $0.scalarText("SELECT contentHash FROM clips WHERE id=?", [.text(id)]) })
     }
     /// 导出仅占用自有临时空间，拒绝超配额，不淘汰历史；10分钟内文件租约保留。
     public func writeExport(_ data: Data, id: ClipID, revision: Int64) throws -> URL {
-        let metadata = try metadata(id: id, at: clock.now())
-        guard metadata.revision == revision, Int64(data.count) <= 50 * MiB else { throw StoreError.stalePreview }
+        _ = try metadata(id: id, at: clock.now())
+        guard Int64(data.count) <= 50 * MiB else { throw StoreError.stalePreview }
         let settings = try settings(), usage = try usage()
         guard usage.temporary + Int64(data.count) + 8192 <= 50 * MiB, usage.measuredTotal + Int64(data.count) + 8192 <= settings.quotaBytes else { throw StoreError.quotaExceeded }
         let directory = strategy.root.appendingPathComponent("Exports")
@@ -694,3 +733,5 @@ public actor HistoryStore: HistoryRepository {
     }
 
 }
+
+private extension String { var nonEmpty: String? { isEmpty ? nil : self } }

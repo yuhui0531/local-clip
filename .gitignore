@@ -39,6 +39,8 @@ DerivedData/
 probe
 sql-probe
 rowid-probe
+*probe*
+*-probe-*
 
 # SQLite Databases & Journal / WAL files (Runtime & Test generated)
 *.sqlite
@@ -53,9 +55,11 @@ rowid-probe
 **/store/
 **/isolated-data/
 
-# Local Experience Delivery & Intermediate Validation Artifacts
+# Intermediate Delivery, Review & Validation Artifacts
 evidence/delivery/
 **/evidence/delivery/
+evidence/review-fixes/
+**/evidence/review-fixes/
 
 # IDE & Editor Settings
 .idea/
@@ -71,3 +75,5 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .venv/
+
+paste-report/*

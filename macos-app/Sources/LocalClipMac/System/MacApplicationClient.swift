@@ -24,17 +24,36 @@ import LocalClipCore
         if ["AXGroup", "AXDocument", "AXWebArea"].contains(role), editable == nil {
             _ = AXUIElementIsAttributeSettable(focused, kAXSelectedTextRangeAttribute as CFString, &settable)
         }
-        return Self.classifyTextMetadata(role: role, subrole: subrole, editable: editable, selectedRangeSettable: settable.boolValue, bundleID: target.bundleID)
+        return Self.classifyTextMetadata(role: role, subrole: subrole, editable: editable, selectedRangeSettable: settable.boolValue, bundleID: target.bundleID, terminalContext: terminalContext(focused))
     }
     /// 文本角色与明确编辑能力是转换依据；安全文本、只读及未知画布都保持原文件，by AI.Coding。
-    static func classifyTextMetadata(role: String, subrole: String, editable: Bool?, selectedRangeSettable: Bool, bundleID: String = "") -> PasteTargetKind {
+    static func classifyTextMetadata(role: String, subrole: String, editable: Bool?, selectedRangeSettable: Bool, bundleID: String = "", terminalContext: Bool = false) -> PasteTargetKind {
+        // 终端的文本角色不能证明是编辑器，未知窗口也不做整文件转换。
+        let terminals: Set<String> = ["com.apple.Terminal", "com.googlecode.iterm2", "dev.warp.Warp-Stable", "dev.warp.Warp", "net.kovidgoyal.kitty", "com.mitchellh.ghostty", "org.alacritty", "io.alacritty"]
+        guard !terminals.contains(bundleID), !terminalContext else { return .unknown }
         guard subrole != "AXSecureTextField", editable != false else { return .unknown }
         if ["AXTextArea", "AXTextField", "AXSearchField"].contains(role) { return .text }
         if ["AXGroup", "AXDocument", "AXWebArea"].contains(role), editable == true || selectedRangeSettable { return .text }
-        // Zed的自绘编辑器当前只暴露窗口焦点。仅为该已知编辑器补足能力识别，
-        // 仍要求原窗口身份、前台及权限；不把任意应用窗口或已识别的非文本控件当编辑器。
-        if bundleID == "dev.zed.Zed", role == "AXWindow" { return .text }
         return .unknown
+    }
+    /// 只查询控件身份/描述及祖先，不读取正文；嵌入式终端保持文件行为。
+    private func terminalContext(_ element: AXUIElement) -> Bool {
+        var current: AXUIElement? = element
+        for _ in 0..<16 {
+            guard let node = current else { break }
+            for name in ["AXIdentifier", "AXDescription", "AXRoleDescription"] {
+                if let value = attribute(name, of: node) as? String,
+                   Self.isTerminalMetadata(value) { return true }
+            }
+            guard let parent = attribute("AXParent", of: node), CFGetTypeID(parent) == AXUIElementGetTypeID(),
+                  !CFEqual(parent, node) else { break }
+            current = (parent as! AXUIElement)
+        }
+        return false
+    }
+    /// 常见辅助功能标识支持英文及中文终端描述。
+    static func isTerminalMetadata(_ value: String) -> Bool {
+        value.localizedCaseInsensitiveContains("terminal") || value.contains("终端")
     }
     public var permitted: Bool { AXIsProcessTrusted() }
     /// 用户点击粘贴时只请求系统显示授权提示，不修改系统权限数据库。

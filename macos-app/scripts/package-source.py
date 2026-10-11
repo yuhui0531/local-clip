@@ -12,7 +12,7 @@ DESTINATION = APP / "dist/LocalClip-source.tar.gz"
 
 def main() -> None:
     # 白名单只包含编译输入、原有测试源码和当前实施文档；不打包历史验收数据。
-    files = [APP / "Package.swift", APP / "README.md", APP / "docs/local-experience-delivery.md", APP / "docs/code-features-delivery.md"]
+    files = [APP / "Package.swift", APP / "README.md", APP / "docs/local-experience-delivery.md", APP / "docs/code-features-delivery.md", APP / "docs/review-fixes.md", PROJECT / "changes/active/localclip-review-fixes/debug-log-2026-10-11-review-fixes.md"]
     for folder in ("Sources", "Tests", "Resources", "scripts"):
         files.extend(path for path in (APP / folder).rglob("*") if path.is_file()
                      and not any(part.startswith(".") for part in path.relative_to(APP).parts)

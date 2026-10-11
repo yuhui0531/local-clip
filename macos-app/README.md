@@ -1,6 +1,6 @@
-# LocalClip 0.3.1（构建22）
+# LocalClip 0.3.4（构建25）
 
-本次修复：补足Zed窗口焦点识别、VS Code原焦点保持及原焦点恢复后的代码文件转换。66个回归测试通过；实际第三方接收记录见[排查与验证报告](../paste-report/implementation-plan-2026-10-10/debug-log-2026-10-11-code-file-paste.md)。设置中「代码文件智能粘贴」仍默认关闭，用户主动开启；语法高亮始终开启。Finder及未知目标保持文件。
+Review fixes: preserve loaded history and detail during captures, keep queued copies across preference saves, make Copy deterministic, reject terminal code conversion, retain search indexes under quota pressure, and use bounded in-memory thumbnails. Full status and verification: [review fixes](docs/review-fixes.md). The independent 0.3.2 review found two remaining defects; 0.3.3 adds page-boundary/hidden-burst preservation and worker-side privacy checks; the independent follow-up found page amplification, corrected in 0.3.4 with an exact published range and continuation cursor. Release UI target receipt remains pending.
 
 ## 0.2.4（20）的既有界面基础
 
@@ -10,7 +10,7 @@
 - 源码：`dist/LocalClip-source.tar.gz`
 - [当前使用说明、权限、自测与限制](docs/local-experience-delivery.md)
 - [本轮任务](../paste-report/implementation-plan-2026-10-10/tasks.md)
-- 当前修复证据：`evidence/delivery/code-smart-paste-fix/`；高亮与组件性能基线：`evidence/delivery/code-smart-paste/`
+- 当前审查修复证据：`evidence/review-fixes/`；历史0.3.0调试接收证据：`evidence/delivery/code-smart-paste-fix/`
 - 既有界面证据：`evidence/delivery/local-experience/`
 
 ```sh
@@ -21,7 +21,7 @@ rtk proxy bash macos-app/scripts/build-app.sh release
 
 ---
 
-以下是0.1.14及之前版本的历史README，保留已有工程记录。旧格式、目录、行为、通过数及样本不代表0.3.1；当前说明以上方链接为准。
+以下是0.1.14及之前版本的历史README，保留已有工程记录。旧格式、目录、行为、通过数及样本不代表0.3.4；当前说明以上方链接为准。
 
 # LocalClip 0.1.14
 

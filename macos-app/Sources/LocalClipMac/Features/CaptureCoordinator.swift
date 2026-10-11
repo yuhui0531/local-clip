@@ -17,6 +17,7 @@ import LocalClipCore
     private var queueBytes: Int64 = 0
     private var timedPauseActive = false
     private var pausePending = false
+    private var captureEpoch = UUID()
     public var onState: ((String) -> Void)?
     public var onCommit: (() -> Void)?
     public init(board: any PasteboardClient, store: any HistoryRepository, clock: any ClipClock = SystemClock()) {
@@ -32,35 +33,59 @@ import LocalClipCore
             while !Task.isCancelled {
                 try? await Task.sleep(for: .milliseconds(200))
                 guard let self, !Task.isCancelled else { break }
-                self.tick()
+                await self.poll()
             }
         }
     }
     /// 停止轮询不主动替换系统剪贴板。
-    public func stop() { polling?.cancel(); polling = nil; draining?.cancel(); draining = nil }
-    /// 改配置或恢复容量从新基线开始，不补采暂停期间的内容。
+    public func stop() { polling?.cancel(); polling = nil; draining?.cancel(); draining = nil; rebaseline() }
+    /// 配置更新保留已采集队列；只有暂停状态转变需要丢弃和重建基线。
     public func updatePolicy(_ policy: SettingsSnapshot) {
-        self.policy = policy; pausePending = false; baseline = board.changeCount; queue.removeAll(); queueBytes = 0
+        let now = clock.now()
+        let wasPaused = pausePending || !self.policy.captureEnabled || (self.policy.pauseUntil ?? 0) > now
+        let isPaused = !policy.captureEnabled || (policy.pauseUntil ?? 0) > now
+        self.policy = policy; pausePending = false
+        if wasPaused != isPaused || isPaused { rebaseline() }
+        timedPauseActive = (policy.pauseUntil ?? 0) > now
         setState(!policy.captureEnabled ? "用户暂停" : capacityBlocked ? "容量已满" : "正常")
     }
+    /// 暂停、恢复和容量状态转变才失效在途快照，普通设置不能吞复制。
+    public func rebaseline() {
+        captureEpoch = UUID(); baseline = board.changeCount; queue.removeAll(); queueBytes = 0
+    }
     /// 用户请求暂停即阻止在途快照，持久化完成前不假装配置已经保存。
-    public func requestPause() { pausePending = true; baseline = board.changeCount; queue.removeAll(); queueBytes = 0; setState("正在暂停") }
+    public func requestPause() { pausePending = true; rebaseline(); setState("正在暂停") }
     /// 写入阶段同步在 MainActor 内完成，计数与指纹是精确收据。
     public func recordOwnWrite(_ receipt: WriteReceipt) { ownReceipt = receipt }
     /// 容量恢复不覆盖主动暂停；不会重采旧剪贴板。
     public func refreshCapacity() async {
         do {
             let blocked = try await !store.canCapture()
-            if blocked != capacityBlocked { capacityBlocked = blocked; baseline = board.changeCount }
+            if blocked != capacityBlocked { capacityBlocked = blocked; rebaseline() }
             setState(!policy.captureEnabled ? "用户暂停" : capacityBlocked ? "容量已满" : "正常")
         } catch { setState("存储异常") }
     }
     /// 每轮仅观察一次变化，有界队列不吞掉已排队内容。
-    public func tick() {
+    private func readyToRead() -> Bool {
         let timed = (policy.pauseUntil ?? 0) > clock.now()
-        if timed != timedPauseActive { timedPauseActive = timed; baseline = board.changeCount; queue.removeAll(); queueBytes = 0; setState(timed ? "定时暂停" : "正常"); return }
-        if timed || pausePending || !policy.captureEnabled || capacityBlocked { baseline = board.changeCount; return }
-        switch board.capture(after: baseline, policy: policy) {
+        if timed != timedPauseActive { timedPauseActive = timed; rebaseline(); setState(timed ? "定时暂停" : "正常"); return false }
+        if timed || pausePending || !policy.captureEnabled || capacityBlocked { baseline = board.changeCount; return false }
+        return true
+    }
+    public func tick() {
+        guard readyToRead() else { return }
+        handle(board.capture(after: baseline, policy: policy))
+    }
+    /// 系统IPC等待期间不占主线程；暂停世代失效后不发布旧读取结果。
+    public func poll() async {
+        guard readyToRead() else { return }
+        let epoch = captureEpoch
+        let outcome = await board.captureAsync(after: baseline, policy: policy)
+        guard !Task.isCancelled, epoch == captureEpoch, !pausePending, policy.captureEnabled else { return }
+        handle(outcome)
+    }
+    private func handle(_ outcome: CaptureOutcome) {
+        switch outcome {
         case .noChange: return
         case .skipped(let reason, let count):
             baseline = count
@@ -68,7 +93,7 @@ import LocalClipCore
             ownReceipt = nil; if reason == .excluded && policy.pauseWhenExcludedFrontmost { setState("排除应用在前台，未采集") }; ignored(reason)
         case .snapshot(let snapshot):
             baseline = snapshot.changeCount
-            guard !pausePending, policy.captureEnabled, policy.revision == snapshot.policyRevision else { ignored(.paused); return }
+            guard !pausePending, policy.captureEnabled else { ignored(.paused); return }
             if let receipt = ownReceipt, receipt.count == snapshot.changeCount, board.matches(receipt) { ownReceipt = nil; ignored(.selfWrite); return }
             // 失败写入造成的空/半份也只忽略该精确计数，随后用户计数立即有效。
             if let receipt = ownReceipt, !receipt.successful, receipt.count == snapshot.changeCount { ownReceipt = nil; ignored(.selfWrite); return }
@@ -81,13 +106,26 @@ import LocalClipCore
     /// 入库前后台解码后复查当前策略及版本；不在主线程解析图片或哈希。
     private func drain() async {
         while !queue.isEmpty && !Task.isCancelled {
+            let epoch = captureEpoch
             let raw = queue.removeFirst(); queueBytes -= raw.payload.byteCount
             let started = ContinuousClock.now
-            let snapshot = await Task.detached(priority: .utility) { ContentDecoder.decode(raw) }.value
+            var snapshot = await Task.detached(priority: .utility) { ContentDecoder.decode(raw) }.value
             if policy.timingEnabled { StageTiming.record("capture_decode", since: started, count: snapshot.payload.items.count) }
-            guard !pausePending, policy.captureEnabled, (policy.pauseUntil ?? 0) <= clock.now(), policy.revision == snapshot.policyRevision else { ignored(.paused); continue }
+            guard !pausePending, policy.captureEnabled, (policy.pauseUntil ?? 0) <= clock.now(), epoch == captureEpoch else { ignored(.paused); continue }
             do {
-                let result = try await store.ingest(snapshot, at: snapshot.capturedAt)
+                // UI偏好、收藏、分类提交不改变复制资格；用最新策略重新校验并盖章。
+                var result: IngestResult?
+                for _ in 0..<3 {
+                    let persisted = try await store.settings()
+                    guard epoch == captureEpoch, !pausePending else { break }
+                    if let reason = persisted.rejection(source: snapshot.source, types: snapshot.payload.items.map(\.declaredTypes)) {
+                        result = .skipped(reason); break
+                    }
+                    snapshot.policyRevision = persisted.revision
+                    do { result = try await store.ingest(snapshot, at: snapshot.capturedAt); break }
+                    catch StoreError.policyChanged { continue }
+                }
+                guard let result else { ignored(epoch == captureEpoch ? .busy : .paused); continue }
                 switch result {
                 case .inserted, .deduplicated:
                     setState("正常"); if policy.captureSounds { NSSound(named: "Pop")?.play() }; onCommit?()
@@ -99,7 +137,7 @@ import LocalClipCore
             catch StoreError.quotaExceeded {
                 do {
                     capacityBlocked = try await !store.canCapture()
-                    if capacityBlocked { baseline = board.changeCount; queue.removeAll(); queueBytes = 0 }
+                    if capacityBlocked { rebaseline() }
                     setState(capacityBlocked ? "容量已满，未记录新内容" : "容量不足，本条未记录")
                 } catch { setState("容量状态读取失败，未记录") }
             }

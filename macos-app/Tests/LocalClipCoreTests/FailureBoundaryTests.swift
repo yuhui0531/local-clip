@@ -34,7 +34,7 @@ struct FailureBoundaryTests {
         #expect(try await store.usage().pending >= max(Int64(info.st_size),Int64(info.st_blocks)*512))
         #expect(try await store.usage().pending > 1)
     }
-    /// 正文能放下而全文缓存不能时，丢缓存也不得丢旧收藏和原格式。
+    /// 保留检索规范化文字，压缩可从原格式还原的大文本副本，不丢旧收藏。
     @Test func AC25_indexBudgetPreservesOriginal() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -52,7 +52,7 @@ struct FailureBoundaryTests {
         #expect(try await store.search(.init("CACHE-MISSING-TAIL")).items.first?.id == id)
         #expect(try await store.usage().measuredTotal <= 100 * MiB)
         let db = try SQLiteConnection(root.appendingPathComponent("History/history.sqlite"), readonly: true)
-        #expect(try db.scalarInt("SELECT COUNT(*) FROM text_content") == 0); try db.close()
+        #expect(try db.scalarInt("SELECT COUNT(*) FROM text_content") == 1); try db.close()
     }
     /// 操作系统实际拒绝回收时文件仍被计量，恢复不能报已释放。
     @Test func AC25_realCleanupPermissionFailure() async throws {

@@ -31,6 +31,8 @@ DerivedData/
 probe
 sql-probe
 rowid-probe
+*probe*
+*-probe-*
 
 # Test SQLite Databases & Store Directories
 *.sqlite
@@ -48,6 +50,8 @@ isolated-data/
 **/store/
 **/isolated-data/
 
-# Intermediate Delivery & Validation Artifacts
+# Intermediate Delivery, Review & Validation Artifacts
 evidence/delivery/
 **/evidence/delivery/
+evidence/review-fixes/
+**/evidence/review-fixes/

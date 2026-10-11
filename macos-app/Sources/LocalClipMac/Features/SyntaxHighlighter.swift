@@ -11,6 +11,8 @@ public struct SyntaxHighlight: Sendable {
 }
 public actor SyntaxHighlighter {
     public static let shared = SyntaxHighlighter()
+    // 详情独立引擎，长文不会阻塞卡片高亮。
+    public static let detail = SyntaxHighlighter()
     public static let characterLimit = 8192
     private var context: JSContext?
     private var attemptedLoad = false
@@ -22,7 +24,9 @@ public actor SyntaxHighlighter {
         var units = Array(text.utf16.prefix(Self.characterLimit))
         if let last = units.last, (0xD800...0xDBFF).contains(last) { units.removeLast() }
         let prefix = String(decoding: units, as: UTF16.self)
-        guard !prefix.isEmpty else { return nil }
+        // 单行URL不参加语言猜测，防止链接被识别为Ruby代码。
+        guard !prefix.isEmpty, !(languageHint == nil && !prefix.contains("\n") &&
+            ["http", "https", "mailto"].contains(URL(string: prefix.trimmingCharacters(in: .whitespacesAndNewlines))?.scheme?.lowercased() ?? "")) else { return nil }
         let key = (languageHint ?? "auto") + ":" + ContentFingerprint.hash(Data(prefix.utf8))
         if let result = cache[key] { return result }
         if misses.contains(key) { return nil }
@@ -54,8 +58,10 @@ public actor SyntaxHighlighter {
         function localClipHighlight(text, hint) {
           if (hint && hljs.getLanguage(hint)) return hljs.highlight(text, {language: hint, ignoreIllegals: true});
           const languages = ['json','java','python','javascript','typescript','yaml','xml','css','bash','swift','sql','cpp','csharp','go','ruby','php','rust','ini','markdown'].filter(x => hljs.getLanguage(x));
-          let result = hljs.highlightAuto(text, languages);
-          return result.relevance >= 2 && result.language ? result : undefined;
+          // 有界前缀只负责识别，完整有界正文用已确定语言高亮。
+          let detected = hljs.highlightAuto(text.slice(0, 2048), languages);
+          if (detected.relevance < 2 || !detected.language) return undefined;
+          return hljs.highlight(text, {language: detected.language, ignoreIllegals: true});
         }
         """)
         guard js.exception == nil else { return nil }

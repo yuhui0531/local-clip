@@ -23,18 +23,29 @@ import SwiftUI
 struct SyntaxText: View {
     let text: String
     let size: CGFloat
+    var onLanguage: (String?) -> Void = { _ in }
     @Environment(\.colorScheme) private var scheme
     @State private var highlighted: SyntaxHighlight?
     @State private var source = ""
     var body: some View {
         Group {
-            if source == text, let highlighted { Text(AttributedString(SyntaxStyle.attributed(text, highlight: highlighted, size: size, dark: scheme == .dark))) }
+            if source == text, let highlighted {
+                // 每个源代码行独立截断，换行缩进不会被软折行误表示。
+                VStack(alignment: .leading, spacing: 3) {
+                    ForEach(Array(text.components(separatedBy: "\n").enumerated()), id: \.offset) { index, line in
+                        let start = text.components(separatedBy: "\n").prefix(index).reduce(0) { $0 + $1.utf16.count + 1 }
+                        let attributed = SyntaxStyle.attributed(text, highlight: highlighted, size: size, dark: scheme == .dark)
+                        Text(AttributedString(attributed.attributedSubstring(from: NSRange(location: start, length: line.utf16.count))))
+                            .lineLimit(1).truncationMode(.tail).frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+            }
             else { Text(text).font(.system(size: size)) }
         }.task(id: text) {
-            highlighted = nil; source = text
+            highlighted = nil; source = text; onLanguage(nil)
             let result = await SyntaxHighlighter.shared.highlight(text)
             guard !Task.isCancelled else { return }
-            highlighted = result
+            highlighted = result; onLanguage(result?.language)
         }
     }
 }
@@ -49,7 +60,7 @@ struct SyntaxDetailPreview: View {
             : content)
         .task(id: content.string) {
             highlighted = nil; source = content.string
-            let result = await SyntaxHighlighter.shared.highlight(content.string)
+            let result = await SyntaxHighlighter.detail.highlight(content.string)
             guard !Task.isCancelled else { return }
             highlighted = result
         }

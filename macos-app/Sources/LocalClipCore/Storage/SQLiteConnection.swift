@@ -13,6 +13,17 @@ final class SQLiteConnection {
             if let handle { sqlite3_close(handle) }; handle = nil; throw StoreError.ioFailure
         }
         sqlite3_busy_timeout(handle, 3000)
+        // 字面匹配直接借用SQLite当前值的字节；只缓存少量来源名，不常驻全文。
+        let matcher = Unmanaged.passRetained(SQLLiteralMatcher()).toOpaque()
+        guard sqlite3_create_function_v2(handle, "clip_literal_rank", 3, SQLITE_UTF8 | SQLITE_DETERMINISTIC, matcher, { context, count, values in
+            guard count == 3, let context, let values, let pointer = sqlite3_user_data(context) else { sqlite3_result_int(context, 4); return }
+            let matcher = Unmanaged<SQLLiteralMatcher>.fromOpaque(pointer).takeUnretainedValue()
+            let bodyCount = Int(sqlite3_value_bytes(values[0])), needleCount = Int(sqlite3_value_bytes(values[1]))
+            let body = sqlite3_value_blob(values[0]), needle = sqlite3_value_blob(values[1])
+            let name = sqlite3_value_text(values[2])
+            let source = name.map { String(decoding: UnsafeBufferPointer(start: $0, count: Int(sqlite3_value_bytes(values[2]))), as: UTF8.self) } ?? ""
+            sqlite3_result_int(context, matcher.rank(body: body, count: bodyCount, needle: needle, needleCount: needleCount, source: source))
+        }, nil, nil, { pointer in if let pointer { Unmanaged<SQLLiteralMatcher>.fromOpaque(pointer).release() } }) == SQLITE_OK else { throw StoreError.ioFailure }
     }
     deinit { if let handle { sqlite3_close(handle) } }
     /// 关闭所有语句后方可原子替换。
@@ -80,8 +91,10 @@ final class SQLiteConnection {
     func scalarText(_ sql: String, _ values: [SQLValue] = []) throws -> String { try rows(sql, values).first?.values.first?.text ?? "" }
     /// 配置必须读回验证，不假设未知 pragma 会报错。
     func configure() throws {
-        try exec("PRAGMA foreign_keys=ON; PRAGMA synchronous=FULL; PRAGMA journal_mode=DELETE; PRAGMA mmap_size=201326592")
+        // 删除时清零空闲单元，避免正文残留在仍存活的数据库页中。
+        try exec("PRAGMA foreign_keys=ON; PRAGMA secure_delete=ON; PRAGMA synchronous=FULL; PRAGMA journal_mode=DELETE; PRAGMA mmap_size=201326592; PRAGMA temp_store=MEMORY")
         guard try scalarInt("PRAGMA foreign_keys") == 1, try scalarInt("PRAGMA synchronous") == 2,
+              try scalarInt("PRAGMA secure_delete") == 1,
               try scalarText("PRAGMA journal_mode") == "delete" else { throw StoreError.ioFailure }
     }
     /// 在线备份产生一致快照，禁止拷贝正在写入的原始文件。
@@ -101,4 +114,25 @@ extension Dictionary where Key == String, Value == SQLValue {
     func text(_ key: String) -> String { self[key]?.text ?? "" }
     func int(_ key: String) -> Int64 { self[key]?.int ?? 0 }
     func data(_ key: String) -> Data { self[key]?.data ?? Data() }
+}
+
+// 每个只读连接独占匹配器，NFC规范化仅对有限来源名称做一次，by AI.Coding。
+private final class SQLLiteralMatcher {
+    private var sources: [String: Data] = [:]
+    /// NUL与中文均按完整UTF-8字节匹配；借用数据只存活于当前SQLite回调。
+    func rank(body: UnsafeRawPointer?, count: Int, needle: UnsafeRawPointer?, needleCount: Int, source: String) -> Int32 {
+        guard let needle, needleCount > 0 else { return 4 }
+        let query = Data(bytesNoCopy: UnsafeMutableRawPointer(mutating: needle), count: needleCount, deallocator: .none)
+        if let body, count > 0 {
+            let text = Data(bytesNoCopy: UnsafeMutableRawPointer(mutating: body), count: count, deallocator: .none)
+            if let range = text.range(of: query) { return range.lowerBound == 0 ? (count == needleCount ? 0 : 1) : 2 }
+        }
+        let name: Data
+        if let cached = sources[source] { name = cached }
+        else {
+            name = Data(SearchNormalizer.normalize(source).utf8)
+            if sources.count < 128 { sources[source] = name }
+        }
+        return name.range(of: query) == nil ? 4 : 3
+    }
 }

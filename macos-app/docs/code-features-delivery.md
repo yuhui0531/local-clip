@@ -1,8 +1,10 @@
+> Current review fixes are documented in [review-fixes.md](review-fixes.md). The following is historical 0.3.1/0.3.0 evidence; its Zed window fallback has been removed.
+
 # LocalClip 0.3.1（22）：代码展示与智能文件粘贴
 
-2026-10-11后续修正：0.3.0的目标识别遗漏Zed窗口焦点，且面板期间unknown在焦点恢复后不重试，用户报告Swift/JSON无法粘贴正文。0.3.1补足Zed的特定窗口识别并保持VS Code原编辑控件身份，恢复焦点后重试转换，保留原权限、焦点、身份、文件、历史与剪贴板检查。66个回归测试通过（code-smart-paste-fix/regression-native-fix.log）；Release签名、arm64、资源及代码节匹配已确认。实际接收与最终证据见[本次排查记录](../../paste-report/implementation-plan-2026-10-10/debug-log-2026-10-11-code-file-paste.md)。下文0.3.0测试记录保留，不将其受阻结果或旧通过数当作0.3.1接收验收。
+2026-10-11后续修正：0.3.0的目标识别遗漏Zed窗口焦点，且面板期间unknown在焦点恢复后不重试，用户报告Swift/JSON无法粘贴正文。0.3.1补足Zed的特定窗口识别并保持VS Code原编辑控件身份，恢复焦点后重试转换，保留原权限、焦点、身份、文件、历史与剪贴板检查。默认套件60个实际执行通过、6个跳过（code-smart-paste-fix/regression-native-fix.log；汇总66包含跳过）；Release签名、arm64、资源及代码节匹配已确认。历史Debug协调器探针接收证据见[本次排查记录](../../paste-report/implementation-plan-2026-10-10/debug-log-2026-10-11-code-file-paste.md)。下文0.3.0测试记录保留，不将其受阻结果或旧通过数当作0.3.1接收验收。
 
-日期：2026-10-11。实施完成并交付 Release 应用；Zed/VS Code的Swift/JSON原生接收通过，四份实际另存文件逐字节一致。其他目标未重验，不能声称全部目标应用验收通过。没有历史迁移、schema升级或兼容框架。开关关闭保留原有输出组合，包括明确选择纯文本时复制文件路径。
+日期：2026-10-11。实施完成并交付 Release 应用；历史Debug 0.3.0（21）协调器探针中部分原生接收文件逐字节一致；该证据没有经过0.3.1 Release面板/双击路径，不能认证Release界面接收。其他目标未重验，不能声称全部目标应用验收通过。没有历史迁移、schema升级或兼容框架。开关关闭保留原有输出组合，包括明确选择纯文本时复制文件路径。
 
 ## 已实现
 
@@ -19,7 +21,7 @@
 
 Domain.swift（可选设置及目标分类契约）；CodeFileReader.swift；SyntaxHighlighter.swift；SyntaxPreview.swift；HistoryView.swift；SettingsView.swift；PasteCoordinator.swift；MacApplicationClient.swift；Package.swift及Sources/LocalClipMac/Resources/。测试在 CodeFeaturesTests.swift；原有测试边界在 EndToEndTests、DerivedAndViewModelTests、SearchRetentionQuotaTests、CrashRecoveryTests 更新。HistoryStore.swift修正上述配额提交；StorageProbe与配额fixture按当前schema真实占用设置容量，不改变故障断点或旧内容保护断言。VisualProbe/main增加Debug限定的隔离展示验证，Release不含探针。
 
-## 0.3.0历史验证及证据（0.3.1接收见顶部排查记录）
+## 0.3.0历史验证及证据（不认证Release界面接收）
 
 环境：macOS 15.7.5（24G624），Apple Silicon arm64，Apple Swift 6.2.4；最低部署仍macOS15。
 
