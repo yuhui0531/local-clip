@@ -1,0 +1,90 @@
+name: Build and Package macOS App
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-package:
+    name: Build & Package LocalClip
+    runs-on: macos-15
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Xcode & Swift Environment
+        run: |
+          echo "==> 系统环境检查:"
+          sw_vers
+          uname -m
+          xcodebuild -version
+          swift --version
+
+      - name: Build macOS Application (Release)
+        run: |
+          bash macos-app/scripts/build-app.sh release
+
+      - name: Package Installer (DMG & ZIP)
+        id: package
+        run: |
+          bash macos-app/scripts/package-dmg.sh
+          # 读取版本号输出至 Step Output
+          VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" macos-app/Resources/Info.plist 2>/dev/null || echo "1.0.0")
+          BUILD=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" macos-app/Resources/Info.plist 2>/dev/null || echo "1")
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "build=${BUILD}" >> "$GITHUB_OUTPUT"
+          echo "full_version=v${VERSION}-${BUILD}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload Artifacts to GitHub Actions
+        uses: actions/upload-artifact@v4
+        with:
+          name: LocalClip-${{ steps.package.outputs.full_version }}-Installer
+          path: |
+            macos-app/dist/*.dmg
+            macos-app/dist/*.zip
+            macos-app/dist/checksums.txt
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish to GitHub Releases
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || 'latest' }}
+          name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('LocalClip {0} (Build {1})', steps.package.outputs.version, steps.package.outputs.build) }}
+          body: |
+            ## LocalClip macOS 安装包自动发布
+
+            - **应用版本**: `${{ steps.package.outputs.version }}` (Build `${{ steps.package.outputs.build }}`)
+            - **触发分支 / Tag**: `${{ github.ref_name }}`
+            - **触发提交**: `${{ github.sha }}`
+
+            ### 快速安装指引
+            1. 下载下方的 `.dmg` 磁盘映像文件。
+            2. 双击打开 `.dmg`，将 `LocalClip.app` 拖入 `Applications`（应用程序）目录。
+            3. 首次启动若提示未签名开发者警告，请在系统「系统设置」→「隐私与安全性」中点击「仍要打开」。
+
+            ### 文件清单
+            - `LocalClip-*.dmg`: 标准 macOS 安装包（含 Applications 拖入捷径）
+            - `LocalClip-*.zip`: 便携压缩包
+            - `checksums.txt`: SHA-256 校验值
+          draft: false
+          prerelease: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+          files: |
+            macos-app/dist/*.dmg
+            macos-app/dist/*.zip
+            macos-app/dist/checksums.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

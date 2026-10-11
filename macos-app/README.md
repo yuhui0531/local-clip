@@ -1,6 +1,8 @@
-# LocalClip 0.3.7（构建29）
+# LocalClip 0.3.8（构建30）
 
-Current follow-up: shared native category-drop routing on the panel's hosting view, covering every supported clipboard kind and newly created categories. Implementation and verification boundary: [category drop routing](docs/category-drop-routing.md). Quit the old app and open `dist/LocalClip.app` to use build 29; this turn did not launch or install it.
+Current follow-up: newly added or re-dropped category items appear at the left; multi-selection keeps its source order. A valid external recopy also promotes the existing item in each of its categories. Unaffected members retain their order, and manual ordering remains available. Implementation and regression evidence: [newest-first ordering](../changes/active/localclip-review-fixes/debug-log-2026-10-11-newest-first-order.md). Quit the old app and open `dist/LocalClip.app` to use build 30; this turn did not launch or install it.
+
+Previous follow-up: shared native category-drop routing on the panel's hosting view, covering every supported clipboard kind and newly created categories: [category drop routing](docs/category-drop-routing.md). Its artifacts and review belong to build 29.
 
 Previous follow-up: native drag-event handoff, compact confirmation sheets and viewport-sized progressive history loading. Its measurements and review belong to build 28: [progressive history loading](docs/progressive-history-loading.md).
 
@@ -27,7 +29,7 @@ rtk proxy bash macos-app/scripts/build-app.sh release
 
 ---
 
-以下是0.1.14及之前版本的历史README，保留已有工程记录。旧格式、目录、行为、通过数及样本不代表0.3.7；当前说明以上方链接为准。
+以下是0.1.14及之前版本的历史README，保留已有工程记录。旧格式、目录、行为、通过数及样本不代表0.3.8；当前说明以上方链接为准。
 
 # LocalClip 0.1.14
 

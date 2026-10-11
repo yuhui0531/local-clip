@@ -173,6 +173,10 @@ public actor HistoryStore: HistoryRepository {
             if existing != nil {
                 try db.run("UPDATE clips SET lastCopiedAtMs=?,copyCount=copyCount+1,sourceBundleID=?,sourceName=?,sourceBasis=? WHERE id=?", [
                     .integer(at), snapshot.source.bundleID.map(SQLValue.text) ?? .null, .text(snapshot.source.name), .text(snapshot.source.basis), .text(id)])
+                // 有效用户再次复制在每个归属分类置前；分类排序不能遮住最新复制，by AI.Coding。
+                for row in try db.rows("SELECT categoryID FROM clip_categories WHERE clipID=?", [.text(id)]) {
+                    try prependCategoryItems([id], categoryID: row.text("categoryID"), db: db)
+                }
             } else {
                 // 过期相同内容以新ID保存，不能复活已过期记录。
                 try db.run("DELETE FROM clips WHERE contentHash=?", [.text(hash)])
@@ -489,11 +493,14 @@ public actor HistoryStore: HistoryRepository {
                 for id in Set(ids) { try db.run("UPDATE clips SET isFavorite=? WHERE id=?", [.integer(value ? 1 : 0), .text(id)]) }
                 try removeExpired(db, settings: settings, at: at)
             case .category(let ids, let category, let included):
-                for id in Set(ids) {
+                // 多选拖入保持原有从左到右顺序，不能经Set迭代随机打乱，by AI.Coding。
+                var seen: Set<ClipID> = []
+                let ordered = ids.filter { seen.insert($0).inserted }
+                for id in ordered {
                     guard let row = try db.rows("SELECT *, (isFavorite=1 OR EXISTS(SELECT 1 FROM clip_categories WHERE clipID=clips.id)) AS isProtected FROM clips WHERE id=?", [.text(id)]).first, visible(row, at: at, settings: settings) else { throw StoreError.notFound }
-                    if included { try db.run("INSERT OR IGNORE INTO clip_categories VALUES(?,?,(SELECT COALESCE(MAX(position),-1)+1 FROM clip_categories WHERE categoryID=?))", [.text(category), .text(id), .text(category)]) }
-                    else { try db.run("DELETE FROM clip_categories WHERE categoryID=? AND clipID=?", [.text(category), .text(id)]) }
+                    if !included { try db.run("DELETE FROM clip_categories WHERE categoryID=? AND clipID=?", [.text(category), .text(id)]) }
                 }
+                if included { try prependCategoryItems(ordered, categoryID: category, db: db) }
                 try removeExpired(db, settings: settings, at: at)
             case .deleteCategory(let category):
                 try db.run("DELETE FROM categories WHERE id=?", [.text(category)])
@@ -638,6 +645,14 @@ public actor HistoryStore: HistoryRepository {
         }
         let order = request.categoryIDs.count == 1 ? "(SELECT position FROM clip_categories WHERE clipID=clips.id AND categoryID=?),id" : "lastCopiedAtMs DESC,id"
         return (clauses.joined(separator: " AND "), values, order)
+    }
+    /// 最新加入/重新拖入批次置前，只写本批归属，不重排整个分类或改变复制身份，by AI.Coding。
+    private func prependCategoryItems(_ ids: [ClipID], categoryID: String, db: SQLiteConnection) throws {
+        guard !ids.isEmpty else { return }
+        let first = try db.scalarInt("SELECT COALESCE(MIN(position),0) FROM clip_categories WHERE categoryID=?", [.text(categoryID)]) - Int64(ids.count)
+        for (index, id) in ids.enumerated() {
+            try db.run("INSERT INTO clip_categories(categoryID,clipID,position) VALUES(?,?,?) ON CONFLICT(categoryID,clipID) DO UPDATE SET position=excluded.position", [.text(categoryID), .text(id), .integer(first + Int64(index))])
+        }
     }
     /// 分类与板内记录移动一次提交，不刷新复制身份。
     public func moveCategory(id: String, delta: Int) throws {

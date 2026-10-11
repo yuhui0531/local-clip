@@ -17,6 +17,9 @@ def main() -> None:
         files.extend(path for path in (APP / folder).rglob("*") if path.is_file()
                      and not any(part.startswith(".") for part in path.relative_to(APP).parts)
                      and path.suffix not in {".sqlite", ".db", ".pyc"})
+    extra_doc = PROJECT / "changes/active/localclip-review-fixes/debug-log-2026-10-11-newest-first-order.md"
+    if extra_doc.is_file():
+        files.append(extra_doc)
     plan = PROJECT / "paste-report/implementation-plan-2026-10-10"
     files.extend(plan / name for name in ("README.md", "tasks.md", "report-coverage.csv", "user-checklist.md", "debug-image-drag-2026-10-11.md", "debug-log-2026-10-11-code-file-paste.md"))
     DESTINATION.parent.mkdir(exist_ok=True)
