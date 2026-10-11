@@ -211,9 +211,11 @@ struct HistoryDragBridge: NSViewRepresentable {
             nativeSessionActive = false; down = nil; pressedID = nil; Self.active = nil
             model?.finishDrag(cancelled: operation.isEmpty)
         }
-        isolated deinit {
-            Self.views.remove(self)
-            if Self.views.allObjects.isEmpty, let monitor = Self.monitor { NSEvent.removeMonitor(monitor); Self.monitor = nil }
+        deinit {
+            MainActor.assumeIsolated {
+                Self.views.remove(self)
+                if Self.views.allObjects.isEmpty, let monitor = Self.monitor { NSEvent.removeMonitor(monitor); Self.monitor = nil }
+            }
         }
     }
 }
