@@ -649,7 +649,14 @@ public actor HistoryStore: HistoryRepository {
     /// 最新加入/重新拖入批次置前，只写本批归属，不重排整个分类或改变复制身份，by AI.Coding。
     private func prependCategoryItems(_ ids: [ClipID], categoryID: String, db: SQLiteConnection) throws {
         guard !ids.isEmpty else { return }
-        let first = try db.scalarInt("SELECT COALESCE(MIN(position),0) FROM clip_categories WHERE categoryID=?", [.text(categoryID)]) - Int64(ids.count)
+        var minimum = try db.scalarInt("SELECT COALESCE(MIN(position),0) FROM clip_categories WHERE categoryID=?", [.text(categoryID)])
+        // 删除头部后仍为有效撤销包保留位置，避免恢复时与新拖入项同位置，by AI.Coding。
+        if let packet = undoPacket, packet.expires > clock.now() {
+            for row in packet.tables["clip_categories"] ?? [] where row.text("categoryID") == categoryID {
+                minimum = min(minimum, row.int("position"))
+            }
+        }
+        let first = minimum - Int64(ids.count)
         for (index, id) in ids.enumerated() {
             try db.run("INSERT INTO clip_categories(categoryID,clipID,position) VALUES(?,?,?) ON CONFLICT(categoryID,clipID) DO UPDATE SET position=excluded.position", [.text(categoryID), .text(id), .integer(first + Int64(index))])
         }

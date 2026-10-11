@@ -1,6 +1,8 @@
 # LocalClip 0.3.8（构建30）
 
-Current follow-up: newly added or re-dropped category items appear at the left; multi-selection keeps its source order. A valid external recopy also promotes the existing item in each of its categories. Unaffected members retain their order, and manual ordering remains available. Implementation and regression evidence: [newest-first ordering](../changes/active/localclip-review-fixes/debug-log-2026-10-11-newest-first-order.md). Quit the old app and open `dist/LocalClip.app` to use build 30; this turn did not launch or install it.
+Current follow-up: in a single category's browsing list, newly added or re-dropped items appear at the left; multi-selection keeps its source order. A valid external recopy also promotes the existing item in each of its categories. Unaffected members retain their order, and manual ordering remains available. Search relevance and combined-category copy-time ordering remain intact. Implementation and regression evidence: [newest-first ordering](../changes/active/localclip-review-fixes/debug-log-2026-10-11-newest-first-order.md). Quit the old app and open `dist/LocalClip-0.3.8-build30.app` to use build 30; this turn did not launch or install it.
+
+Build 30 is packaged from the reviewed and fully tested source snapshot. Separate in-flight CI export-callback changes remain intact in the working checkout and are excluded from this verified app/source archive. The ordering implementation matches the checkout; the delivery manifest records the one differing export-writer input.
 
 Previous follow-up: shared native category-drop routing on the panel's hosting view, covering every supported clipboard kind and newly created categories: [category drop routing](docs/category-drop-routing.md). Its artifacts and review belong to build 29.
 
