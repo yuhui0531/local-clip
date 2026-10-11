@@ -1,5 +1,5 @@
 // 原生有序多项拖出、延迟载荷与图片文件租约，by AI.Coding。
-import AppKit
+@preconcurrency import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 import ImageIO
@@ -78,29 +78,33 @@ private final class ClipWriter: NSObject, NSPasteboardWriting {
     private let queue = OperationQueue()
     init(access: ClipExportAccess, index: Int, types: [String], store: HistoryStore) { self.access = access; self.index = index; self.types = types; self.store = store; queue.maxConcurrentOperationCount = 1 }
     func filePromiseProvider(_ provider: NSFilePromiseProvider, fileNameForType fileType: String) -> String { "LocalClip-" + UUID().uuidString + ".png" }
-    func operationQueue(for provider: NSFilePromiseProvider) -> OperationQueue { queue }
-    nonisolated func filePromiseProvider(_ provider: NSFilePromiseProvider, writePromiseTo url: URL, completionHandler: @escaping @Sendable (Error?) -> Void) {
-        Task { @MainActor in
-            let access = self.access, index = self.index, types = self.types, store = self.store
+    private final class CompletionBox: @unchecked Sendable {
+        let callback: (Error?) -> Void
+        init(_ callback: @escaping (Error?) -> Void) { self.callback = callback }
+    }
+    nonisolated func filePromiseProvider(_ provider: NSFilePromiseProvider, writePromiseTo url: URL, completionHandler: @escaping (Error?) -> Void) {
+        let access = self.access, index = self.index, types = self.types, store = self.store
+        let box = CompletionBox(completionHandler)
+        Task {
             do {
-                let data = try await Task.detached { () throws -> Data in
-                    guard let type = [SupportedType.png,SupportedType.tiff,SupportedType.jpeg].first(where: { types.contains($0) }) else { throw StoreError.notFound }
-                    let raw = try access.itemData(index: index, type: type)
-                    if type == SupportedType.png { return raw }
+                guard let type = [SupportedType.png,SupportedType.tiff,SupportedType.jpeg].first(where: { types.contains($0) }) else { throw StoreError.notFound }
+                let raw = try access.itemData(index: index, type: type)
+                let data: Data
+                if type == SupportedType.png { data = raw }
+                else {
                     guard let source = CGImageSourceCreateWithData(raw as CFData, nil), let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any], let width = props[kCGImagePropertyPixelWidth] as? Int, let height = props[kCGImagePropertyPixelHeight] as? Int, width > 0, height > 0, Int64(width)*Int64(height) <= 40_000_000, let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else { throw StoreError.corruptPayload }
                     let output = NSMutableData()
                     guard let destination = CGImageDestinationCreateWithData(output, UTType.png.identifier as CFString, 1, nil) else { throw StoreError.ioFailure }
                     CGImageDestinationAddImage(destination, image, nil)
                     guard CGImageDestinationFinalize(destination) else { throw StoreError.ioFailure }
-                    _ = try access.itemData(index: index, type: type)
-                    return output as Data
-                }.value
+                    data = output as Data
+                }
                 try access.checkValid()
                 let lease = try await store.writeExport(data, id: access.id, revision: access.revision)
                 try access.checkValid()
-                try await Task.detached { try FileManager.default.copyItem(at: lease, to: url) }.value
-                completionHandler(nil)
-            } catch { completionHandler(error) }
+                try FileManager.default.copyItem(at: lease, to: url)
+                box.callback(nil)
+            } catch { box.callback(error) }
         }
     }
 }
