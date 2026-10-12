@@ -463,6 +463,13 @@ import LocalClipCore
             // 弹窗归属只用于保留交互，不能把详情文字或确认按钮按键当作历史操作，by AI.Coding。
             guard Self.routesHistoryShortcuts(event.window, panel: panel,
                 confirming: model.confirmingChange, hasModal: NSApp.modalWindow != nil) else { return event }
+            // 名称编辑的提交/撤销与IME交给文本域，绝不触发粘贴或板内快捷键，by AI.Coding。
+            if model.renamingID != nil {
+                let editor = panel.firstResponder as? NSTextView
+                if editor?.hasMarkedText() == true { return event }
+                if event.keyCode == 53 { model.cancelRename(); return nil }
+                return event
+            }
             if event.keyCode == 53 {
                 if model.showingCategoryEditor { model.showingCategoryEditor = false }
                 else if model.showingFilters { model.showingFilters = false }

@@ -112,8 +112,10 @@ private final class ClipWriter: NSObject, NSPasteboardWriting {
 struct HistoryDragBridge: NSViewRepresentable {
     let model: HistoryViewModel
     let id: ClipID
-    func makeNSView(context: Context) -> DragView { let view = DragView(); view.model = model; view.id = id; view.install(); return view }
-    func updateNSView(_ view: DragView, context: Context) { view.model = model; view.id = id }
+    let headerRect: CGRect
+    /// 保留实际标题命中区域，默认正文点击仍归拖放桥，by AI.Coding。
+    func makeNSView(context: Context) -> DragView { let view = DragView(); view.model = model; view.id = id; view.headerRect = headerRect; view.install(); return view }
+    func updateNSView(_ view: DragView, context: Context) { view.model = model; view.id = id; view.headerRect = headerRect }
     /// 背景桥覆盖整张卡片区域，不依赖无固有尺寸NSView的默认布局，by AI.Coding。
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: DragView, context: Context) -> CGSize? {
         CGSize(width: proposal.width ?? 0, height: proposal.height ?? 0)
@@ -121,6 +123,8 @@ struct HistoryDragBridge: NSViewRepresentable {
     @MainActor final class DragView: NSView, NSDraggingSource {
         weak var model: HistoryViewModel?
         var id: ClipID = ""
+        var headerRect: CGRect = .zero
+        private var pressedTitle = false
         private static var monitor: Any?
         private static let views = NSHashTable<DragView>.weakObjects()
         private static var active: DragView?
@@ -158,8 +162,13 @@ struct HistoryDragBridge: NSViewRepresentable {
         func handle(_ event: NSEvent) -> NSEvent? {
             if nativeSessionActive { return event }
             guard let model else { return event }
+            // 编辑时事件交给原生文本域，不能吞掉定位光标和文字选择，by AI.Coding。
+            if model.renamingID == id { return event }
             if event.type == .leftMouseDown {
                 guard !model.dragActive else { return nil }
+                model.cancelRename()
+                let point = convert(event.locationInWindow, from: nil)
+                pressedTitle = headerRect.contains(CGPoint(x: point.x, y: isFlipped ? point.y : bounds.height - point.y))
                 down = event; pressedID = id; dragged = false
                 return nil
             }
@@ -167,7 +176,9 @@ struct HistoryDragBridge: NSViewRepresentable {
             if event.type == .leftMouseUp {
                 self.down = nil; self.pressedID = nil
                 if !dragged && !preparing {
-                    if down.clickCount == 2 { model.doubleClick(pressedID) }
+                    if down.clickCount == 2 {
+                        if pressedTitle { model.beginRename(pressedID) } else { model.doubleClick(pressedID) }
+                    }
                     else { model.choose(pressedID, modifiers: down.modifierFlags) }
                 }
                 return nil

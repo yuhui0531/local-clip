@@ -126,6 +126,12 @@ public struct Shortcut: Codable, Equatable, Sendable {
     public init(keyCode: UInt32 = 9, modifiers: UInt32 = 2304) { self.keyCode = keyCode; self.modifiers = modifiers }
 }
 public struct SettingsSnapshot: Codable, Equatable, Sendable {
+    // 名称属于可选显示元数据，沿用同库JSON字段，不新增结构或迁移，by AI.Coding。
+    private var clipTitlesValue: [ClipID: String]?
+    public internal(set) var clipTitles: [ClipID: String] {
+        get { clipTitlesValue ?? [:] }
+        set { clipTitlesValue = newValue.isEmpty ? nil : newValue }
+    }
     public var retentionDays = 30
     public var defaultFormat: OutputFormat = .original
     public var pauseUntil: Instant?
@@ -184,6 +190,8 @@ public struct ClipSummary: Identifiable, Codable, Equatable, Sendable {
     public var source: SourceAttribution
     public var preview: String
     public var context: String
+    // 默认标题仍由种类决定，自定义名称不参与内容身份，by AI.Coding。
+    public var title: String? = nil
 }
 public struct ClipDetail: Sendable {
     public var summary: ClipSummary

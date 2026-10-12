@@ -35,7 +35,14 @@ import LocalClipCore
     public var settingsChanged: (() -> Void)?
     public var resizePanel: ((Double, Bool) -> Void)?
     @Published public var kind: ClipKind?
-    public private(set) var items: [ClipSummary] { get { listState[\.items] } set { listState[\.items] = newValue } }
+    // 查询、删除与到期共用发布入口，编辑目标消失时同步释放按键归属，by AI.Coding。
+    public private(set) var items: [ClipSummary] {
+        get { listState[\.items] }
+        set {
+            listState[\.items] = newValue
+            if let renamingID, !newValue.contains(where: { $0.id == renamingID }) { cancelRename(id: renamingID) }
+        }
+    }
     public private(set) var selectedID: ClipID? { get { listState[\.selectedID] } set { listState[\.selectedID] = newValue } }
     public private(set) var selectedMetadata: ClipMetadata? { get { listState.selectedMetadata } set { listState.selectedMetadata = newValue } }
     @Published public private(set) var detailLoading = false
@@ -176,6 +183,7 @@ import LocalClipCore
     /// 隐藏期间只记失效；重新打开先展示列表再读廉价元数据，by AI.Coding。
     public func panelVisibilityChanged(_ visible: Bool) {
         panelVisible = visible
+        if !visible { cancelRename() }
         guard visible, hiddenChanges else { return }
         hiddenChanges = false
         refresh()
@@ -219,7 +227,10 @@ import LocalClipCore
     /// 策略改变才通知采集器，保留既有暂停与队列规则，by AI.Coding。
     private func acceptSettings(_ value: SettingsSnapshot) {
         guard value != settings else { return }
-        assignIfChanged(\.settings, value); capture.updatePolicy(value)
+        // 名称元数据不递增策略版本，不能清除正在持久化的即时暂停，by AI.Coding。
+        let policyChanged = value.revision != settings.revision
+        assignIfChanged(\.settings, value)
+        if policyChanged { capture.updatePolicy(value) }
     }
     /// 合并来源读取并等列表发布；隐藏时保留失效标记到下一次打开，by AI.Coding。
     private func requestSourceSuggestions() {
@@ -532,6 +543,26 @@ import LocalClipCore
             let result = await paste.perform(.init(ids: ids, format: format ?? settings.defaultFormat, action: action ?? settings.defaultAction, target: target))
             message = result.message + (paste.smartPasteNotice.map { "；" + $0 } ?? "")
             notifyPasteResult(result)
+        }
+    }
+    @Published public private(set) var renamingID: ClipID?
+    /// 只编辑指定卡片的名称，不改变单选/多选与当前滚动窗口，by AI.Coding。
+    public func beginRename(_ id: ClipID) {
+        guard !dragActive, items.contains(where: { $0.id == id }) else { return }
+        renamingID = id
+    }
+    /// 取消仅移除编辑状态，不写库，by AI.Coding。
+    public func cancelRename(id: ClipID? = nil) {
+        if let id, id != renamingID { return }
+        renamingID = nil
+    }
+    /// 提交捕获的名称；持久事件负责刷新，不重复发起列表查询，by AI.Coding。
+    public func saveRename(id: ClipID, title: String) {
+        guard renamingID == id else { return }
+        renamingID = nil
+        Task {
+            do { try await store.renameClip(id: id, title: title); message = "名称已保存" }
+            catch { message = "重命名失败：名称需为单行且不超过1024字节，记录和容量仍须有效" }
         }
     }
     /// 双击恢复原格式后向原应用焦点粘贴；Finder文件对象仍复制到其当前实际目录。

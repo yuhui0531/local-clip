@@ -62,7 +62,7 @@ public struct HistoryView: View {
                         if !compact { Text("LocalClip").font(.system(size: 16, weight: .bold, design: .rounded)) }
                     }
                     // 全部/收藏固定可见，类型与分类紧随其后，避免重复历史入口，by AI.Coding。
-                    HStack(spacing: 5) { filter("全部", nil); favoritesTab }.fixedSize()
+                    HStack(spacing: 5) { filter("剪切板", nil); favoritesTab }.fixedSize()
                     categoryNavigation
                     HistorySearchInput(model: model, input: model.queryState, focus: model.focusRequest).frame(width: compact ? 160 : 240, height: 30)
                     Button { model.showingFilters.toggle() } label: { toolbarGlyph(filter: true) }.buttonStyle(.plain).accessibilityLabel("筛选").popover(isPresented: $model.showingFilters) { FilterEditor(model: model) }
@@ -74,7 +74,7 @@ public struct HistoryView: View {
                 if filterHeight > 0 { FilterStrip(model: model) }
                 HistoryStrip(model: model, list: model.listState, cardHeight: cardHeight,
                     availableCardHeight: availableCardHeight, categoryID: model.categoryID, categories: model.categories,
-                    target: model.target, draggedIDs: model.draggedIDs, hideContents: model.settings.hideContents, focusRequest: model.focusRequest)
+                    target: model.target, draggedIDs: model.draggedIDs, hideContents: model.settings.hideContents, focusRequest: model.focusRequest, renamingID: model.renamingID)
                 Divider().opacity(0.5)
                 HStack(spacing: 12) {
                     Circle().fill(!model.settings.captureEnabled ? Color.gray : model.capture.capacityBlocked ? Color.orange : Color.green).frame(width: 6, height: 6)
@@ -173,6 +173,7 @@ private struct HistoryStrip: View {
     let draggedIDs: Set<ClipID>
     let hideContents: Bool
     let focusRequest: UUID
+    let renamingID: ClipID?
     @State private var scrollPosition = ScrollPosition(edge: .leading)
     @State private var scrollWheelState = HistoryScrollWheel.State()
     var body: some View {
@@ -185,7 +186,7 @@ private struct HistoryStrip: View {
                     ScrollView(.horizontal) {
                         LazyHStack(spacing: 16) {
                             ForEach(Array(model.items.enumerated()), id: \.element.id) { index, item in
-                                ClipCard(item: item, index: index, selected: model.selectedIDs.contains(item.id), dragging: draggedIDs.contains(item.id), height: cardHeight, categoryID: categoryID, categories: categories, target: target, model: model).equatable().id(item.id)
+                                ClipCard(item: item, index: index, selected: model.selectedIDs.contains(item.id), dragging: draggedIDs.contains(item.id), editing: renamingID == item.id, height: cardHeight, categoryID: categoryID, categories: categories, target: target, model: model).equatable().id(item.id)
                             }
                             if model.hasMore {
                                 Button(action: model.loadMore) {
@@ -235,7 +236,7 @@ private struct HistoryEmptyState: View {
         VStack(spacing: 12) {
             Image(systemName: emptyQuery ? "square.on.square" : "magnifyingglass").font(.system(size: 38, weight: .ultraLight)).foregroundStyle(.secondary)
             Text(loading ? "正在读取历史…" : emptyQuery ? categoryID == nil ? "下一次复制，就从这里开始" : "这个分类还没有记录" : "没有匹配的历史").font(.system(size: 18, weight: .semibold))
-            Text(emptyQuery ? categoryID == nil ? "文字、链接、图片、富文本和文件引用，只保存在这台 Mac。" : "选择“全部”，把记录拖到这个分类标签。" : "中文短词、代码符号和链接片段，均按字面查找。").font(.system(size: 12)).foregroundStyle(.secondary)
+            Text(emptyQuery ? categoryID == nil ? "文字、链接、图片、富文本和文件引用，只保存在这台 Mac。" : "选择“剪切板”，把记录拖到这个分类标签。" : "中文短词、代码符号和链接片段，均按字面查找。").font(.system(size: 12)).foregroundStyle(.secondary)
         }
     }
 }
@@ -338,6 +339,10 @@ private struct ClipCard: View, Equatable {
     let index: Int
     let selected: Bool
     let dragging: Bool
+    let editing: Bool
+    @State private var headerRect: CGRect = .zero
+    @State private var nameDraft = ""
+    @FocusState private var nameFocused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let height: Double
     let categoryID: String?
@@ -349,7 +354,7 @@ private struct ClipCard: View, Equatable {
     @State private var isOnscreen = false
     @State private var detectedLanguage: String?
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.item == rhs.item && lhs.index == rhs.index && lhs.selected == rhs.selected && lhs.dragging == rhs.dragging && lhs.height == rhs.height
+        lhs.item == rhs.item && lhs.index == rhs.index && lhs.selected == rhs.selected && lhs.dragging == rhs.dragging && lhs.editing == rhs.editing && lhs.height == rhs.height
             && lhs.categoryID == rhs.categoryID && lhs.categories == rhs.categories && lhs.target == rhs.target
     }
     private var code: Bool { item.kind == .text && detectedLanguage != nil }
@@ -378,11 +383,24 @@ private struct ClipCard: View, Equatable {
         default: "来源未知"
         }
     }
+    /// 编辑状态只由本卡片订阅，输入字符不发布整个历史模型，by AI.Coding。
+    private var cardTitle: some View {
+        Group {
+            if editing {
+                TextField("名称", text: $nameDraft).textFieldStyle(.plain).focused($nameFocused)
+                    .background(.white.opacity(0.16), in: RoundedRectangle(cornerRadius: 3))
+                    .onSubmit { model.saveRename(id: item.id, title: nameDraft) }
+                    .onExitCommand { model.cancelRename() }
+            } else { Text(item.title ?? HistoryView.kindName(item.kind)) }
+        }.font(.system(size: tiny ? 10 : height < 150 ? 12 : 14, weight: .semibold)).lineLimit(1)
+    }
+    /// 初始化编辑内容，不把种类默认标题误存成自定义名称，by AI.Coding。
+    private func startNameEditing() { nameDraft = item.title ?? ""; nameFocused = true }
     private var cardBody: some View {
         VStack(spacing: 0) {
             HStack(spacing: tiny ? 4 : 7) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(HistoryView.kindName(item.kind)).font(.system(size: tiny ? 10 : height < 150 ? 12 : 14, weight: .semibold)).lineLimit(1)
+                    cardTitle
                     if height >= 150 {
                         CopyAge(copiedAt: item.lastCopiedAt)
                             .font(.system(size: 9, weight: .medium)).opacity(0.84).lineLimit(1)
@@ -398,6 +416,8 @@ private struct ClipCard: View, Equatable {
                 }.frame(width: iconSize, height: iconSize).help(sourceDescription)
             }.foregroundStyle(.white).padding(.leading, tiny ? 8 : 14).padding(.trailing, tiny ? 6 : 10)
                 .frame(height: headerHeight).background(tint)
+                // 整个彩色标题栏双击均重命名，时间/图标/留白不能误发粘贴，by AI.Coding。
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(item.id)) } action: { headerRect = $0 }
             // 正文独占剩余区域；长文件名和多行文字只能在正文内截断，不挤掉标题和底栏。
             GeometryReader { region in
                 cardContent.frame(width: region.size.width, height: region.size.height, alignment: .topLeading).clipped()
@@ -416,11 +436,12 @@ private struct ClipCard: View, Equatable {
             .overlay(RoundedRectangle(cornerRadius: cardRadius, style: .continuous).strokeBorder(selected ? Color(red: 0, green: 0.48, blue: 1) : Color.primary.opacity(0.07), lineWidth: selected ? 3 : 0.7))
             .shadow(color: .black.opacity(0.09), radius: 3, y: 2)
             .contentShape(RoundedRectangle(cornerRadius: 22))
+            .coordinateSpace(name: item.id)
     }
-    var body: some View {
+    private var interactiveCard: some View {
         cardBody
             // 原生桥必须有明确卡片尺寸，否则透明NSView会占满滚动视口并误认其他卡片，by AI.Coding。
-            .background(HistoryDragBridge(model: model, id: item.id).frame(width: height, height: height))
+            .background(HistoryDragBridge(model: model, id: item.id, headerRect: headerRect).frame(width: height, height: height))
             .background {
                 #if DEBUG
                 if GUIAcceptanceProbe.configuration != nil, index == 0 {
@@ -434,10 +455,18 @@ private struct ClipCard: View, Equatable {
             .opacity(dragging ? 0.55 : 1)
             .animation(reduceMotion ? nil : .spring(response: 0.22, dampingFraction: 0.82), value: dragging)
             .help(item.kind == .file ? "双击复制到Finder当前目录或原应用" : "单击选择，双击粘贴到：\(MacApplicationClient.targetName(model.target))")
-            .accessibilityLabel("\(HistoryView.kindName(item.kind))，\(item.source.name)，\(item.preview)").accessibilityAddTraits(selected ? [.isButton, .isSelected] : [.isButton])
+            .accessibilityLabel("\(item.title ?? HistoryView.kindName(item.kind))，\(item.source.name)，\(item.preview)").accessibilityAddTraits(selected ? [.isButton, .isSelected] : [.isButton])
             .accessibilityAction { model.select(item.id) }
             .accessibilityAction(named: Text("复制并粘贴")) { model.doubleClick(item.id) }
-            .contextMenu {
+            .accessibilityAction(named: Text("重命名")) { model.beginRename(item.id) }
+            .onChange(of: editing) { _, active in if active { startNameEditing() } else { nameFocused = false } }
+            .onChange(of: nameFocused) { _, focused in if !focused && model.renamingID == item.id { model.cancelRename() } }
+            .onAppear { if editing { startNameEditing() } }
+    }
+    /// 菜单独立展开，避免单个SwiftUI泛型表达式超出编译器推断范围，by AI.Coding。
+    private var menuCard: some View {
+        interactiveCard.contextMenu {
+                Button("重命名") { model.beginRename(item.id) }
                 Button("原格式复制") { if !model.selectedIDs.contains(item.id) { model.select(item.id) }; model.perform(.original, action: .copy) }
                 Button(item.isFavorite ? "取消收藏" : "收藏") { model.change(.favorites(model.selectedIDs.contains(item.id) ? model.orderedSelection : [item.id], !item.isFavorite)) }
                 Menu("加入分类") {
@@ -453,10 +482,13 @@ private struct ClipCard: View, Equatable {
                 if item.kind == .file { Button("在Finder中显示") { model.select(item.id); model.openSelected(reveal: true) }; Button("打开方式…") { model.select(item.id); model.openSelected(withApplication: true) } }
                 Divider(); Button("删除", role: .destructive) { model.change(.delete(model.selectedIDs.contains(item.id) ? model.orderedSelection : [item.id])) }
             }
+    }
+    var body: some View {
+        menuCard
             // LazyHStack可能提前创建邻近卡片；正文/图片任务只在真实可见时运行，离屏释放解码图，by AI.Coding。
             .onScrollVisibilityChange(threshold: 0.01) { visible in
                 isOnscreen = visible
-                if !visible { thumbnail = nil; Task { await model.derived.cancel(id: item.id) } }
+                if !visible { model.cancelRename(id: item.id); thumbnail = nil; Task { await model.derived.cancel(id: item.id) } }
             }
             .task(id: isOnscreen) {
                 guard isOnscreen else { return }
@@ -479,7 +511,7 @@ private struct ClipCard: View, Equatable {
                     if thumbnail != nil { GUIAcceptanceProbe.imageReadyIDs.insert(item.id) }
                     #endif
                 }
-            }.onDisappear { thumbnail = nil; characterCount = nil; Task { await model.derived.cancel(id: item.id) } }
+            }.onDisappear { model.cancelRename(id: item.id); thumbnail = nil; characterCount = nil; Task { await model.derived.cancel(id: item.id) } }
     }
     @ViewBuilder private var cardContent: some View {
         if tiny && item.kind == .file {
@@ -538,7 +570,7 @@ private struct ClipInspector: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             if let detail = model.detail {
-                HStack { Text(HistoryView.kindName(detail.summary.kind)).font(.title2.bold()); Spacer(); Text(detail.summary.source.name).foregroundStyle(.secondary) }
+                HStack { Text(detail.summary.title ?? HistoryView.kindName(detail.summary.kind)).font(.title2.bold()); Spacer(); Text(detail.summary.source.name).foregroundStyle(.secondary) }
                 Text(detail.summary.source.basis == "frontmost" ? "来源依据：复制时前台应用推断" : detail.summary.source.basis == "declared" ? "来源依据：应用声明" : "来源依据：未知")
                     .font(.caption).foregroundStyle(.secondary)
                 ScrollView { VStack(alignment: .leading, spacing: 16) {
