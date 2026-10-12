@@ -124,7 +124,9 @@ import LocalClipCore
         let capture = CaptureCoordinator(board: board, store: store)
         let paste = PasteCoordinator(board: board, applications: apps, store: store, capture: capture)
         let request = PasteRequest(ids: [id], action: .directPaste, target: apps.remembered)
-        #expect(await paste.perform(request) == .commandSent); #expect(apps.events == 1)
+        // 失败时输出实际结果，便于区分超时回退、剪贴板变化或权限路径，by AI.Coding。
+        let first = await paste.perform(request)
+        #expect(first == .commandSent, "实际结果：\(first)"); #expect(apps.events == 1)
         apps.permitted = false
         if case .fallback = await paste.perform(request) {} else { Issue.record("缺权限未回退") }; #expect(apps.events == 1)
         apps.permitted = true; apps.alive = false

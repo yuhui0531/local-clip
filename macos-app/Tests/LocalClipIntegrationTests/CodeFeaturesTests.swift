@@ -129,7 +129,8 @@ struct CodeFeaturesTests {
         guard case .inserted(let id) = try await store.ingest(.init(payload: original), at: SystemClock().now()) else { Issue.record("fixture"); return }
         let capture = CaptureCoordinator(board: board, store: store), paste = PasteCoordinator(board: board, applications: apps, store: store, capture: capture)
         let request = PasteRequest(ids: [id], action: .directPaste, target: apps.remembered)
-        #expect(await paste.perform(request) == .commandSent)
+        let result = await paste.perform(request)
+        #expect(result == .commandSent, "实际结果：\(result)；提示：\(paste.smartPasteNotice ?? "无")")
         #expect(raw.items.first?[SupportedType.fileURL] == Data(file.absoluteString.utf8))
         #expect(await paste.perform(.init(ids: [id], format: .plainText, action: .copy, target: apps.remembered)) == .copied)
         #expect(raw.items.first?[SupportedType.string] == Data(file.path.utf8))
