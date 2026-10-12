@@ -40,7 +40,8 @@ public struct HistoryView: View {
     public var body: some View {
         // 根布局只接受真实窗口视口；卡片最小内容尺寸不能反过来扩大托管视图。
         GeometryReader { viewport in
-            let compact = viewport.size.width < 1000
+            // 用户可在宽屏主动启用紧凑工具栏；窄屏仍保持已有自适应行为，by AI.Coding。
+            let compact = model.settings.compactLayout || viewport.size.width < 1000
             let dense = viewport.size.height < 300
             let toolbarHeight: CGFloat = dense ? 40 : 48
             let footerHeight: CGFloat = dense ? 36 : 44

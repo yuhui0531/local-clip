@@ -125,7 +125,22 @@ public struct Shortcut: Codable, Equatable, Sendable {
     public var modifiers: UInt32
     public init(keyCode: UInt32 = 9, modifiers: UInt32 = 2304) { self.keyCode = keyCode; self.modifiers = modifiers }
 }
+// 用户外观选择与布局密度分别存储，紧凑不改变颜色主题，by AI.Coding。
+public enum AppAppearance: String, Codable, CaseIterable, Sendable {
+    case system, light, dark
+}
 public struct SettingsSnapshot: Codable, Equatable, Sendable {
+    // 可选字段允许已有设置直接读取；没有选择时保持系统外观与自适应布局。
+    private var appearanceValue: AppAppearance?
+    private var compactLayoutValue: Bool?
+    public var appearance: AppAppearance {
+        get { appearanceValue ?? .system }
+        set { appearanceValue = newValue }
+    }
+    public var compactLayout: Bool {
+        get { compactLayoutValue == true }
+        set { compactLayoutValue = newValue }
+    }
     // 名称属于可选显示元数据，沿用同库JSON字段，不新增结构或迁移，by AI.Coding。
     private var clipTitlesValue: [ClipID: String]?
     public internal(set) var clipTitles: [ClipID: String] {

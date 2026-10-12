@@ -269,6 +269,12 @@ import LocalClipCore
     /// 隐藏图标必须仍有已注册快捷键；共享设置使用系统公开窗口属性。
     private func applyAppearanceSettings() {
         guard let model else { return }
+        // 应用级外观覆盖同时作用于历史、设置及后续创建的窗口；nil恢复跟随系统。
+        switch model.settings.appearance {
+        case .system: NSApp.appearance = nil
+        case .light: NSApp.appearance = NSAppearance(named: .aqua)
+        case .dark: NSApp.appearance = NSAppearance(named: .darkAqua)
+        }
         let registered = hotkeys.register(model.settings.shortcut)
         status?.isVisible = model.settings.showMenuIcon || !registered
         if !registered { model.message = "快捷键冲突，菜单栏入口保留" }
@@ -358,14 +364,16 @@ import LocalClipCore
             self?.feedbackPanel?.orderOut(nil)
         }
     }
-    /// 设置不会改变已记住的面板目标。
+    /// 设置使用可取消、失焦隐藏的窗口，不改变已记住的面板目标，by AI.Coding。
     @objc public func showSettings() {
         guard let model else { return }
         if settingsWindow == nil {
-            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 680, height: 730), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+            let window = SettingsWindow(contentRect: NSRect(x: 0, y: 0, width: 680, height: 730), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+            window.delegate = window
             window.title = "LocalClip 设置"; window.isReleasedWhenClosed = false
             window.contentView = NSHostingView(rootView: SettingsView(model: model, login: login)); window.center(); settingsWindow = window
         }
+        model.settingsVisibilityChanged(true)
         NSApp.activate(ignoringOtherApps: true); settingsWindow?.makeKeyAndOrderFront(nil)
     }
     /// 按点击时的状态保存明确意图，恢复仍从新计数开始，by AI.Coding。

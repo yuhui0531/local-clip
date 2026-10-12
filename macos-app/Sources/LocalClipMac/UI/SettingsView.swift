@@ -13,10 +13,22 @@ public struct SettingsView: View {
     @State private var loginStatus = ""
     @State private var permitted = false
     public init(model: HistoryViewModel, login: LoginItemService) { self.model = model; self.login = login }
+    /// 外观入口置顶；失焦与Esc由窗口管理，录制期间Esc只取消录制，by AI.Coding。
     public var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 Text("LocalClip 设置").font(.title2.bold())
+                GroupBox("外观与布局") {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Picker("外观", selection: Binding(get: { model.settings.appearance }, set: { value in model.updateSettings { $0.appearance = value } })) {
+                            Text("跟随系统").tag(AppAppearance.system)
+                            Text("浅色").tag(AppAppearance.light)
+                            Text("深色").tag(AppAppearance.dark)
+                        }.pickerStyle(.segmented)
+                        Toggle("紧凑布局", isOn: Binding(get: { model.settings.compactLayout }, set: { value in model.updateSettings { $0.compactLayout = value } }))
+                        Text("外观同时应用于历史面板和设置。紧凑布局缩短工具栏和操作区；窄屏自动使用紧凑布局。按 Esc 或切换到其他窗口可关闭设置。").font(.caption).foregroundStyle(.secondary)
+                    }.padding(10).frame(maxWidth: .infinity, alignment: .leading)
+                }
                 GroupBox("采集与操作") {
                     VStack(alignment: .leading, spacing: 12) {
                         // 开关传递绝对用户意图，不能由启动时的新配置反转，by AI.Coding。
@@ -87,8 +99,16 @@ public struct SettingsView: View {
                 Text("支持文本、URL、RTF、简单HTML、PNG/TIFF/JPEG和文件引用；每次32项、表示数据50MiB。文件不备份本体，原件删除后无法恢复。Finder中双击文件复制到当前文件夹。RTFD、云同步、OCR、AI不在此版本。").font(.caption).foregroundStyle(.secondary)
             }.padding(24)
         }.frame(minWidth: 640, minHeight: 600)
+        .onExitCommand {
+            if recording { stopRecording() }
+            else { (NSApp.keyWindow as? SettingsWindow)?.cancelOperation(nil) }
+        }
         .onAppear { model.settingsVisibilityChanged(true); model.actualPanelHeight = max(280, model.settings.panelHeight); retention = String(model.settings.retentionDays); quota = String(model.settings.quotaBytes / MiB); loginStatus = login.message; permitted = MacApplicationClient().permitted }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in loginStatus = login.message; permitted = MacApplicationClient().permitted }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.willCloseNotification)) { notification in
+            // 窗口保留用于再次打开；关闭时立即停止录制，不依赖SwiftUI销毁视图。
+            if notification.object is SettingsWindow { model.settingsVisibilityChanged(false); stopRecording() }
+        }
         .onDisappear { model.settingsVisibilityChanged(false); stopRecording() }
     }
     /// 应用选择器读取 bundleID，不将名称作为唯一键。
