@@ -32,6 +32,21 @@ jobs:
           xcodebuild -version
           swift --version
 
+      # 发布前必须通过全部自动化测试；任一失败即终止，后续构建与发布都不会执行。
+      - name: Run Tests
+        timeout-minutes: 30
+        run: |
+          bash macos-app/scripts/test.sh
+
+      - name: Upload Test Log on Failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: swift-test-log
+          path: macos-app/evidence/automated/**/swift-test.log
+          if-no-files-found: ignore
+          retention-days: 14
+
       - name: Build macOS Application (Release)
         run: |
           bash macos-app/scripts/build-app.sh release
@@ -58,12 +73,18 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+      # 只有推送版本 tag 才发布；main 推送与 PR 只构建和测试，不会覆盖已发布的安装包。
       - name: Publish to GitHub Releases
-        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${{ steps.package.outputs.full_version }}"
+          # tag 必须与 Info.plist 版本一致，防止用旧版本号发布新代码。
+          if [ "${{ github.ref_name }}" != "$TAG" ]; then
+            echo "::error::推送的 tag ${{ github.ref_name }} 与 Info.plist 版本 $TAG 不一致，请先更新版本号"
+            exit 1
+          fi
           TITLE="LocalClip ${{ steps.package.outputs.version }} (Build ${{ steps.package.outputs.build }})"
 
           BODY="## LocalClip macOS 安装包发布
@@ -90,13 +111,13 @@ jobs:
             "macos-app/dist/checksums.txt"
           )
 
+          # 同一版本只发布一次：已存在则失败，绝不覆盖已发布的安装包。
           if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "==> Release $TAG 已存在，正在更新发布文件..."
-            gh release upload "$TAG" "${FILES[@]}" --clobber
-          else
-            echo "==> 正在创建新 Release: $TAG"
-            gh release create "$TAG" "${FILES[@]}" \
-              --title "$TITLE" \
-              --notes "$BODY" \
-              --latest
+            echo "::error::Release $TAG 已存在；同一版本号不能重复发布，请递增版本号后再打 tag"
+            exit 1
           fi
+          echo "==> 正在创建新 Release: $TAG"
+          gh release create "$TAG" "${FILES[@]}" \
+            --title "$TITLE" \
+            --notes "$BODY" \
+            --latest

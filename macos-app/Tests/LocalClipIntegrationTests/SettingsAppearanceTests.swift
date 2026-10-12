@@ -40,7 +40,9 @@ import Testing
         try await Task.sleep(for: .milliseconds(250))
         #expect(!closed)
         window.windowDidResignKey(.init(name: NSWindow.didResignKeyNotification, object: window))
-        try await Task.sleep(for: .milliseconds(250))
+        // 关闭在150ms延迟任务中执行；整套测试并发时调度可能更晚，轮询到期限而非固定等待，by AI.Coding。
+        let deadline = ContinuousClock.now + .seconds(3)
+        while !closed, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(20)) }
         #expect(closed)
         let escapeWindow = SettingsWindow(contentRect: .init(x: 0, y: 0, width: 100, height: 100), styleMask: .titled, backing: .buffered, defer: true)
         escapeWindow.isReleasedWhenClosed = false
