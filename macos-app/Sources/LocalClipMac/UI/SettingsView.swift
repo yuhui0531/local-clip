@@ -7,7 +7,7 @@ import LocalClipCore
 enum SettingsSection: String, CaseIterable {
     case general = "通用", paste = "粘贴", privacy = "隐私", storage = "存储", advanced = "高级"
     var symbol: String {
-        switch self { case .general: "gearshape"; case .paste: "doc.on.clipboard"; case .privacy: "hand.raised"; case .storage: "internaldrive"; case .advanced: "slider.horizontal.3" }
+        switch self { case .general: "gearshape"; case .paste: "clipboard"; case .privacy: "hand.raised"; case .storage: "internaldrive"; case .advanced: "slider.horizontal.3" }
     }
 }
 public struct SettingsView: View {
@@ -21,6 +21,8 @@ public struct SettingsView: View {
     @State private var loginStatus = ""
     @State private var loginEnabled = false
     @State private var permitted = false
+    // 底栏只显示设置窗口在前台时产生的反馈；面板粘贴、采集等全局消息不进入设置，by AI.Coding。
+    @State private var feedback = ""
     // 窗口高度跟随当前分组内容，过长分组才滚动，避免短分组下方大片留白，by AI.Coding。
     @State private var formHeight: CGFloat = 360
     public init(model: HistoryViewModel, login: LoginItemService) { self.model = model; self.login = login }
@@ -32,11 +34,10 @@ public struct SettingsView: View {
     /// 原生分组表单：按“通用 / 记录 / 粘贴 / 隐私 / 存储 / 高级”组织，说明放入分组脚注；失焦与Esc由窗口管理，录制期间Esc只取消录制，by AI.Coding。
     public var body: some View {
         VStack(spacing: 0) {
-            Picker("设置分组", selection: $section) {
-                ForEach(SettingsSection.allCases, id: \.self) { value in
-                    Label(value.rawValue, systemImage: value.symbol).tag(value)
-                }
-            }.pickerStyle(.segmented).labelsHidden().padding(20)
+            // macOS设置窗口惯用的图标标签栏，与下方表单同一底色，by AI.Coding。
+            HStack(spacing: 4) {
+                ForEach(SettingsSection.allCases, id: \.self) { value in SettingsTab(section: value, selected: section == value) { section = value } }
+            }.padding(.top, 10).padding(.bottom, 8).frame(maxWidth: .infinity)
             Divider()
             Form {
                 if section == .general {
@@ -57,7 +58,7 @@ public struct SettingsView: View {
                         if login.status == .requiresApproval || loginStatus.hasPrefix("请求失败") {
                             LabeledContent(loginStatus) { Button("打开登录项…") { login.openSettings() } }.foregroundStyle(.secondary)
                         }
-                    } header: { Text("通用") } footer: {
+                    } header: { Text("外观与启动") } footer: {
                         Text("外观同时应用于历史面板和设置。紧凑布局缩短工具栏和操作区；窄屏自动使用紧凑布局。隐藏菜单栏图标要求快捷键可用。").settingsFootnote()
                     }
                 }
@@ -95,7 +96,7 @@ public struct SettingsView: View {
                                 .foregroundStyle(permitted ? Color.green : Color.orange)
                             if !permitted { Button("开启…") { AccessibilityGuide.shared.show(skipIntro: true) } }
                         }
-                    } header: { Text("粘贴") } footer: {
+                    } header: { Text("粘贴方式") } footer: {
                         Text("⌘C 复制所选，⇧Return 直接粘贴纯文本；搜索框 Return 或 Tab 先进入结果。直接粘贴需要辅助功能权限，仅恢复目标应用，不能保证原输入框或光标位置；没有权限仍可复制后手动粘贴。").settingsFootnote()
                     }
                 }
@@ -119,7 +120,7 @@ public struct SettingsView: View {
                             BundleRow(id: id) { model.updateSettings { $0.excludedBundleIDs.remove(id) } }
                         }
                         Button("添加要排除的应用…", action: chooseApplication)
-                    } header: { Text("隐私") } footer: {
+                    } footer: {
                         Text("排除仅按 org.nspasteboard.source 声明的 bundleID 匹配；前台推断与未知来源不参与应用排除，需要停止记录时请暂停。开启“前台时暂停”后，排除应用处于前台的整个区间都不记录，退出区间不补采。敏感/临时标记在正文读取前整次过滤，不能识别所有密码。共享限制使用公开 NSWindow 属性，不能保证所有录屏方式隐藏本窗口。新增排除不会删除已有历史；数据保存在本机，未宣称加密，不上传剪贴板内容。").settingsFootnote()
                     }
                 }
@@ -147,7 +148,7 @@ public struct SettingsView: View {
                             Spacer()
                             Button("清空普通历史…", role: .destructive) { model.change(.clearOrdinary) }
                         }
-                    } header: { Text("存储") } footer: {
+                    } footer: {
                         Text("期限按最近有效用户复制起算；浏览和自身恢复不续期。收藏或任一自定义分类的记录不参与期限和自动淘汰，但计入容量。无法容纳新内容时保留旧历史，跳过新增。降低设置需预览确认。1MiB = 1,048,576 字节。").settingsFootnote()
                     }
                 }
@@ -159,24 +160,28 @@ public struct SettingsView: View {
                             Text("\(Int(model.actualPanelHeight)) pt").monospacedDigit().foregroundStyle(.secondary).frame(width: 52, alignment: .trailing)
                         }
                         Toggle("启用本机阶段计时日志", isOn: Binding(get: { model.settings.timingEnabled }, set: { value in model.updateSettings { $0.timingEnabled = value } }))
-                    } header: { Text("高级") } footer: {
+                    } footer: {
                         VStack(alignment: .leading, spacing: 6) {
                             Text("计时日志只记录阶段、条数和毫秒，不含正文、文件路径、URL或搜索词。数据目录：LocalClip-LocalEdition。全新数据模型，不兼容或迁移旧库。")
                             Text("支持文本、URL、RTF、简单HTML、PNG/TIFF/JPEG和文件引用；每次32项、表示数据50MiB。文件不备份本体，原件删除后无法恢复。Finder中双击文件复制到当前文件夹。RTFD、云同步、OCR、AI不在此版本。")
                         }.settingsFootnote()
                     }
                 }
-            }.formStyle(.grouped).id(section)
+            }.formStyle(.grouped).scrollContentBackground(.hidden).id(section)
                 .onScrollGeometryChange(for: CGFloat.self) { $0.contentSize.height } action: { _, height in formHeight = height }
                 .frame(height: min(max(formHeight, 160), 600))
         }
         // 操作反馈固定在底部，不随长表单滚走。
         .safeAreaInset(edge: .bottom) {
             // 固定反馈区避免保存提示出现时挤动表单，by AI.Coding。
-            Text(model.message.isEmpty ? "常规设置自动保存；存储限制需点按“应用”" : model.message)
-                .font(.caption).foregroundStyle(.secondary).textSelection(.enabled).lineLimit(2)
-                .padding(.horizontal, 20).frame(maxWidth: .infinity, alignment: .leading).frame(height: 42).background(.bar)
+            VStack(spacing: 0) {
+                Divider()
+                Label(feedback.isEmpty ? "常规设置自动保存；存储限制需点按“应用”" : feedback, systemImage: feedback.isEmpty ? "checkmark.circle" : "info.circle")
+                    .font(.caption).foregroundStyle(.secondary).textSelection(.enabled).lineLimit(2)
+                    .padding(.horizontal, 20).frame(maxWidth: .infinity, alignment: .leading).frame(height: 38)
+            }
         }
+        .onChange(of: model.message) { _, message in if NSApp.keyWindow is SettingsWindow { feedback = message } }
         .frame(width: 620)
         // 按自然高度测量整页，再让窗口贴合；窗口动画过程中内容保持顶部对齐。
         .fixedSize(horizontal: false, vertical: true)
@@ -194,7 +199,7 @@ public struct SettingsView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in refreshLogin(); permitted = MacApplicationClient().permitted }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.willCloseNotification)) { notification in
             // 窗口保留用于再次打开；关闭时立即停止录制，不依赖SwiftUI销毁视图。
-            if notification.object is SettingsWindow { model.settingsVisibilityChanged(false); stopRecording() }
+            if notification.object is SettingsWindow { model.settingsVisibilityChanged(false); stopRecording(); feedback = "" }
         }
         .onDisappear { model.settingsVisibilityChanged(false); stopRecording() }
     }
@@ -266,5 +271,25 @@ extension View {
     func settingsFootnote() -> some View {
         font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.leading)
             .fixedSize(horizontal: false, vertical: true).frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// 设置顶部标签：图标在上、名称在下，选中为强调色与浅色底，带悬停反馈，by AI.Coding。
+private struct SettingsTab: View {
+    let section: SettingsSection
+    let selected: Bool
+    let action: () -> Void
+    @State private var hovering = false
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 3) {
+                Image(systemName: section.symbol).font(.system(size: 18, weight: .regular)).frame(height: 22)
+                Text(section.rawValue).font(.system(size: 11, weight: selected ? .semibold : .regular))
+            }.frame(width: 64, height: 50)
+                .foregroundStyle(selected ? Color.accentColor : Color.secondary)
+                .background(Color.primary.opacity(selected ? 0.08 : hovering ? 0.04 : 0), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .contentShape(Rectangle())
+        }.buttonStyle(.plain).onHover { hovering = $0 }
+            .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }

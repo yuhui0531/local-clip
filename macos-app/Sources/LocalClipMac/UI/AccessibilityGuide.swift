@@ -74,7 +74,8 @@ enum AccessibilityGuideStep { case intro, drag, done }
     private func makePanel() -> NSPanel {
         let panel = NSPanel(contentRect: .init(x: 0, y: 0, width: 420, height: 300), styleMask: [.titled, .closable, .fullSizeContentView], backing: .buffered, defer: false)
         panel.titlebarAppearsTransparent = true; panel.titleVisibility = .hidden; panel.title = "LocalClip 辅助功能授权"
-        panel.isMovableByWindowBackground = true; panel.isReleasedWhenClosed = false
+        // 背景拖动会抢走图标拖拽；窗口只能用顶部区域移动，by AI.Coding。
+        panel.isMovableByWindowBackground = false; panel.isReleasedWhenClosed = false
         // 系统设置成为前台后向导仍需留在其上方，供用户拖动图标。
         panel.level = .floating; panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
@@ -152,13 +153,11 @@ struct AccessibilityGuideView: View {
                 if !state.dockedOnLeft { DragArrow(pointsRight: false) }
                 // 拖出的就是应用本身的路径，与从Finder拖入应用等效。
                 VStack(spacing: 6) {
-                    Image(nsImage: NSApp.applicationIconImage).resizable().frame(width: 64, height: 64)
+                    AppIconDragSource().frame(width: 64, height: 64)
                     Text("LocalClip").font(.caption.weight(.medium))
                 }.padding(10)
                     .background(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Color.accentColor.opacity(0.5), style: StrokeStyle(lineWidth: 1.5, dash: [5, 4])))
                     .contentShape(Rectangle())
-                    .onDrag { NSItemProvider(object: Bundle.main.bundleURL as NSURL) }
-                    .pointerStyle(.grabIdle)
                     .help("拖到系统设置的辅助功能列表中")
                 if state.dockedOnLeft { DragArrow(pointsRight: true) }
             }
@@ -200,5 +199,27 @@ private struct DragArrow: View {
             .offset(x: moved ? (pointsRight ? 6 : -6) : 0)
             .onAppear { guard !reduceMotion else { return }; withAnimation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true)) { moved = true } }
             .accessibilityHidden(true)
+    }
+}
+
+/// 原生拖拽源：不移动窗口，系统设置在前台时第一下即可拖动，拖出应用自身的文件URL，by AI.Coding。
+private struct AppIconDragSource: NSViewRepresentable {
+    func makeNSView(context: Context) -> DragView { DragView() }
+    func updateNSView(_ view: DragView, context: Context) {}
+    final class DragView: NSView, NSDraggingSource {
+        override var mouseDownCanMoveWindow: Bool { false }
+        override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+        override func draw(_ dirtyRect: NSRect) { NSApp.applicationIconImage.draw(in: bounds) }
+        override func resetCursorRects() { addCursorRect(bounds, cursor: .openHand) }
+        // 按下不交给父视图，避免窗口进入移动或激活流程。
+        override func mouseDown(with event: NSEvent) {}
+        override func mouseDragged(with event: NSEvent) {
+            let item = NSDraggingItem(pasteboardWriter: Bundle.main.bundleURL as NSURL)
+            item.setDraggingFrame(bounds, contents: NSApp.applicationIconImage)
+            beginDraggingSession(with: [item], event: event, source: self)
+        }
+        func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
+            context == .outsideApplication ? [.copy, .link, .generic] : []
+        }
     }
 }
