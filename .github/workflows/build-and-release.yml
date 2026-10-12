@@ -62,7 +62,7 @@ jobs:
           BUILD=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" macos-app/Resources/Info.plist 2>/dev/null || echo "1")
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "build=${BUILD}" >> "$GITHUB_OUTPUT"
-          echo "full_version=v${VERSION}-${BUILD}" >> "$GITHUB_OUTPUT"
+          echo "full_version=v${VERSION}" >> "$GITHUB_OUTPUT"
 
       - name: Upload Artifacts to GitHub Actions
         uses: actions/upload-artifact@v4

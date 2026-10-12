@@ -14,8 +14,8 @@ if [ ! -d "$app_path" ]; then
 fi
 
 version="$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$plist_path" 2>/dev/null || echo "1.0.0")"
-build_number="$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$plist_path" 2>/dev/null || echo "1")"
-full_version="v${version}-${build_number}"
+# tag 与安装包只用版本号（如 v0.3.17），构建号仍写在 Info.plist 与 Release 标题中，by AI.Coding。
+full_version="v${version}"
 
 dmg_name="LocalClip-${full_version}.dmg"
 zip_name="LocalClip-${full_version}.zip"

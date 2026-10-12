@@ -21,6 +21,7 @@ public struct SettingsView: View {
     @State private var loginStatus = ""
     @State private var loginEnabled = false
     @State private var permitted = false
+    @ObservedObject private var updates = UpdateChecker.shared
     // 底栏只显示设置窗口在前台时产生的反馈；面板粘贴、采集等全局消息不进入设置，by AI.Coding。
     @State private var feedback = ""
     // 窗口高度跟随当前分组内容，过长分组才滚动，避免短分组下方大片留白，by AI.Coding。
@@ -55,11 +56,20 @@ public struct SettingsView: View {
                         }
                         // 登录启动显示系统真实状态，开关只在用户点击时请求注册。
                         Toggle("登录时启动", isOn: Binding(get: { loginEnabled }, set: { loginChange($0) }))
+                        Toggle("自动检查更新", isOn: Binding(get: { model.settings.autoCheckUpdates }, set: { value in model.updateSettings { $0.autoCheckUpdates = value } }))
+                        LabeledContent("当前版本 \(UpdateChecker.currentVersion)") {
+                            if let release = updates.available {
+                                Button("下载 \(release.version)…") { NSWorkspace.shared.open(release.page) }.buttonStyle(.borderedProminent)
+                            } else {
+                                if let result = updates.manualResult { Text(result).foregroundStyle(.secondary) }
+                                Button(updates.checking ? "正在检查…" : "检查更新") { Task { await updates.check(manual: true) } }.disabled(updates.checking)
+                            }
+                        }
                         if login.status == .requiresApproval || loginStatus.hasPrefix("请求失败") {
                             LabeledContent(loginStatus) { Button("打开登录项…") { login.openSettings() } }.foregroundStyle(.secondary)
                         }
                     } header: { Text("外观与启动") } footer: {
-                        Text("外观同时应用于历史面板和设置。紧凑布局缩短工具栏和操作区；窄屏自动使用紧凑布局。隐藏菜单栏图标要求快捷键可用。").settingsFootnote()
+                        Text("外观同时应用于历史面板和设置。紧凑布局缩短工具栏和操作区；窄屏自动使用紧凑布局。隐藏菜单栏图标要求快捷键可用。自动检查更新每天最多一次，只读取 GitHub 上的最新版本号，不发送任何剪贴板内容；不会自动下载或安装。").settingsFootnote()
                     }
                 }
                 if section == .general {

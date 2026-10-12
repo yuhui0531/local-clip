@@ -139,6 +139,22 @@ public struct Shortcut: Codable, Equatable, Sendable {
 public enum AppAppearance: String, Codable, CaseIterable, Sendable {
     case system, light, dark
 }
+/// 发布标签（如 v0.3.16-38）与应用版本号按数字分段比较，忽略前缀v与“-构建号”后缀，by AI.Coding。
+public enum AppVersion {
+    /// 去掉前缀v和“-”“+”之后的构建信息，得到可比较、可展示的版本号。
+    public static func marketing(_ value: String) -> String {
+        String(value.drop(while: { $0 == "v" || $0 == "V" }).prefix(while: { $0 != "-" && $0 != "+" }))
+    }
+    public static func isNewer(_ candidate: String, than current: String) -> Bool {
+        func parts(_ value: String) -> [Int] { marketing(value).split(separator: ".").map { Int($0) ?? 0 } }
+        let a = parts(candidate), b = parts(current)
+        for index in 0..<max(a.count, b.count) {
+            let x = index < a.count ? a[index] : 0, y = index < b.count ? b[index] : 0
+            if x != y { return x > y }
+        }
+        return false
+    }
+}
 public struct SettingsSnapshot: Codable, Equatable, Sendable {
     // 可选字段允许已有设置直接读取；没有选择时保持系统外观与自适应布局。
     private var appearanceValue: AppAppearance?
@@ -181,6 +197,12 @@ public struct SettingsSnapshot: Codable, Equatable, Sendable {
     public var captureEnabled = true
     public var excludedBundleIDs: Set<String> = []
     // opt-in 编辑器列表默认关闭；缺失字段按空集合处理，by AI.Coding。
+    // 默认每天最多一次读取GitHub最新版本号；缺失字段按开启处理，by AI.Coding。
+    private var autoCheckUpdatesValue: Bool?
+    public var autoCheckUpdates: Bool {
+        get { autoCheckUpdatesValue ?? true }
+        set { autoCheckUpdatesValue = newValue }
+    }
     private var smartPasteEditorBundleIDsValue: Set<String>?
     public var smartPasteEditorBundleIDs: Set<String> {
         get { smartPasteEditorBundleIDsValue ?? [] }

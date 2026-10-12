@@ -119,12 +119,12 @@ import LocalClipCore
                     applyAppearanceSettings(); updateMenu()
                     // 再次打开应用触发接替时，新进程完成启动后继续展示用户请求的历史。
                     if CommandLine.arguments.contains("--show-history") { showHistory() }
-                    // 首次启动引导开启辅助功能；隔离验收进程不弹出。
-                    #if DEBUG
-                    if GUIAcceptanceProbe.configuration == nil { AccessibilityGuide.shared.showOnFirstLaunch() }
-                    #else
-                    AccessibilityGuide.shared.showOnFirstLaunch()
-                    #endif
+                    // 首次启动引导开启辅助功能并检查新版本；隔离验收进程不弹出、不联网。
+                    if !Self.isolatedRun {
+                        AccessibilityGuide.shared.showOnFirstLaunch()
+                        UpdateChecker.shared.onChange = { [weak self] in self?.updateMenu() }
+                        UpdateChecker.shared.checkIfDue(enabled: model.settings.autoCheckUpdates)
+                    }
                     #if DEBUG
                     GUIAcceptanceProbe.attach(model: model, board: access, show: { [weak self] in self?.showHistory() }, hide: { [weak self] in self?.dismissHistory() })
                     #endif
@@ -136,6 +136,7 @@ import LocalClipCore
                     try? await Task.sleep(for: .seconds(60))
                     guard let model, !Task.isCancelled else { break }
                     await model.maintenance()
+                    if !Self.isolatedRun { UpdateChecker.shared.checkIfDue(enabled: model.settings.autoCheckUpdates) }
                 }
             }
         } catch {
@@ -195,11 +196,25 @@ import LocalClipCore
         updateCaptureItem(pause)
         let settings = menu.addItem(withTitle: "设置…", action: #selector(showSettings), keyEquivalent: ","); settings.target = self
         settings.image = NSImage(systemSymbolName: "gearshape", accessibilityDescription: nil)
+        // 有新版本时只在菜单里多一项，不弹窗打扰，by AI.Coding。
+        if let release = UpdateChecker.shared.available {
+            let update = menu.addItem(withTitle: "有新版本 \(release.version)…", action: #selector(openUpdate), keyEquivalent: ""); update.target = self
+            update.image = NSImage(systemSymbolName: "arrow.down.circle", accessibilityDescription: nil)
+        }
         menu.addItem(.separator())
         // 菜单栏非激活窗口不依赖外部应用的响应链，by AI.Coding。
         let quit = menu.addItem(withTitle: "退出 LocalClip", action: #selector(quitApplication(_:)), keyEquivalent: "q")
         quit.target = self
         menu.delegate = self; return menu
+    }
+    @objc private func openUpdate() { if let page = UpdateChecker.shared.available?.page { NSWorkspace.shared.open(page) } }
+    /// 隔离验收进程不弹授权向导、不访问网络。
+    private static var isolatedRun: Bool {
+        #if DEBUG
+        GUIAcceptanceProbe.configuration != nil
+        #else
+        false
+        #endif
     }
     private var statusMenuTitle: String { "LocalClip · " + HistoryView.statusLabel(model?.capture.state ?? "准备中") }
     private func updateCaptureItem(_ item: NSMenuItem) {
@@ -389,7 +404,9 @@ import LocalClipCore
         feedbackTask = Task { [weak self] in
             do { try await Task.sleep(for: .seconds(3)) } catch { return }
             guard let panel = self?.feedbackPanel else { return }
-            await NSAnimationContext.runAnimationGroup { $0.duration = 0.25; panel.animator().alphaValue = 0 }
+            // 不用异步动画接口：其闭包跨并发边界，严格并发检查下无法编译，by AI.Coding。
+            NSAnimationContext.runAnimationGroup({ $0.duration = 0.25; panel.animator().alphaValue = 0 }, completionHandler: nil)
+            try? await Task.sleep(for: .milliseconds(250))
             if !Task.isCancelled { panel.orderOut(nil) }
         }
     }
