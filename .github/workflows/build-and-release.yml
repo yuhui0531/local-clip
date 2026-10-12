@@ -35,8 +35,10 @@ jobs:
       # 发布前必须通过全部自动化测试；任一失败即终止，后续构建与发布都不会执行。
       - name: Run Tests
         timeout-minutes: 30
+        # 3核 runner 上并行执行会让主线程调度延迟数百毫秒，触发粘贴焦点等产品级安全期限；
+        # CI 串行执行以获得确定结果（本地串行约35秒）。
         run: |
-          bash macos-app/scripts/test.sh
+          bash macos-app/scripts/test.sh --no-parallel
 
       - name: Upload Test Log on Failure
         if: failure()
