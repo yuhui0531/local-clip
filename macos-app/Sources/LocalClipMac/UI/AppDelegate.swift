@@ -545,6 +545,8 @@ import LocalClipCore
                 case 6: model.undoDeletion(); return nil
                 case 5: model.jumpToHistory(); return nil
                 case 31: model.openSelected(); return nil
+                // ⌘I 是macOS“显示简介”的通用快捷键，在所选卡片上方切换详情，by AI.Coding。
+                case 34: if model.selectedID != nil { model.showingDetail.toggle() }; return nil
                 default: return event
                 }
             }

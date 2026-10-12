@@ -71,7 +71,7 @@ public struct HistoryView: View {
                 if filterHeight > 0 { FilterStrip(model: model) }
                 HistoryStrip(model: model, list: model.listState, cardHeight: cardHeight,
                     availableCardHeight: availableCardHeight, categoryID: model.categoryID, categories: model.categories,
-                    target: model.target, draggedIDs: model.draggedIDs, hideContents: model.settings.hideContents, focusRequest: model.focusRequest, renamingID: model.renamingID)
+                    target: model.target, draggedIDs: model.draggedIDs, hideContents: model.settings.hideContents, focusRequest: model.focusRequest, renamingID: model.renamingID, showingDetail: model.showingDetail)
                 Divider().opacity(0.5)
                 HStack(spacing: 12) {
                     Circle().fill(model.status == "正常" ? Color.green : model.capture.capacityBlocked ? Color.red : Color.orange).frame(width: 6, height: 6)
@@ -213,6 +213,7 @@ private struct HistoryStrip: View {
     let hideContents: Bool
     let focusRequest: UUID
     let renamingID: ClipID?
+    let showingDetail: Bool
     @State private var scrollPosition = ScrollPosition(edge: .leading)
     @State private var scrollWheelState = HistoryScrollWheel.State()
     var body: some View {
@@ -226,6 +227,10 @@ private struct HistoryStrip: View {
                         LazyHStack(spacing: 16) {
                             ForEach(Array(model.items.enumerated()), id: \.element.id) { index, item in
                                 ClipCard(item: item, index: index, selected: model.selectedIDs.contains(item.id), dragging: draggedIDs.contains(item.id), editing: renamingID == item.id, hidden: hideContents, quickModifiers: model.settings.quickModifiers, height: cardHeight, categoryID: categoryID, categories: categories, target: target, model: model).equatable().id(item.id)
+                                    // 详情贴着所选卡片弹出，而不是远在底栏右侧的按钮，by AI.Coding。
+                                    .popover(isPresented: Binding(get: { showingDetail && model.selectedID == item.id }, set: { if !$0 { model.showingDetail = false } }), arrowEdge: .top) {
+                                        ClipInspector(model: model).frame(width: 520)
+                                    }
                             }
                             if model.hasMore {
                                 Button(action: model.loadMore) {
@@ -361,7 +366,6 @@ private struct HistorySelectionActions: View {
                 }
                 Button { model.showingDetail.toggle() } label: { if compact { Image(systemName: "info.circle") } else { Label("详情", systemImage: "info.circle") } }.buttonStyle(.plain)
                     .accessibilityLabel("详情").help("详情")
-                    .popover(isPresented: $model.showingDetail, arrowEdge: .top) { ClipInspector(model: model).frame(width: 520) }
                 Divider().frame(height: 20)
                 if !compact {
                     Button { model.perform(.plainText, action: .copy) } label: { Text("纯文本复制") }
@@ -427,6 +431,7 @@ private struct ClipCard: View, Equatable {
     let hidden: Bool
     let quickModifiers: UInt32
     @State private var headerRect: CGRect = .zero
+    @State private var infoRect: CGRect = .zero
     @State private var nameDraft = ""
     @FocusState private var nameFocused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -521,6 +526,14 @@ private struct ClipCard: View, Equatable {
             HStack(spacing: 4) {
                 Text(characterCount.map { "\($0) 个字符" } ?? (item.kind == .file ? "文件引用" : "复制\(item.copyCount)次")).lineLimit(1)
                 Spacer(minLength: 2)
+                // 详情入口跟随卡片：悬停或选中时出现，点按在本卡上方弹出详情，by AI.Coding。
+                if (hovering || selected) && !tiny && !hidden {
+                    Button { model.select(item.id); DispatchQueue.main.async { model.showingDetail = true } } label: {
+                        Image(systemName: "info.circle").font(.system(size: 13)).frame(width: 18, height: 18).contentShape(Rectangle())
+                    }.buttonStyle(.plain).foregroundStyle(Color.accentColor).help("详情 · ⌘I").accessibilityLabel("详情")
+                        .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(item.id)) } action: { infoRect = $0 }
+                        .onDisappear { infoRect = .zero }
+                }
                 if index < 9 && !tiny {
                     Text(HotKeyService.label(Shortcut(keyCode: [18,19,20,21,23,22,26,28,25][index], modifiers: quickModifiers)))
                         .font(.system(size: 10, weight: .medium, design: .monospaced))
@@ -546,7 +559,7 @@ private struct ClipCard: View, Equatable {
     private var interactiveCard: some View {
         cardBody
             // 原生桥必须有明确卡片尺寸，否则透明NSView会占满滚动视口并误认其他卡片，by AI.Coding。
-            .background(HistoryDragBridge(model: model, id: item.id, headerRect: headerRect).frame(width: height, height: height))
+            .background(HistoryDragBridge(model: model, id: item.id, headerRect: headerRect, passThroughRect: infoRect).frame(width: height, height: height))
             .background {
                 #if DEBUG
                 if GUIAcceptanceProbe.configuration != nil, index == 0 {
@@ -585,6 +598,8 @@ private struct ClipCard: View, Equatable {
                 Button("在历史中定位 · ⌘G") { model.select(item.id); model.jumpToHistory() }
                 Menu("在分类中定位") { ForEach(categories) { category in Button(category.name) { model.select(item.id); model.jumpToHistory(category: category.id) } } }
                 if categoryID != nil { Button("向前移动") { model.select(item.id); model.moveSelected(-1) }; Button("向后移动") { model.select(item.id); model.moveSelected(1) } }
+                // 选择变化会关闭旧详情；等选择生效后再打开，避免刚打开即被关闭。
+                Button("详情") { model.select(item.id); DispatchQueue.main.async { model.showingDetail = true } }
                 Button("预览 · Space") { model.select(item.id); model.quickLook() }
                 Button("打开 · ⌘O") { model.select(item.id); model.openSelected() }
                 if item.kind == .file { Button("在Finder中显示") { model.select(item.id); model.openSelected(reveal: true) }; Button("打开方式…") { model.select(item.id); model.openSelected(withApplication: true) } }

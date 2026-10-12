@@ -113,9 +113,11 @@ struct HistoryDragBridge: NSViewRepresentable {
     let model: HistoryViewModel
     let id: ClipID
     let headerRect: CGRect
+    /// 卡片上的按钮区域，点击交还SwiftUI按钮处理，by AI.Coding。
+    var passThroughRect: CGRect = .zero
     /// 保留实际标题命中区域，默认正文点击仍归拖放桥，by AI.Coding。
-    func makeNSView(context: Context) -> DragView { let view = DragView(); view.model = model; view.id = id; view.headerRect = headerRect; view.install(); return view }
-    func updateNSView(_ view: DragView, context: Context) { view.model = model; view.id = id; view.headerRect = headerRect }
+    func makeNSView(context: Context) -> DragView { let view = DragView(); view.model = model; view.id = id; view.headerRect = headerRect; view.passThroughRect = passThroughRect; view.install(); return view }
+    func updateNSView(_ view: DragView, context: Context) { view.model = model; view.id = id; view.headerRect = headerRect; view.passThroughRect = passThroughRect }
     /// 背景桥覆盖整张卡片区域，不依赖无固有尺寸NSView的默认布局，by AI.Coding。
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: DragView, context: Context) -> CGSize? {
         CGSize(width: proposal.width ?? 0, height: proposal.height ?? 0)
@@ -124,6 +126,7 @@ struct HistoryDragBridge: NSViewRepresentable {
         weak var model: HistoryViewModel?
         var id: ClipID = ""
         var headerRect: CGRect = .zero
+        var passThroughRect: CGRect = .zero
         private var pressedTitle = false
         private static var monitor: Any?
         private static let views = NSHashTable<DragView>.weakObjects()
@@ -144,6 +147,11 @@ struct HistoryDragBridge: NSViewRepresentable {
                         let point = view.convert(event.locationInWindow, from: nil)
                         // 非裁剪NSView的visibleRect可能延伸到整个父视口；必须同时命中自身bounds，by AI.Coding。
                         return event.window === view.window && view.bounds.contains(point) && view.visibleRect.contains(point)
+                    }
+                    // 按在卡片按钮上时整段手势交给按钮，不选择、不拖动、不触发双击粘贴。
+                    if let view = Self.active {
+                        let point = view.convert(event.locationInWindow, from: nil)
+                        if view.passThroughRect.contains(CGPoint(x: point.x, y: view.isFlipped ? point.y : view.bounds.height - point.y)) { Self.active = nil }
                     }
                 }
                 #if DEBUG
