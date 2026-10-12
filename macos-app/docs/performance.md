@@ -10,7 +10,7 @@
 
 ## 预读优化后的服务层（最新已完成测量）
 
-[原始样本](../evidence/performance/20261010T021901Z-prefetch/service-results.json)、[完整日志](../evidence/performance/20261010T021901Z-prefetch/benchmark.log)、[固定数据](../evidence/performance/20261010T021901Z-prefetch/fixture-manifest.json)、[新图](../evidence/performance/20261010T021901Z-prefetch/new-image-manifest.json)、[配额](../evidence/performance/20261010T021901Z-prefetch/quota-manifest.json)。Release生产服务测试与包装退出0，45.157秒；同一个v2基准，全部样本保留。计时不含轮询、输入、防抖和界面绘制。
+原始样本、完整日志、固定数据、新图、配额。Release生产服务测试与包装退出0，45.157秒；同一个v2基准，全部样本保留。计时不含轮询、输入、防抖和界面绘制。
 
 | 实际计时边界 | 样本 | P95 ms | 最大 ms | PRD端到端证明 |
 |---|---:|---:|---:|---|
@@ -20,15 +20,15 @@
 | 真正新编码图片到持久提交返回 | 20 | 141.462542 | 142.499875 | 否 |
 | 独立近配额新增到替换返回 | 30 | 550.153458 | 647.568708 | 否 |
 
-诊断发现新APFS克隆inode的完整quick_check逐页冷读成本。[只读诊断及新clone原样本](../evidence/performance/mmap-validation-20261010/result.json)中，新clone mmap192MiB P95为442.237125ms；增到512MiB仍为425.399958ms；保持192MiB并在计时内顺序预读后为74.382250ms。生产仅对32MiB及以上的克隆候选以O_RDONLY顺序预读，用户态固定1MiB缓冲，内核缓存另外计量；仍完整执行quick_check/FK、FULL同步、物理配额检查和原子替换，没有启用未经证明的普通事务路径。诊断计时不能代替生产样本。
+诊断发现新APFS克隆inode的完整quick_check逐页冷读成本。只读诊断及新clone原样本中，新clone mmap192MiB P95为442.237125ms；增到512MiB仍为425.399958ms；保持192MiB并在计时内顺序预读后为74.382250ms。生产仅对32MiB及以上的克隆候选以O_RDONLY顺序预读，用户态固定1MiB缓冲，内核缓存另外计量；仍完整执行quick_check/FK、FULL同步、物理配额检查和原子替换，没有启用未经证明的普通事务路径。诊断计时不能代替生产样本。
 
-与预读前相同v2服务样本相比，文本P95从488.822541降至122.093375ms，新图从494.903875降至141.462542ms，近配额从1038.943458降至550.153458ms。服务瓶颈已改善，**复制到可见P95仍未完成实测，AC16不标通过**；近配额服务P95本身大于500ms，若采用统一500ms预算则该路径仍超限。后续仅移动空fault检查至预读前并增加目标提示；最新功能回归52发现/50功能通过/2条件性能跳过，[真实EACCES失败保旧证据](../evidence/automated/20261010-102835-kQvtAz/swift-test.log)及[独立审查](../evidence/independent/20261010-prefetch-access-failure/report.md)保留。此性能二进制是预读优化运行时版本，后续变更不冒充已重测。
+与预读前相同v2服务样本相比，文本P95从488.822541降至122.093375ms，新图从494.903875降至141.462542ms，近配额从1038.943458降至550.153458ms。服务瓶颈已改善，**复制到可见P95仍未完成实测，AC16不标通过**；近配额服务P95本身大于500ms，若采用统一500ms预算则该路径仍超限。后续仅移动空fault检查至预读前并增加目标提示；最新功能回归52发现/50功能通过/2条件性能跳过，真实EACCES失败保旧证据及独立审查保留。此性能二进制是预读优化运行时版本，后续变更不冒充已重测。
 
 当前源码Release命名板压力与10分钟空闲复测已完成，详见下方最新系统结果。用户已解锁，Safari目标与接收已补证，历史UI可重开恢复。尚未执行符合次数/起止定义的GUI计时；设置绑定失败及其他工具超时如实单列，不能将服务时间或自动化往返时间冒充绘制时间。
 
 ## 预读前服务层（保留历史测量）
 
-[20261010T014419Z-final-new-images原始结果](../evidence/performance/20261010T014419Z-final-new-images/service-results.json)、[完整日志](../evidence/performance/20261010T014419Z-final-new-images/benchmark.log)、[固定数据manifest](../evidence/performance/20261010T014419Z-final-new-images/fixture-manifest.json)、[新图片manifest](../evidence/performance/20261010T014419Z-final-new-images/new-image-manifest.json)、[配额manifest](../evidence/performance/20261010T014419Z-final-new-images/quota-manifest.json)。Release，测试及包装退出0，138.749秒。为预读优化前的生产源码快照，`.build-bench-postfix`独立scratch；不是GUI进程。
+20261010T014419Z-final-new-images原始结果、完整日志、固定数据manifest、新图片manifest、配额manifest。Release，测试及包装退出0，138.749秒。为预读优化前的生产源码快照，`.build-bench-postfix`独立scratch；不是GUI进程。
 
 | 实际计时边界 | 样本 | P95 ms | 最大 ms | 是否证明PRD端到端达标 |
 |---|---:|---:|---:|---|
@@ -48,12 +48,12 @@
 
 ### 本轮修复及历史结果
 
-[分段诊断](../evidence/performance/commit-profile-20261010/stages.json)使用已有fault回调测10个生产Release写入，不是正式GUI基准。原candidateWritten阶段均值187.303ms，candidateValidated（含COMMIT/完整检查）257.841ms；不能把后者全部归因某一个SQL。孤儿查询[原/首次digest优化计划](../evidence/performance/commit-profile-20261010/gc-query-results.json)、[最终rowid计划](../evidence/performance/commit-profile-20261010/gc-rowid-query-results.json)确认使用覆盖索引；顺序冷/热样本不同，不把其均值比作受控整体加速。最终rowid保留NULL孤儿和共享引用语义，未启用未经预算证明的普通事务快路径。
+分段诊断使用已有fault回调测10个生产Release写入，不是正式GUI基准。原candidateWritten阶段均值187.303ms，candidateValidated（含COMMIT/完整检查）257.841ms；不能把后者全部归因某一个SQL。孤儿查询原/首次digest优化计划、最终rowid计划确认使用覆盖索引；顺序冷/热样本不同，不把其均值比作受控整体加速。最终rowid保留NULL孤儿和共享引用语义，未启用未经预算证明的普通事务快路径。
 
-- [20261010T013052Z-postfix](../evidence/performance/20261010T013052Z-postfix/service-results.json)：修复行为后、GC优化前，文本548.396875ms，子区间已超500ms；图片535.581084ms为旧图复采，近配额1086.109209ms。
-- [20261010T013856Z-indexed-gc](../evidence/performance/20261010T013856Z-indexed-gc/service-results.json)：digest首次查询优化，文本482.493917ms、旧图复采1046.961709ms、近配额2798.020125ms；源已进一步改为rowid，样本不删除。
-- [20261010T014146Z-final-rowid](../evidence/performance/20261010T014146Z-final-rowid/service-results.json)：最终生产rowid，文本487.693334ms、旧图复采505.445917ms、近配额978.011750ms；与当前新图样本分别报告。
-- [20261009T182206Z-delivery](../evidence/performance/20261009T182206Z-delivery/service-results.json)：早期源码；文本479.872375ms、旧图复采499.166542ms、搜索27.551209ms、近配额1030.942625ms。不是当前源码版本。
+- 20261010T013052Z-postfix：修复行为后、GC优化前，文本548.396875ms，子区间已超500ms；图片535.581084ms为旧图复采，近配额1086.109209ms。
+- 20261010T013856Z-indexed-gc：digest首次查询优化，文本482.493917ms、旧图复采1046.961709ms、近配额2798.020125ms；源已进一步改为rowid，样本不删除。
+- 20261010T014146Z-final-rowid：最终生产rowid，文本487.693334ms、旧图复采505.445917ms、近配额978.011750ms；与当前新图样本分别报告。
+- 20261009T182206Z-delivery：早期源码；文本479.872375ms、旧图复采499.166542ms、搜索27.551209ms、近配额1030.942625ms。不是当前源码版本。
 
 系统未独占；部分早期诊断、自动回归、Release编译与服务样本运行重叠，其他用户活动也存在，不把这些变化宣称严格受控因果改善。当前新图片服务测试期间没有并行构建或其他本任务测试；随后才启动当前源码压力/空闲复测。
 
@@ -61,7 +61,7 @@
 
 ### 预读优化后源码复测（最新）
 
-[压力原样本](../evidence/performance/20261010T024249Z-system/stress.json)、[120空闲样本](../evidence/performance/20261010T024249Z-system/idle-resources.json)、[汇总](../evidence/performance/20261010T024249Z-system/summary.json)、[完整日志](../evidence/performance/20261010T024249Z-system/benchmark.log)、[实际退出状态](../evidence/performance/20261010T024249Z-system/wrapper-status.json)、[源码与边界](../evidence/performance/20261010T024249Z-system/source-provenance.json)。测试和包装退出0，808.641秒。Release Swift Testing宿主执行生产采集/SQLite，专用命名NSPasteboard；不是正式GUI进程。
+压力原样本、120空闲样本、汇总、完整日志、实际退出状态、源码与边界。测试和包装退出0，808.641秒。Release Swift Testing宿主执行生产采集/SQLite，专用命名NSPasteboard；不是正式GUI进程。
 
 | 输入间隔ms | 输入 | 保存 | 去重 | 明确跳过 | 未观察变化 |
 |---:|---:|---:|---:|---:|---:|
@@ -74,7 +74,7 @@
 
 ### 预读前源码复测（历史）
 
-[20261010T014705Z-system压力](../evidence/performance/20261010T014705Z-system/stress.json)、[空闲原样本](../evidence/performance/20261010T014705Z-system/idle-resources.json)、[完整日志](../evidence/performance/20261010T014705Z-system/benchmark.log)、[包装/测试状态](../evidence/performance/20261010T014705Z-system/wrapper-status.json)、[运行边界](../evidence/performance/20261010T014705Z-system/run-provenance.json)。预读优化前的Release测试宿主，真实命名NSPasteboard、200ms采集、真实SQLite；未触碰general，未执行GUI绘制。测试及包装均退出0，815.771秒。
+20261010T014705Z-system压力、空闲原样本、完整日志、包装/测试状态、运行边界。预读优化前的Release测试宿主，真实命名NSPasteboard、200ms采集、真实SQLite；未触碰general，未执行GUI绘制。测试及包装均退出0，815.771秒。
 
 | 输入间隔ms | 输入 | 保存 | 去重 | 明确busy跳过 | 未观察变化 |
 |---:|---:|---:|---:|---:|---:|
@@ -87,7 +87,7 @@
 
 ### 早期源码与失败包装记录
 
-[20261009T180735Z-system压力原样本](../evidence/performance/20261009T180735Z-system/stress.json)、[空闲120样本](../evidence/performance/20261009T180735Z-system/idle-resources.json)、[测试输出](../evidence/performance/20261009T180735Z-system/benchmark.log)。实际NSPasteboard服务器+生产200ms采集/真实SQLite，Release Swift Testing宿主，无GUI；general未触碰。
+20261009T180735Z-system压力原样本、空闲120样本、测试输出。实际NSPasteboard服务器+生产200ms采集/真实SQLite，Release Swift Testing宿主，无GUI；general未触碰。
 
 | 输入间隔ms | 输入 | 保存 | 去重 | 明确busy跳过 | 未观察变化 |
 |---:|---:|---:|---:|---:|---:|
@@ -110,17 +110,17 @@ baseline(10样本，fixture v1更大)服务搜索P956679.6ms；后续SQL预筛/�
 
 补充诊断：系统实际链接/usr/lib/libsqlite3.dylib读回mmap_size=201326592，见../evidence/performance/system-sqlite-mmap.json。独立Python只读检查实验与生产库实现不同，mmap-experiment.json仅作探索，不替代上述生产计时；未因该实验更改生产192MiB配置。
 
-本轮补齐真实PNG1920×1080接收且像素全等与文本/富文本接收，见[实际记录](../evidence/manual/20261010-safari-ready/observations.json)，这些不是性能样本。仍未新增P层达标结论。
+本轮补齐真实PNG1920×1080接收且像素全等与文本/富文本接收，见实际记录，这些不是性能样本。仍未新增P层达标结论。
 
 
 ## 2026-10-10 追加交互与文件对象
 
-用户追加要求已进入本轮源码：双击原格式复制、屏幕全宽底部固定、真实文件URL引用与Finder目录副本复制。原记录保留为先前版本证据，不代表新版本回归通过。用户要求自行测试，本轮未执行功能、真实应用或性能测试；对应新行为均待用户自测。变更说明见[追加需求](../../paste-report/development-plan/interaction-files-delta.md)，构建记录见[本轮构建](../evidence/automated/20261010-interaction-files/build-result.json)。
+用户追加要求已进入本轮源码：双击原格式复制、屏幕全宽底部固定、真实文件URL引用与Finder目录副本复制。原记录保留为先前版本证据，不代表新版本回归通过。用户要求自行测试，本轮未执行功能、真实应用或性能测试；对应新行为均待用户自测。变更说明见[追加需求](../../paste-report/development-plan/interaction-files-delta.md)，构建记录见本轮构建。
 
 
 ## 0.1.2 双击自动粘贴
 
-实现原输入控件AX身份/可编辑性检查及紧邻事件的剪贴板收据复查。双击自动返回原应用并尝试原生粘贴；明确复制按钮只复制；Finder文件沿用副本复制。未知控件/权限/焦点不满足时回退手动。构建记录见[本轮构建](../evidence/automated/20261010-doubleclick-paste/build-result.json)。用户要求自行测试，本轮未做真实目标接收、回归或性能验证。
+实现原输入控件AX身份/可编辑性检查及紧邻事件的剪贴板收据复查。双击自动返回原应用并尝试原生粘贴；明确复制按钮只复制；Finder文件沿用副本复制。未知控件/权限/焦点不满足时回退手动。构建记录见本轮构建。用户要求自行测试，本轮未做真实目标接收、回归或性能验证。
 
 ## 0.1.3 粘贴排查
 

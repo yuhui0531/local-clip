@@ -59,7 +59,7 @@
 
 | 浅色模式 (Light) | 深色模式 (Dark) | 紧凑布局 (Compact) |
 | :---: | :---: | :---: |
-| ![Light Mode](macos-app/evidence/manual/interface/light.png) | ![Dark Mode](macos-app/evidence/manual/interface/dark.png) | ![Compact Mode](macos-app/evidence/manual/interface/compact.png) |
+| ![Light Mode](macos-app/docs/images/light.png) | ![Dark Mode](macos-app/docs/images/dark.png) | ![Compact Mode](macos-app/docs/images/compact.png) |
 
 ---
 

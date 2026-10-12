@@ -14,4 +14,4 @@ CHANGE_DIR：/Users/ronny/VscodeProjects/rea/paste-report/development-plan
 - [x] Release构建/严格签名：退出0，21.097秒；初次Equatable隔离失败日志保留，nonisolated比较纯值后通过。
 - [ ] 功能/真实SQLite故障/GUI/视觉/性能测试：按用户此前停止自动测试要求，均未执行。无新的性能样本、P95、FPS或CPU/内存数据。仍待用户实测。
 
-证据：[构建结果](../../macos-app/evidence/automated/20261010-panel-performance/build-result.json)、[源码快照](../../macos-app/evidence/automated/20261010-panel-performance/build-source-hashes.json)。
+证据：构建结果、源码快照。

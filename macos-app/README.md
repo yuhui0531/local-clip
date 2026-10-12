@@ -88,13 +88,13 @@ rtk proxy env LOCALCLIP_BENCHMARK_FIXTURE=/绝对路径/已完成性能目录 ba
 
 `LocalClipCore`：值类型契约、格式敏感指纹、字面搜索、SQLite、候选原子提交、容量/期限/收藏/删除。`LocalClipMac`：原生剪贴板、采集队列、焦点安全粘贴、ImageIO、Carbon 热键、SMAppService、AppKit 窗口和 SwiftUI 界面。`LocalClip`：真实 AppKit 入口；Debug 测试探针由条件编译隔离。
 
-原 PRD、技术设计、验收方法保持在 `../paste-report/`；逐项实际修改、命令及证据登记在 [tasks.md](../paste-report/development-plan/tasks.md)。原生界面渲染证据见 [浅色](evidence/manual/interface/light.png)、[深色](evidence/manual/interface/dark.png)、[紧凑](evidence/manual/interface/compact.png)，这些图像是实际 SwiftUI 内容，不是目标应用接收证据。
+原 PRD、技术设计、验收方法保持在 `../paste-report/`；逐项实际修改、命令及证据登记在 [tasks.md](../paste-report/development-plan/tasks.md)。原生界面渲染证据见 浅色、深色、紧凑，这些图像是实际 SwiftUI 内容，不是目标应用接收证据。
 
-当前真机证据：[实际C/B/A历史](evidence/manual/20261010-resume/AC01-C-B-A.png)、[TextEdit接收A](evidence/manual/20261010-resume/TextEdit-TXT-A-received.png)、[无权限回退](evidence/manual/20261010-resume/AC08-AX-disabled-fallback.png)、[操作记录](evidence/manual/20261010-resume/observations.json)。最新真实接收与查询证据见 [本轮记录](evidence/manual/20261010-authorized-restart/observations.json)、[TextEdit原始字节与RTF属性核对](evidence/manual/20261010-authorized-restart/receiver-file-check.json)。测试库只含合成fixtures且采集已暂停；用户已重新解锁与授权；最新续接见 [会话记录](evidence/manual/20261010-regrant/observations.json)。调试测试通过LaunchServices的`open --env`传入隔离目录；直接启动可执行文件的实际权限上下文不同。重开前确认测试进程已在运行，不能让自动启动遗漏数据目录。
+当前真机证据：实际C/B/A历史、TextEdit接收A、无权限回退、操作记录。最新真实接收与查询证据见 本轮记录、TextEdit原始字节与RTF属性核对。测试库只含合成fixtures且采集已暂停；用户已重新解锁与授权；最新续接见 会话记录。调试测试通过LaunchServices的`open --env`传入隔离目录；直接启动可执行文件的实际权限上下文不同。重开前确认测试进程已在运行，不能让自动启动遗漏数据目录。
 
 源码与证据压缩包：`dist/LocalClip-source.tar.gz`。生成命令：`rtk proxy python3 macos-app/scripts/package-source.py`；生成库和测试二进制不打入源码包，由fixture生成器重建。带自有hash的delivery-manifest在压缩包外保留，避免自引用。
 
-最新真实验收：[Safari直接与富文本、TextEdit当前签名与PNG、暂停不补采](evidence/manual/20261010-safari-ready/observations.json)。PNG实际接收1920×1080且解码像素全等；TextEdit实际保存文件核对加粗/Latin italic/完整链接，纯文本无这些属性。预览源先通过Open With明确选Apple Preview，避免默认Picview关联。测试采集最后暂停，当前仅3条合成数据。
+最新真实验收：Safari直接与富文本、TextEdit当前签名与PNG、暂停不补采。PNG实际接收1920×1080且解码像素全等；TextEdit实际保存文件核对加粗/Latin italic/完整链接，纯文本无这些属性。预览源先通过Open With明确选Apple Preview，避免默认Picview关联。测试采集最后暂停，当前仅3条合成数据。
 
 用户已选择自行测试，自动验收已停止。现有Release本地测试包可按上方命令运行；未完成验收项保留在docs。Pages原格式实际接收另有截图/AX与本地保存文件，其余Pages格尚未验证。
 

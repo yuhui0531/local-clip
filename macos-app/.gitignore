@@ -55,3 +55,6 @@ evidence/delivery/
 **/evidence/delivery/
 evidence/review-fixes/
 **/evidence/review-fixes/
+
+# 过程证据只保留在本地，不进入仓库
+evidence/

@@ -15,4 +15,4 @@
 rtk proxy env LOCALCLIP_BUILD_PATH=/Users/ronny/VscodeProjects/rea/macos-app/.build-release-prefetch-20261010 bash macos-app/scripts/build-app.sh release
 ```
 
-证据：[构建结果](../../macos-app/evidence/automated/20261010-focus-dismissal/build-result.json)、[构建日志](../../macos-app/evidence/automated/20261010-focus-dismissal/release-build.log)、[源码快照](../../macos-app/evidence/automated/20261010-focus-dismissal/build-source-hashes.json)。
+证据：构建结果、构建日志、源码快照。

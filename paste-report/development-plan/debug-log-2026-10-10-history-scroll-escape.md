@@ -21,4 +21,4 @@
 rtk proxy env LOCALCLIP_BUILD_PATH=/Users/ronny/VscodeProjects/rea/macos-app/.build-release-prefetch-20261010 bash macos-app/scripts/build-app.sh release
 ```
 
-证据：[构建结果](../../macos-app/evidence/automated/20261010-history-scroll-escape/build-result.json)、[构建日志](../../macos-app/evidence/automated/20261010-history-scroll-escape/release-build.log)、[源码快照](../../macos-app/evidence/automated/20261010-history-scroll-escape/build-source-hashes.json)。源码自检确认事件仅限视口/面板，点击双击不被消费、边界有限、监听释放、分页沿用旧失效保护；未将这些检查当成实际设备验收。
+证据：构建结果、构建日志、源码快照。源码自检确认事件仅限视口/面板，点击双击不被消费、边界有限、监听释放、分页沿用旧失效保护；未将这些检查当成实际设备验收。

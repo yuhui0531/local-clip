@@ -15,4 +15,4 @@ CHANGE_DIR：/Users/ronny/VscodeProjects/rea/paste-report/development-plan
 根因链：只承认声明→无声明bundleID为空→显示未知→类型图标替代APP图标。修复后只为新复制提供前台推断，已有未知记录不可准确回填；后台写入和快速切换仍有推断误差。没有证明Paste内部采用何种来源接口。
 
 命令：`rtk proxy env LOCALCLIP_BUILD_PATH=/Users/ronny/VscodeProjects/rea/macos-app/.build-release-prefetch-20261010 bash macos-app/scripts/build-app.sh release`。
-证据：[构建结果](../../macos-app/evidence/automated/20261010-source-app/build-result.json)、[构建日志](../../macos-app/evidence/automated/20261010-source-app/release-build.log)、[源码快照](../../macos-app/evidence/automated/20261010-source-app/build-source-hashes.json)。
+证据：构建结果、构建日志、源码快照。

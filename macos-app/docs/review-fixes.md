@@ -4,16 +4,16 @@ Previous delivery: **0.3.4 (25)**, based on `1b9cbed2e956f9ac1c9668c7809243b1a74
 
 ## Independent review and follow-up
 
-The [independent 0.3.2 review](../evidence/review-fixes/independent-review-20261011.md) returned **FAIL** with two reproduced findings. Its report and probes remain unchanged; the reviewed application, source archive and manifests are preserved in `evidence/review-fixes/reviewed-0.3.2/`.
+The independent 0.3.2 review returned **FAIL** with two reproduced findings. Its report and probes remain unchanged; the reviewed application, source archive and manifests are preserved in `evidence/review-fixes/reviewed-0.3.2/`.
 
 - **IR-01:** A selected entry at index 49/99 could shift beyond a 50/100-item loaded window on capture. Refresh now checks prior selection and tail IDs against the current search filters/revision, then reads until surviving anchors are included. Deleted or filtered-out IDs do not force a full-history scan. Regressions cover both boundaries, a 75-copy hidden-panel burst and deletion.
 - **IR-02:** The detached worker reopened the current board using old approved declarations, allowing a sensitive body read before rejection. It now receives the approved changeCount, rechecks the worker's current generation and all declarations before any body IPC, checks generation before each representation and after the body, and retains final publication/epoch checks. Fake late-reopen tests cover both sensitive markers; a private native board uses a lazy data provider to verify zero body reads when generation changes.
 
-The [independent 0.3.3 follow-up](../evidence/review-fixes/independent-rereview-20261011.md) confirmed IR-01/IR-02 corrected, but returned **FAIL** for **IR-03**: eight captures expanded 50 loaded rows to 450 without scrolling. That report and reviewed snapshot in `reviewed-0.3.3/` remain unchanged.
+The independent 0.3.3 follow-up confirmed IR-01/IR-02 corrected, but returned **FAIL** for **IR-03**: eight captures expanded 50 loaded rows to 450 without scrolling. That report and reviewed snapshot in `reviewed-0.3.3/` remain unchanged.
 
 **0.3.4** publishes only the precise range needed for the previous window and surviving anchors. When a fetched page contains extra rows, the continuation cursor resumes at the published range's end, so subsequent pagination skips no rows. Each new copy adds only its actual row. A regression uses 80- and 500-entry histories, repeats eight captures, then explicitly loads more and compares the ordered range with independent store pagination. It covers truncation when the final fetched page has no cursor. An initial attempt to retain only a separate logical tail failed the hidden-burst window assertion; its failed log remains recorded and the approach was replaced, preserving the existing tests.
 
-The [final independent review](../evidence/review-fixes/independent-final-review-20261011.md) records its verdict against 0.3.4. Neither earlier FAIL verdict is revised.
+The final independent review records its verdict against 0.3.4. Neither earlier FAIL verdict is revised.
 
 ## Finding status
 
@@ -41,30 +41,30 @@ The [final independent review](../evidence/review-fixes/independent-final-review
 
 ## Executed checks
 
-- **0.3.4 Release with private named boards enabled:** 88 discovered, **84 executed passed, 4 performance/system tests skipped**, [log](../evidence/automated/20261011-053007-W2bGa7/swift-test.log). Native worker zero-body-read and exact format tests pass alongside final window/cursor tests.
+- **0.3.4 Release with private named boards enabled:** 88 discovered, **84 executed passed, 4 performance/system tests skipped**, log. Native worker zero-body-read and exact format tests pass alongside final window/cursor tests.
 
 
-- **0.3.4 Debug:** 88 discovered, **79 executed passed, 9 skipped**, [log](../evidence/automated/20261011-052939-yLMitU/swift-test.log).
+- **0.3.4 Debug:** 88 discovered, **79 executed passed, 9 skipped**, log.
 
 
-- Historical **0.3.3 Debug:** 87 discovered, **78 executed passed, 9 skipped**, [log](../evidence/automated/20261011-051425-EnujM6/swift-test.log).
-- Historical **0.3.3 Release with private named boards enabled:** 87 discovered, **83 executed passed, 4 performance/system tests skipped**, [log](../evidence/automated/20261011-051516-TdnQLE/swift-test.log).
+- Historical **0.3.3 Debug:** 87 discovered, **78 executed passed, 9 skipped**, log.
+- Historical **0.3.3 Release with private named boards enabled:** 87 discovered, **83 executed passed, 4 performance/system tests skipped**, log.
 - All five named-board tests pass, including late-generation rejection with **zero lazy-provider body requests**. The two boundary sizes and both marker variants pass their parameterized fake/temporary-SQLite cases. No general pasteboard or production history is accessed.
 
 
-- Historical 0.3.2 Debug full suite: **82 discovered, 74 executed passed, 8 skipped**, [log](../evidence/automated/20261011-044047-FzNrlE/swift-test.log).
-- Historical 0.3.2 Release full suite: **82 discovered, 74 executed passed, 8 skipped**, [log](../evidence/automated/20261011-044322-g8Gkl4/swift-test.log).
-- Historical 0.3.2 private named pasteboards: **4 executed passed**, [log](../evidence/automated/20261011-044308-dllFlG/swift-test.log). No general pasteboard writes.
-- Historical 0.3.2 Release with named pasteboards enabled: **82 discovered, 78 executed passed, 4 performance/system tests skipped**, [log](../evidence/automated/20261011-044630-UhUlfv/swift-test.log).
+- Historical 0.3.2 Debug full suite: **82 discovered, 74 executed passed, 8 skipped**, log.
+- Historical 0.3.2 Release full suite: **82 discovered, 74 executed passed, 8 skipped**, log.
+- Historical 0.3.2 private named pasteboards: **4 executed passed**, log. No general pasteboard writes.
+- Historical 0.3.2 Release with named pasteboards enabled: **82 discovered, 78 executed passed, 4 performance/system tests skipped**, log.
 - That suite preceded the final glyph-only adjustment. The final glyphs compile and render in both themes; the shipping Release package was rebuilt afterward. The failed symbol render and isolated color probe are retained in `evidence/review-fixes/ui/`.
 - The full suites include temporary SQLite, all existing SIGKILL fault points, 500 MiB protected-store refusal, queue/selection preservation, literal search and export cancellation.
 - The historical skips are four opt-in real pasteboard cases and four opt-in performance/system cases. The revised suite adds a fifth opt-in named-board privacy test. The new service benchmark is executed separately below. No ten-consecutive-run flake gate is claimed.
 - Earlier failed benchmark attempts and obsolete Copy assertions remain in the logs; the corrected assertions verify that Copy preserves files. The first sandboxed private-board attempt could not access the OS service; the scoped retry above passed.
-- [Light, 1,400 × 280 pt](../evidence/review-fixes/ui/light-1400-280.png) and [dark code, 1,400 × 340 pt](../evidence/review-fixes/ui/dark-code-1400-340.png) are isolated native SwiftUI renders, not live target acceptance.
+- Light, 1,400 × 280 pt and dark code, 1,400 × 340 pt are isolated native SwiftUI renders, not live target acceptance.
 
 ## Service performance
 
-Release, `localclip-fixtures-v2`, seed `0xC11F`: 10,000 texts and 100 real generated images. Raw [samples](../evidence/review-fixes/performance-v2/results.json) and [fixture manifest](../evidence/review-fixes/performance-v2/fixture-manifest.json) are retained. P95 uses nearest rank. The normal desktop session was not isolated. Boundary is **HistoryStore call → return**, excluding debounce, polling, decoding and drawing.
+Release, `localclip-fixtures-v2`, seed `0xC11F`: 10,000 texts and 100 real generated images. Raw samples and fixture manifest are retained. P95 uses nearest rank. The normal desktop session was not isolated. Boundary is **HistoryStore call → return**, excluding debounce, polling, decoding and drawing.
 
 | Operation | Samples | New P95 ms | Review P95 ms |
 |---|---:|---:|---:|
@@ -75,7 +75,7 @@ Release, `localclip-fixtures-v2`, seed `0xC11F`: 10,000 texts and 100 real gener
 | Thumbnail cache write | 20 | 0.662 | 112.7 |
 | 8 MiB writes at quota | 3 | 384.40 | 543.5 |
 
-Warm search is slower than the previous warm corpus; the cold rebuild and post-quota cliff are removed without retaining that corpus. The final pressure fixture has all 7,333 surviving text clips indexed. The three quota samples are too few for a stable distribution. [First optimization attempt](../evidence/review-fixes/performance-v1/results.json) remains visible: it was slower and led to byte borrowing and batched quota eviction. These measurements belong to 0.3.2. The 0.3.3 follow-up adds restricted query-membership reads to preserve window anchors; refresh overhead and end-to-end timing have not been remeasured. No new memory-footprint or idle-resource acceptance is claimed.
+Warm search is slower than the previous warm corpus; the cold rebuild and post-quota cliff are removed without retaining that corpus. The final pressure fixture has all 7,333 surviving text clips indexed. The three quota samples are too few for a stable distribution. First optimization attempt remains visible: it was slower and led to byte borrowing and batched quota eviction. These measurements belong to 0.3.2. The 0.3.3 follow-up adds restricted query-membership reads to preserve window anchors; refresh overhead and end-to-end timing have not been remeasured. No new memory-footprint or idle-resource acceptance is claimed.
 
 Reproduce into a **new empty output directory**:
 
@@ -87,4 +87,4 @@ rtk proxy env LOCALCLIP_REVIEW_BENCHMARK=1 LOCALCLIP_REVIEW_OUTPUT=/absolute/pat
 
 Live Release double-click target receipt, terminal/editor/Finder matrix, real mouse drag, keyboard/IME, multi-display, login/hotkey and input/copy-to-visible timing remain open. The running user app was not restarted or taken over, and production history was not opened. Routine full-payload verification in 0.3.4 is superseded for validated APFS writes by the linked 0.3.5 follow-up; non-APFS backup and quota reclamation can still scale with database size. Existing missing-index stores that cannot fit repair safely keep correct raw-payload search, which can remain slower until space is available.
 
-The packaged app is ad-hoc signed for local testing. Build/version/hash checks are recorded in [0.3.4 artifacts](../evidence/review-fixes/artifacts-0.3.4.json). The 0.3.4 changes were subsequently committed as `87c71a2`; the follow-up preserves the current `.gitignore` baseline.
+The packaged app is ad-hoc signed for local testing. Build/version/hash checks are recorded in 0.3.4 artifacts. The 0.3.4 changes were subsequently committed as `87c71a2`; the follow-up preserves the current `.gitignore` baseline.

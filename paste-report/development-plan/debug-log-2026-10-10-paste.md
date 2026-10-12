@@ -31,7 +31,7 @@ rtk proxy log show --last 10m --style compact --predicate 'subsystem == "local.l
 
 路径均相对 `macos-app/Sources/`，Info.plist 相对 `macos-app/`。
 
-[签名与已有进程元数据](../../macos-app/evidence/automated/20261010-paste-diagnosis/signing-process-metadata.json)；[构建结果](../../macos-app/evidence/automated/20261010-paste-diagnosis/build-result.json)；[构建日志](../../macos-app/evidence/automated/20261010-paste-diagnosis/release-build.log)；[构建源码快照](../../macos-app/evidence/automated/20261010-paste-diagnosis/build-source-hashes.json)。第一次构建的 Swift 6 C 常量并发标注错误日志保留，已通过 `@preconcurrency import ApplicationServices` 修复，AX 调用仍限定主线程。
+签名与已有进程元数据；构建结果；构建日志；构建源码快照。第一次构建的 Swift 6 C 常量并发标注错误日志保留，已通过 `@preconcurrency import ApplicationServices` 修复，AX 调用仍限定主线程。
 
 ```sh
 rtk proxy env LOCALCLIP_BUILD_PATH=/Users/ronny/VscodeProjects/rea/macos-app/.build-release-prefetch-20261010 bash macos-app/scripts/build-app.sh release

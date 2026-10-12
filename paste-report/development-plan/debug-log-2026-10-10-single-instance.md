@@ -14,4 +14,4 @@ macOS可能复用运行进程处理重新打开：AppDelegate通过NSWorkspace.O
 
 首次升级运行命令（未执行）：`rtk proxy open -n /Users/ronny/VscodeProjects/rea/macos-app/dist/LocalClip.app --args --show-history`。
 
-证据：[成功构建](../../macos-app/evidence/automated/20261010-single-instance/build-result.json)、[构建日志](../../macos-app/evidence/automated/20261010-single-instance/release-build.log)、[初次失败](../../macos-app/evidence/automated/20261010-single-instance/release-build-attempt-1.log)、[源码快照](../../macos-app/evidence/automated/20261010-single-instance/build-source-hashes.json)。
+证据：成功构建、构建日志、初次失败、源码快照。

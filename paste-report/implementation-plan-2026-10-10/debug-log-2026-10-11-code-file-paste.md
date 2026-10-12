@@ -53,13 +53,13 @@ macOS 15.7.5 (24G624), arm64. Native tests use the frozen Debug bundle with the 
 
 | Target | Smart setting | Input | Actual result | Evidence |
 | --- | --- | --- | --- | --- |
-| VS Code 1.141.0 | ON | Swift | Received exact 77-byte source, including Chinese and final newline | [Screenshot](../../macos-app/evidence/delivery/code-smart-paste-fix/vscode-swift-received.png), [native checks](../../macos-app/evidence/delivery/code-smart-paste-fix/vscode-swift-final.json) |
-| VS Code 1.141.0 | ON | JSON | Received exact 79-byte source, including indentation and final newline | [Screenshot](../../macos-app/evidence/delivery/code-smart-paste-fix/vscode-json-received.png), [native checks](../../macos-app/evidence/delivery/code-smart-paste-fix/vscode-json-final.json) |
-| Zed 1.23.2 | ON | Swift | Received exact 77-byte source | [Screenshot](../../macos-app/evidence/delivery/code-smart-paste-fix/zed-swift-received.png), [native checks](../../macos-app/evidence/delivery/code-smart-paste-fix/zed-swift-ready.json) |
-| Zed 1.23.2 | ON | JSON | Received exact 79-byte source | [Screenshot](../../macos-app/evidence/delivery/code-smart-paste-fix/zed-json-received.png), [native checks](../../macos-app/evidence/delivery/code-smart-paste-fix/zed-json-final.json) |
-| Zed 1.23.2 | OFF | Swift | Original file path pasted; no conversion, matching existing behavior | [Screenshot](../../macos-app/evidence/delivery/code-smart-paste-fix/zed-disabled-received.png), [native checks](../../macos-app/evidence/delivery/code-smart-paste-fix/zed-disabled-final.json) |
+| VS Code 1.141.0 | ON | Swift | Received exact 77-byte source, including Chinese and final newline | Screenshot, native checks |
+| VS Code 1.141.0 | ON | JSON | Received exact 79-byte source, including indentation and final newline | Screenshot, native checks |
+| Zed 1.23.2 | ON | Swift | Received exact 77-byte source | Screenshot, native checks |
+| Zed 1.23.2 | ON | JSON | Received exact 79-byte source | Screenshot, native checks |
+| Zed 1.23.2 | OFF | Swift | Original file path pasted; no conversion, matching existing behavior | Screenshot, native checks |
 
-[Exact-byte and hash comparison](../../macos-app/evidence/delivery/code-smart-paste-fix/actual-receipt.json) covers the four saved documents in `fixtures/`. Original fixture files are unchanged. [Environment](../../macos-app/evidence/delivery/code-smart-paste-fix/environment.json). VS Code retains its existing focused AXTextArea; Zed exposes only AXWindow. Before/after focus identity and actual foreground checks pass for the successful runs.
+Exact-byte and hash comparison covers the four saved documents in `fixtures/`. Original fixture files are unchanged. Environment. VS Code retains its existing focused AXTextArea; Zed exposes only AXWindow. Before/after focus identity and actual foreground checks pass for the successful runs.
 
 An extra ordinary Command–V test was not completed: automatic approval initially rejected it because the AX tree could not establish a blank document; a subsequent screenshot established a safe blank tab and permitted a retry, but the native foreground guard then blocked the test. No paste was sent by that attempt (`zed-manual-prepare.json`). Failed permission/focus/exploratory logs remain; they are not counted as successful receipt.
 

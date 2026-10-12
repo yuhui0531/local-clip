@@ -8,7 +8,7 @@
 
 状态：本地验收包；未宣称全部 AC 通过。
 
-1. 当前签名Safari文本直接、Safari富文本原格式/纯文本、TextEdit富文本直接/纯文本和PNG真实接收已补证，见[最新记录](../evidence/manual/20261010-safari-ready/observations.json)。TextEdit加粗/Latin italic/完整链接及纯文本去除属性实际文件已核对；PNG尺寸和RGBA全等。Chrome、VS Code、Pages、HTML-only、TIFF/JPEG、多项、中文候选、多屏、热键冲突和设置确认仍未完成。旧Safari失败保留，未证明旧失败单一根因。
+1. 当前签名Safari文本直接、Safari富文本原格式/纯文本、TextEdit富文本直接/纯文本和PNG真实接收已补证，见最新记录。TextEdit加粗/Latin italic/完整链接及纯文本去除属性实际文件已核对；PNG尺寸和RGBA全等。Chrome、VS Code、Pages、HTML-only、TIFF/JPEG、多项、中文候选、多屏、热键冲突和设置确认仍未完成。旧Safari失败保留，未证明旧失败单一根因。
 2. 用户已解锁并重新授权，LS探针及当前主进程正常直接接收路径均成功。默认目录曾因缺override的自动启动露出可见摘要，已暂停/终止且默认库保留；现LS隔离目录只有3条合成fixture且最后暂停。Settings选择后LocalClip状态绑定仍pipe error，但Safari/TextEdit/Finder可用、Finder重开历史可恢复，不能当全部插件断开。初次Preview无文档绑定超时514秒；明确Open With自己的PNG后可用。未修改权限数据库、默认关联或用户Paste数据。Chrome浏览器fileURL策略拒绝未绕过。
 3. SMAppService 在测试 bundle 返回“系统未找到该登录项”。未替用户启用登录启动；安装位置、注册、用户批准、注销与再次登录仍需真实操作验证。当前界面准确显示系统结果，不保证安装前可开启。
 4. 226MiB固定数据集的新克隆只读顺序预读改善服务提交：文本P95=122ms，新图141ms，近配额550ms；完整检查仍执行。200ms轮询和UI绘制还需额外时间。文本复制到可见 P95＜500ms尚未完成实测、未确认达标，真实UI量测受阻；未取消完整性校验或先删旧历史以迎合指标。
@@ -25,14 +25,14 @@ Safari人工焦点已由用户准备并验证；继续完成剩余矩阵与设�
 
 ## 2026-10-10 追加交互与文件对象
 
-用户追加要求已进入本轮源码：双击原格式复制、屏幕全宽底部固定、真实文件URL引用与Finder目录副本复制。原记录保留为先前版本证据，不代表新版本回归通过。用户要求自行测试，本轮未执行功能、真实应用或性能测试；对应新行为均待用户自测。变更说明见[追加需求](../../paste-report/development-plan/interaction-files-delta.md)，构建记录见[本轮构建](../evidence/automated/20261010-interaction-files/build-result.json)。
+用户追加要求已进入本轮源码：双击原格式复制、屏幕全宽底部固定、真实文件URL引用与Finder目录副本复制。原记录保留为先前版本证据，不代表新版本回归通过。用户要求自行测试，本轮未执行功能、真实应用或性能测试；对应新行为均待用户自测。变更说明见[追加需求](../../paste-report/development-plan/interaction-files-delta.md)，构建记录见本轮构建。
 
 文件功能只保存引用，不保存文件本体；支持实际文件/文件夹和多项顺序，不支持promise或虚拟Finder目标。Finder目录查询需系统自动化授权，同名生成副本，不覆盖原件。屏幕底部面板覆盖Dock区域；多屏/Spaces实际行为尚未自测。
 
 
 ## 0.1.2 双击自动粘贴
 
-实现原输入控件AX身份/可编辑性检查及紧邻事件的剪贴板收据复查。双击自动返回原应用并尝试原生粘贴；明确复制按钮只复制；Finder文件沿用副本复制。未知控件/权限/焦点不满足时回退手动。构建记录见[本轮构建](../evidence/automated/20261010-doubleclick-paste/build-result.json)。用户要求自行测试，本轮未做真实目标接收、回归或性能验证。
+实现原输入控件AX身份/可编辑性检查及紧邻事件的剪贴板收据复查。双击自动返回原应用并尝试原生粘贴；明确复制按钮只复制；Finder文件沿用副本复制。未知控件/权限/焦点不满足时回退手动。构建记录见本轮构建。用户要求自行测试，本轮未做真实目标接收、回归或性能验证。
 
 ## 0.1.3 粘贴排查
 

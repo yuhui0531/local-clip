@@ -59,7 +59,7 @@ Whether you are copying plain text, rich formats (RTF/HTML), code snippets, high
 
 | Light Mode | Dark Mode | Compact Mode |
 | :---: | :---: | :---: |
-| ![Light Mode](macos-app/evidence/manual/interface/light.png) | ![Dark Mode](macos-app/evidence/manual/interface/dark.png) | ![Compact Mode](macos-app/evidence/manual/interface/compact.png) |
+| ![Light Mode](macos-app/docs/images/light.png) | ![Dark Mode](macos-app/docs/images/dark.png) | ![Compact Mode](macos-app/docs/images/compact.png) |
 
 ---
 

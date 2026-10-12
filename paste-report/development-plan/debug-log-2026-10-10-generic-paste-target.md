@@ -23,6 +23,6 @@
 rtk proxy env LOCALCLIP_BUILD_PATH=/Users/ronny/VscodeProjects/rea/macos-app/.build-release-prefetch-20261010 bash macos-app/scripts/build-app.sh release
 ```
 
-证据：[用户截图](../../macos-app/evidence/automated/20261010-generic-paste-target/user-reported-editor-rejection.png)、[构建结果](../../macos-app/evidence/automated/20261010-generic-paste-target/build-result.json)、[构建日志](../../macos-app/evidence/automated/20261010-generic-paste-target/release-build.log)、[源码快照](../../macos-app/evidence/automated/20261010-generic-paste-target/build-source-hashes.json)。
+证据：用户截图、构建结果、构建日志、源码快照。
 
 出口自检：对症性（移除错误分类门槛）、冗余性（直接删去分类代码）、范围（粘贴判断/措辞）、过度修改（无额外机制）、中文注释、复杂度（减少判断）均通过源码自检，不冒充运行测试。

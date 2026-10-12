@@ -21,7 +21,7 @@ rtk proxy bash macos-app/scripts/build-app.sh release
 
 普通卡片的彩色标题高度由58pt改为40pt，来源图标由46pt改为26pt，底部统计由27pt改为22pt。默认340pt面板内的179pt方形卡片，正文高度由94pt增加到117pt（约24.5%）；正文左右／顶部空白也缩减。文件内容图标由20pt改为14pt，给长文件名更多宽度，最多三行。最低高度保持精简比例，标题／正文／底栏总高严格等于卡片高度。
 
-实际渲染检查：[浅色340pt](../evidence/delivery/local-experience/ui-024/light-1400-340.png)、[深色400pt](../evidence/delivery/local-experience/ui-024/dark-1400-400.png)、[窄屏220pt](../evidence/delivery/local-experience/ui-024/light-900-220.png)。长文件名fixture为LocalClip-source-example.txt，只含合成正文；图像均来自实际HistoryView，非模拟设计稿。版本身份、构建与源码记录在ui-024/artifacts.json、release-build.log、source-archive.json。没有兼容／迁移／存储改动。
+实际渲染检查：浅色340pt、深色400pt、窄屏220pt。长文件名fixture为LocalClip-source-example.txt，只含合成正文；图像均来自实际HistoryView，非模拟设计稿。版本身份、构建与源码记录在ui-024/artifacts.json、release-build.log、source-archive.json。没有兼容／迁移／存储改动。
 
 ## 0.2.3 界面与闪退修正记录
 
@@ -29,7 +29,7 @@ rtk proxy bash macos-app/scripts/build-app.sh release
 
 三份0.2.2系统崩溃报告共同指向ImageWriter.init() trap：子类调用NSFilePromiseProvider的便利初始化器，Objective-C路径动态调用Swift未实现的init。已改为super.init()指定初始化器，然后设置fileType和delegate；强引用owner继续保持弱delegate有效。没有禁用图片拖动或PNG promise来绕过错误，没有兼容、迁移、schema或数据目录变化。
 
-实际证据：[默认浅色340pt](../evidence/delivery/local-experience/ui-023/interactive.png)、[深色400pt](../evidence/delivery/local-experience/ui-023/dark-1400-400.png)、[窄屏最低220pt](../evidence/delivery/local-experience/ui-023/light-900-220.png)、[原生图片API](../evidence/delivery/local-experience/ui-023/native-drag-api.json)、[验证记录](../evidence/delivery/local-experience/ui-023/verification.md)。截图来自实际HistoryView和临时SQLite合成fixtures，不是设计稿。小于一屏的分类整组居中，＋位置及完整方形边界已观察；长历史末尾横向超出视口仍需滚动。
+实际证据：默认浅色340pt、深色400pt、窄屏最低220pt、原生图片API、验证记录。截图来自实际HistoryView和临时SQLite合成fixtures，不是设计稿。小于一屏的分类整组居中，＋位置及完整方形边界已观察；长历史末尾横向超出视口仍需滚动。
 
 隔离原生窗口分类点击有效；图片writer创建、PNG原始格式读取、delegate按需兑现与输出字节相等均通过。私有剪贴板NSFilePromiseReceiver尝试未回调，改验真实delegate，不将其声称为receiver接收成功。鼠标拖动尝试没有触发leftMouseDragged且pressedMouseButtons=0，因此未开始NSDraggingSession，不认证真实鼠标加入分类或Finder接收。不能为适应测试工具放宽生产鼠标状态检查。
 
