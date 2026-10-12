@@ -24,6 +24,9 @@ enum AccessibilityGuideStep { case intro, drag, done }
     private var lastAnchor: NSRect?
 
     /// 首次启动且尚未授权时弹出一次；之后只从粘贴或设置入口打开。
+    /// 向导已在屏幕上时，其他“请授权”提示不再重复弹出。
+    public var isVisible: Bool { panel?.isVisible == true }
+
     public func showOnFirstLaunch() {
         guard !UserDefaults.standard.bool(forKey: Self.shownKey) else { return }
         UserDefaults.standard.set(true, forKey: Self.shownKey)

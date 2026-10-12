@@ -55,6 +55,26 @@ import LocalClipCore
     @Published public private(set) var previewMessage = ""
     @Published public var status = "准备中"
     @Published public var message = ""
+    private var noticeClear: Task<Void, Never>?
+    /// 成功提示只在底栏短暂显示后恢复状态；错误与警告直接赋值message，保留到下一次操作，by AI.Coding。
+    func notice(_ text: String) {
+        message = text; noticeClear?.cancel()
+        noticeClear = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(4))
+            guard let self, !Task.isCancelled, self.message == text else { return }
+            self.message = ""
+        }
+    }
+    /// 成功结果静默或短提示；回退、失败与智能粘贴降级保留原因，by AI.Coding。
+    private func showPasteResult(_ result: PasteResult) {
+        if let notice = paste.smartPasteNotice { message = result.message + "；" + notice; return }
+        switch result {
+        case .copied: notice("已复制")
+        case .commandSent: notice("已粘贴")
+        case .filesCopied(let text): notice(text)
+        case .fallback, .failed: message = result.message
+        }
+    }
     public private(set) var loading: Bool { get { listState[\.loading] } set { listState[\.loading] = newValue } }
     @Published public private(set) var confirmingChange = false
     struct ScrollRestoration: Equatable { var generation = UUID(); var offset: CGFloat }
@@ -125,7 +145,8 @@ import LocalClipCore
     public var openSettings: (() -> Void)?
     public var quitApplication: (() -> Void)?
     public var registerShortcut: ((Shortcut) -> Bool)?
-    public var showPasteFeedback: ((String) -> Void)?
+    /// 第二个参数表示失败；回退（内容已复制）与失败使用不同图标，by AI.Coding。
+    public var showPasteFeedback: ((String, Bool) -> Void)?
     public var panelInteractionChanged: (() -> Void)?
     public init(store: HistoryStore, capture: CaptureCoordinator, paste: PasteCoordinator, derived: DerivedContentService, clock: any ClipClock = SystemClock()) {
         self.store = store; self.capture = capture; self.paste = paste; self.derived = derived; self.clock = clock
@@ -547,7 +568,7 @@ import LocalClipCore
         guard !ids.isEmpty else { return }
         Task {
             let result = await paste.perform(.init(ids: ids, format: format ?? settings.defaultFormat, action: action ?? settings.defaultAction, target: target))
-            message = result.message + (paste.smartPasteNotice.map { "；" + $0 } ?? "")
+            showPasteResult(result)
             notifyPasteResult(result)
             await recordUse(ids, result)
         }
@@ -568,7 +589,7 @@ import LocalClipCore
         guard renamingID == id else { return }
         renamingID = nil
         Task {
-            do { try await store.renameClip(id: id, title: title); message = "名称已保存" }
+            do { try await store.renameClip(id: id, title: title); notice("已重命名") }
             catch { message = "重命名失败：名称需为单行且不超过1024字节，记录和容量仍须有效" }
         }
     }
@@ -581,9 +602,8 @@ import LocalClipCore
         let rememberedTarget = target
         let copyFiles = ids.allSatisfy { id in items.first(where: { $0.id == id })?.kind == .file } && rememberedTarget?.bundleID == "com.apple.finder"
         Task {
-            message = copyFiles ? "正在复制文件到Finder…" : "正在复制并粘贴…"
             let result = await paste.perform(.init(ids: ids, format: settings.defaultFormat, action: copyFiles ? .copy : .directPaste, target: rememberedTarget), copyFilesToFinder: copyFiles)
-            message = result.message + (paste.smartPasteNotice.map { "；" + $0 } ?? "")
+            showPasteResult(result)
             notifyPasteResult(result)
             await recordUse(ids, result)
         }
@@ -598,9 +618,12 @@ import LocalClipCore
     }
     /// 仅在失败或回退时提示；发出粘贴指令后不弹窗打断使用。
     private func notifyPasteResult(_ result: PasteResult) {
+        // 授权向导已说明原因和操作，不再叠加同义提示，by AI.Coding。
+        if AccessibilityGuide.shared.isVisible { return }
         switch result {
-        case .fallback, .failed: showPasteFeedback?(message)
-        case .commandSent where paste.smartPasteNotice != nil: showPasteFeedback?(message)
+        // 本该粘贴却只完成复制、失败或智能粘贴降级，都是需要用户留意的问题。
+        case .fallback, .failed: showPasteFeedback?(message, true)
+        case _ where paste.smartPasteNotice != nil: showPasteFeedback?(message, true)
         default: break
         }
     }
@@ -639,11 +662,14 @@ import LocalClipCore
                 let deleted = { if case .delete = change { return true }; return false }()
                 if deleted { recordUndoQuery = undo ? query : nil }
                 // 分类归属成功后明确目标名称；只有提交完成才报告加入成功。
-                if case .category(let ids, let categoryID, true) = change {
-                    let name = categories.first(where: { $0.id == categoryID })?.name ?? "分类"
-                    message = "已将\(ids.count)条记录加入“\(name)”"
-                } else {
-                    message = (undo ? "可按⌘Z撤销（30秒） · " : deleted ? "本次删除不可撤销（超过内存预算或无可恢复内容） · " : "") + "已保存变更，删除\(result.removed)条，实际释放\(Self.bytes(result.reclaimedBytes))"
+                // 结果在界面上已可见，底栏只给简短提示；删除保留撤销入口，by AI.Coding。
+                switch change {
+                case .category(_, let categoryID, true): notice("已加入“\(categories.first(where: { $0.id == categoryID })?.name ?? "分类")”")
+                case .category(_, _, false): notice("已移出分类")
+                case .favorite(_, let on), .favorites(_, let on): notice(on ? "已收藏" : "已取消收藏")
+                case .delete: notice(undo ? "已删除 \(result.removed) 条 · ⌘Z 撤销" : "已删除 \(result.removed) 条")
+                case .clearOrdinary, .retention, .quota, .deleteCategory:
+                    notice(result.removed > 0 ? "已清理 \(result.removed) 条，释放 \(Self.bytes(result.reclaimedBytes))" : "已保存")
                 }
             } catch StoreError.stalePreview { pendingDeletion.removeAll(); message = "历史已变化，请重新预览并确认"; refresh() }
             catch { pendingDeletion.removeAll(); message = "变更未完成，旧内容保持或存储不可用，请检查状态"; refresh() }
@@ -669,11 +695,11 @@ import LocalClipCore
             do {
                 if let category {
                     try await store.renameCategory(id: category.id, name: name, colorHex: categoryColor)
-                    message = "分类已重命名"
+                    notice("已保存分类")
                 } else {
                     let created = try await store.createCategory(name: name, colorHex: categoryColor)
                     selectCategories([created.id])
-                    message = "分类已创建；把历史卡片拖到分类标签即可加入"
+                    notice("已创建分类")
                 }
                 showingCategoryEditor = false
             } catch let error as CategoryError { categoryError = error.message }
@@ -782,7 +808,7 @@ import LocalClipCore
             do {
                 settings = try await store.updateCaptureSettings(next); capture.updatePolicy(settings); settingsChanged?()
                 if settings.hideContents { showingDetail = false; invalidateDetail(); filePreview.close() }
-                message = "设置已保存"
+                notice("设置已保存")
             } catch {
                 if next.shortcut != previous.shortcut { _ = registerShortcut?(previous.shortcut) }
                 do {
@@ -942,7 +968,7 @@ import LocalClipCore
         Task { do { try await store.moveItem(id: selectedID, categoryID: categoryID, delta: delta) } catch { message = "记录排序未保存" } }
     }
     public func undoDeletion() {
-        Task { do { try await store.undoDelete(); recordUndoQuery = nil; canUndoDeletion = false; pendingDeletion.removeAll(); message = "已撤销删除" } catch { canUndoDeletion = false; message = "不能撤销：期限、容量、策略或内容已变化" } }
+        Task { do { try await store.undoDelete(); recordUndoQuery = nil; canUndoDeletion = false; pendingDeletion.removeAll(); notice("已撤销删除") } catch { canUndoDeletion = false; message = "不能撤销：期限、容量、策略或内容已变化" } }
     }
     /// 依据当前记录ID逐页定位，不使用旧偏移。
     public func jumpToHistory(category: String? = nil) {

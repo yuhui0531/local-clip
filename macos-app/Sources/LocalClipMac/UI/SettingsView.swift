@@ -181,7 +181,7 @@ public struct SettingsView: View {
                     .padding(.horizontal, 20).frame(maxWidth: .infinity, alignment: .leading).frame(height: 38)
             }
         }
-        .onChange(of: model.message) { _, message in if NSApp.keyWindow is SettingsWindow { feedback = message } }
+        .onChange(of: model.message) { _, message in if message.isEmpty || NSApp.keyWindow is SettingsWindow { feedback = message } }
         .frame(width: 620)
         // 按自然高度测量整页，再让窗口贴合；窗口动画过程中内容保持顶部对齐。
         .fixedSize(horizontal: false, vertical: true)

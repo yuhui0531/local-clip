@@ -124,7 +124,7 @@ import Testing
         var previousRefresh = model.historyWindowRefreshCount
         #endif
         model.change(.favorites([model.items[0].id], true))
-        try await until { !model.historyBusy && model.items.first?.isFavorite == true && model.message.contains("已保存") }
+        try await until { !model.historyBusy && model.items.first?.isFavorite == true && model.message.contains("已收藏") }
         try await Task.sleep(for: .milliseconds(60))
         #if DEBUG
         #expect(model.historyWindowQueryCount - previous == 1)

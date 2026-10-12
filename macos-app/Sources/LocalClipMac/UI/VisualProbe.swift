@@ -65,7 +65,9 @@ import LocalClipCore
         var settingsHeight: CGFloat?
         let guide = AccessibilityGuideState()
         switch ProcessInfo.processInfo.environment["LOCALCLIP_VISUAL_GUIDE"] { case "drag": guide.step = .drag; guide.waitedLong = true; case "done": guide.step = .done; default: break }
-        let view: AnyView = ProcessInfo.processInfo.environment["LOCALCLIP_VISUAL_GUIDE"] != nil
+        let view: AnyView = ProcessInfo.processInfo.environment["LOCALCLIP_VISUAL_TOAST"] != nil
+            ? AnyView(VStack(spacing: 16) { PasteFeedbackView(message: "已复制，请确认目标位置后手动粘贴", failed: false); PasteFeedbackView(message: "剪贴板已变化或复制失败，请重新选择", failed: true) }.frame(maxWidth: .infinity, maxHeight: .infinity).background(Color(nsColor: .windowBackgroundColor)))
+            : ProcessInfo.processInfo.environment["LOCALCLIP_VISUAL_GUIDE"] != nil
             ? AnyView(AccessibilityGuideView(state: guide, openSettings: {}, close: {}).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top).background(Color(nsColor: .windowBackgroundColor)))
             : popover == "filter" ? AnyView(FilterEditor(model: model).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top).background(Color(nsColor: .windowBackgroundColor)))
             : popover == "detail" ? AnyView(ClipInspector(model: model).frame(width: 520).frame(maxHeight: .infinity, alignment: .top).background(Color(nsColor: .windowBackgroundColor)))

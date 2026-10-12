@@ -108,7 +108,7 @@ import LocalClipCore
             model.focusResults = { [weak self] in guard let panel = self?.panel else { return }; panel.makeFirstResponder(panel) }
             model.settingsChanged = { [weak self] in self?.applyAppearanceSettings() }
             model.resizePanel = { [weak self] height, persist in self?.resizeHistory(height, persist: persist) }
-            model.showPasteFeedback = { [weak self] message in self?.showPasteFeedback(message) }
+            model.showPasteFeedback = { [weak self] message, failed in self?.showPasteFeedback(message, failed: failed) }
             paste.closePanel = model.closePanel
             hotkeys.onInvoke = { [weak self] in self?.toggleHistory() }
             modelStartup = Task {
@@ -365,32 +365,32 @@ import LocalClipCore
         !confirming && !hasModal && (eventWindow === panel || (eventWindow == nil && panel.isKeyWindow))
     }
     /// 粘贴回退显示短暂非激活提示，不让关闭历史面板隐藏失败原因。
-    private func showPasteFeedback(_ message: String) {
+    private func showPasteFeedback(_ message: String, failed: Bool) {
         feedbackTask?.cancel()
         if feedbackPanel == nil {
-            let feedback = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 480, height: 94), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+            let feedback = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 300, height: 44), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
             feedback.isOpaque = false; feedback.backgroundColor = .clear; feedback.hasShadow = true
             feedback.isReleasedWhenClosed = false; feedback.hidesOnDeactivate = false; feedback.ignoresMouseEvents = true
             feedback.level = .statusBar; feedback.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
             feedbackPanel = feedback
         }
-        let content = HStack(spacing: 12) {
-            Image(systemName: "clipboard").font(.system(size: 24)).foregroundStyle(.secondary)
-            Text(message).font(.system(size: 13)).lineLimit(3).frame(maxWidth: .infinity, alignment: .leading)
-        }.padding(18).frame(width: 480, height: 94)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
-            .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(.white.opacity(0.25)))
-        feedbackPanel?.contentView = NSHostingView(rootView: content)
+        let host = NSHostingView(rootView: PasteFeedbackView(message: message, failed: failed))
+        feedbackPanel?.contentView = host
+        let size = host.fittingSize
         if let screen = panel?.screen ?? NSScreen.main {
             let rect = screen.visibleFrame
-            let y = panel?.isVisible == true ? (panel?.frame.maxY ?? rect.minY) + 12 : rect.minY + 16
-            feedbackPanel?.setFrame(NSRect(x: rect.midX - 240, y: min(y, rect.maxY - 110), width: 480, height: 94), display: true)
+            let y = panel?.isVisible == true ? (panel?.frame.maxY ?? rect.minY) + 12 : rect.minY + 24
+            feedbackPanel?.setFrame(NSRect(x: rect.midX - size.width / 2, y: min(y, rect.maxY - size.height - 16), width: size.width, height: size.height), display: true)
         }
-        // orderFront不激活应用，也不把反馈窗口设为key。
+        // orderFront不激活应用，也不把反馈窗口设为key；淡入淡出避免突兀出现。
+        feedbackPanel?.alphaValue = 0
         feedbackPanel?.orderFrontRegardless()
+        NSAnimationContext.runAnimationGroup { $0.duration = 0.15; feedbackPanel?.animator().alphaValue = 1 }
         feedbackTask = Task { [weak self] in
-            do { try await Task.sleep(for: .seconds(4)) } catch { return }
-            self?.feedbackPanel?.orderOut(nil)
+            do { try await Task.sleep(for: .seconds(3)) } catch { return }
+            guard let panel = self?.feedbackPanel else { return }
+            await NSAnimationContext.runAnimationGroup { $0.duration = 0.25; panel.animator().alphaValue = 0 }
+            if !Task.isCancelled { panel.orderOut(nil) }
         }
     }
     /// 设置使用可取消、失焦隐藏的窗口，不改变已记住的面板目标，by AI.Coding。
@@ -595,5 +595,22 @@ extension AppDelegate: NSMenuDelegate {
     public func menuNeedsUpdate(_ menu: NSMenu) {
         menu.items.first?.title = statusMenuTitle
         if menu.items.count > 2 { updateCaptureItem(menu.items[2]) }
+    }
+}
+
+/// 紧凑胶囊提示：宽度随文字，图标区分“已复制需手动粘贴”与失败，by AI.Coding。
+struct PasteFeedbackView: View {
+    let message: String
+    let failed: Bool
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: failed ? "exclamationmark.triangle.fill" : "doc.on.clipboard.fill")
+                .font(.system(size: 13, weight: .semibold)).foregroundStyle(failed ? Color.orange : Color.accentColor)
+            Text(message).font(.system(size: 13, weight: .medium)).frame(maxWidth: 380, alignment: .leading).fixedSize(horizontal: false, vertical: true)
+        }.padding(.horizontal, 16).padding(.vertical, 11)
+            .fixedSize()
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color.primary.opacity(0.08)))
+            .padding(1)
     }
 }
