@@ -63,7 +63,14 @@ struct RichTextPreview: NSViewRepresentable {
         text.textContainerInset = NSSize(width: 8, height: 8); text.autoresizingMask = [.width]; text.isVerticallyResizable = true; text.textContainer?.widthTracksTextView = true
         scroll.documentView = text; return scroll
     }
-    func updateNSView(_ view: NSScrollView, context: Context) { (view.documentView as? NSTextView)?.textStorage?.setAttributedString(content) }
+    /// 未声明颜色的文字使用系统文本色，深色外观下不再画成黑字，by AI.Coding。
+    func updateNSView(_ view: NSScrollView, context: Context) {
+        let text = NSMutableAttributedString(attributedString: content)
+        text.enumerateAttribute(.foregroundColor, in: NSRange(location: 0, length: text.length)) { value, range, _ in
+            if value == nil { text.addAttribute(.foregroundColor, value: NSColor.textColor, range: range) }
+        }
+        (view.documentView as? NSTextView)?.textStorage?.setAttributedString(text)
+    }
 }
 // QLPreviewView嵌入自有窗口，不接管系统共享Quick Look控制器，by AI.Coding。
 @MainActor final class FilePreview: NSObject {

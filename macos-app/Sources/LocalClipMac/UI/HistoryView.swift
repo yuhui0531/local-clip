@@ -4,38 +4,16 @@ import SwiftUI
 import LocalClipCore
 public struct HistoryView: View {
     @ObservedObject var model: HistoryViewModel
-    @Environment(\.colorScheme) private var colorScheme
     @State private var categoryContentWidth: CGFloat = 0
+    @State private var categoryFadeLeading = false
+    @State private var categoryFadeTrailing = false
     @State private var resizingHeight: Double?
-    // 跟随SwiftUI实际外观，避免NSColor按宿主外观解析造成浅色工具栏白字。
-    private var toolbarColor: Color { Color(white: colorScheme == .dark ? 0.82 : 0.28) }
     public init(model: HistoryViewModel) { self.model = model }
     /// 单行工具栏释放的高度用于卡片，首屏查询仍共用实际边长，by AI.Coding。
     static func cardSide(height: CGFloat, filtered: Bool) -> CGFloat {
         let dense = height < 300
         let available = max(1, height - 8 - (dense ? 40 : 48) - (filtered ? 22 : 0) - (dense ? 36 : 44) - 1 - 20)
         return available
-    }
-    /// 直接描画两种小工具图标，避免模板系统图标在材质面板中丢失指定颜色。
-    private func toolbarGlyph(filter: Bool) -> some View {
-        let enabled = model.settings.captureEnabled, color = toolbarColor
-        return Canvas { context, size in
-            let scale = size.width / 20
-            context.scaleBy(x: scale, y: scale)
-            context.stroke(Path(ellipseIn: CGRect(x: 1, y: 1, width: 18, height: 18)), with: .color(color), lineWidth: 1.4)
-            var path = Path()
-            if filter {
-                for (y, left, right) in [(6.5, 5.0, 15.0), (10.0, 6.5, 13.5), (13.5, 8.0, 12.0)] {
-                    path.move(to: CGPoint(x: left, y: y)); path.addLine(to: CGPoint(x: right, y: y))
-                }
-            } else if enabled {
-                for x in [8.0, 12.0] { path.move(to: CGPoint(x: x, y: 6)); path.addLine(to: CGPoint(x: x, y: 14)) }
-            } else {
-                path.move(to: CGPoint(x: 8, y: 6)); path.addLine(to: CGPoint(x: 14, y: 10)); path.addLine(to: CGPoint(x: 8, y: 14)); path.closeSubpath()
-                context.fill(path, with: .color(color)); return
-            }
-            context.stroke(path, with: .color(color), style: StrokeStyle(lineWidth: filter ? 1.4 : 2, lineCap: .round))
-        }.frame(width: 20, height: 20).accessibilityHidden(true)
     }
     public var body: some View {
         // 根布局只接受真实窗口视口；卡片最小内容尺寸不能反过来扩大托管视图。
@@ -63,14 +41,32 @@ public struct HistoryView: View {
                         if !compact { Text("LocalClip").font(.system(size: 16, weight: .bold, design: .rounded)) }
                     }
                     // 全部/收藏固定可见，类型与分类紧随其后，避免重复历史入口，by AI.Coding。
-                    HStack(spacing: 5) { filter("剪贴板", nil); favoritesTab }.fixedSize()
-                    categoryNavigation
+                    // 范围与类型之间用和分类前相同的分隔线，间距与标签一致，by AI.Coding。
+                    HStack(spacing: 2) {
+                        HStack(spacing: 2) { filter("剪贴板", nil); favoritesTab }.fixedSize()
+                        Divider().frame(height: 16).padding(.horizontal, 6)
+                        categoryNavigation(compact: compact)
+                    }
                     HistorySearchInput(model: model, input: model.queryState, focus: model.focusRequest).frame(width: compact ? 160 : 240, height: 30)
-                    Button { model.showingFilters.toggle() } label: { toolbarGlyph(filter: true) }.buttonStyle(.plain).accessibilityLabel("筛选").popover(isPresented: $model.showingFilters) { FilterEditor(model: model) }
-                    Button { model.setCaptureEnabled(!model.settings.captureEnabled) } label: { toolbarGlyph(filter: false) }.buttonStyle(.plain).accessibilityLabel(model.settings.captureEnabled ? "暂停采集" : "恢复采集").help(model.settings.captureEnabled ? "暂停采集" : "恢复采集")
-                    Menu { Button(model.settings.hideContents ? "显示内容" : "隐藏内容") { model.updateSettings { $0.hideContents.toggle() } }; Button("筛选…") { model.showingFilters.toggle() }; Button("撤销删除 · ⌘Z") { model.undoDeletion() }; Button("设置…") { model.openSettings?() }; Button("清空普通历史", role: .destructive) { model.change(.clearOrdinary) }; Divider(); Button("退出 LocalClip") { model.quitApplication?() }.keyboardShortcut("q", modifiers: .command) }
-                        label: { Image(systemName: "ellipsis.circle").font(.system(size: 20, weight: .light)) }.menuStyle(.borderlessButton).fixedSize()
-                    Button { model.closePanel?() } label: { Image(systemName: "xmark").font(.system(size: 11, weight: .semibold)).frame(width: 24, height: 24).background(.primary.opacity(0.06), in: Circle()) }.buttonStyle(.plain).help("关闭 · Escape")
+                    HStack(spacing: 2) {
+                        let filtering = model.sourceFilter != nil || model.dateFilterEnabled
+                        ToolbarIconButton(symbol: filtering ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle", tint: filtering ? .accentColor : nil, help: "筛选") { model.showingFilters.toggle() }
+                            .popover(isPresented: $model.showingFilters) { FilterEditor(model: model) }
+                        // 暂停时图标转为醒目的恢复入口，状态与动作一眼可辨，by AI.Coding。
+                        let recording = model.settings.captureEnabled
+                        ToolbarIconButton(symbol: recording ? "pause.circle" : "play.circle.fill", tint: recording ? nil : .orange, help: recording ? "暂停记录" : "恢复记录") { model.setCaptureEnabled(!recording) }
+                        Menu {
+                            Button(model.settings.hideContents ? "显示内容" : "隐藏内容") { model.updateSettings { $0.hideContents.toggle() } }
+                            Button("筛选…") { model.showingFilters.toggle() }
+                            Button("撤销删除 · ⌘Z") { model.undoDeletion() }.disabled(!model.canUndoDeletion)
+                            Divider()
+                            Button("设置… · ⌘,") { model.openSettings?() }
+                            Button("清空普通历史…", role: .destructive) { model.change(.clearOrdinary) }
+                            Divider(); Button("退出 LocalClip") { model.quitApplication?() }.keyboardShortcut("q", modifiers: .command)
+                        } label: { Image(systemName: "ellipsis.circle").font(.system(size: 17)).foregroundStyle(Color.primary.opacity(0.72)) }
+                            .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().frame(width: 28, height: 28).help("更多").accessibilityLabel("更多")
+                        ToolbarIconButton(symbol: "xmark.circle", help: "关闭 · Esc") { model.closePanel?() }
+                    }
                 }.padding(.horizontal, 24).frame(height: toolbarHeight)
                 if filterHeight > 0 { FilterStrip(model: model) }
                 HistoryStrip(model: model, list: model.listState, cardHeight: cardHeight,
@@ -78,9 +74,14 @@ public struct HistoryView: View {
                     target: model.target, draggedIDs: model.draggedIDs, hideContents: model.settings.hideContents, focusRequest: model.focusRequest, renamingID: model.renamingID)
                 Divider().opacity(0.5)
                 HStack(spacing: 12) {
-                    Circle().fill(!model.settings.captureEnabled ? Color.gray : model.capture.capacityBlocked ? Color.orange : Color.green).frame(width: 6, height: 6)
-                    Text(model.message.isEmpty ? model.status : model.message).font(.system(size: 11, weight: .medium)).lineLimit(1)
+                    Circle().fill(!model.settings.captureEnabled ? Color.orange : model.capture.capacityBlocked ? Color.red : Color.green).frame(width: 6, height: 6)
+                    Text(model.message.isEmpty ? Self.statusLabel(model.status) : model.message).font(.system(size: 11, weight: .medium)).lineLimit(1)
+                        .foregroundStyle(model.message.isEmpty ? Color.secondary : Color.primary)
                         .help(model.ignoreDescription)
+                    // 暂停时就地提供恢复入口，不必去找工具栏或菜单，by AI.Coding。
+                    if !model.settings.captureEnabled && model.message.isEmpty {
+                        Button("恢复记录") { model.setCaptureEnabled(true) }.buttonStyle(.link).font(.system(size: 11))
+                    }
                     HistoryListStatistics(footer: model.listState.footerState)
                     Spacer()
                     // 始终保留操作栏的位置，加载或切换选择只改启用状态，避免右侧整块出现/消失。
@@ -108,62 +109,83 @@ public struct HistoryView: View {
         }.frame(maxWidth: .infinity, maxHeight: .infinity)
     }
     /// 类型与分类共享工具栏剩余宽度；溢出只滚动这段，主入口与搜索保持可见，by AI.Coding。
-    private var categoryNavigation: some View {
+    private func categoryNavigation(compact: Bool) -> some View {
         GeometryReader { geometry in
+            let overflow = categoryContentWidth > geometry.size.width + 1
             ScrollViewReader { proxy in
-                ScrollView(.horizontal) {
-                    HStack(spacing: 7) {
-                        ForEach(ClipKind.allCases, id: \.self) { filter(Self.kindName($0), $0) }
-                        if !model.categories.isEmpty { Divider().frame(height: 16).padding(.horizontal, 5) }
-                        ForEach(model.categories) { categoryTab($0).id($0.id) }
-                        Button { model.editCategory() } label: {
-                            Image(systemName: "plus").font(.system(size: 20, weight: .regular)).frame(width: 34, height: 32)
-                        }.buttonStyle(.plain).help("新建分类").accessibilityLabel("新建分类")
-                            .popover(isPresented: $model.showingCategoryEditor, arrowEdge: .top) { CategoryEditor(model: model) }
-                    // 标签从收藏右侧依次排列，剩余空间不能把分类推到第二行，by AI.Coding。
-                    }.fixedSize(horizontal: true, vertical: false)
-                        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { categoryContentWidth = $0 }
-                        .frame(minWidth: geometry.size.width, minHeight: 32, alignment: .leading)
-                }.scrollIndicators(.hidden)
-                    .onChange(of: model.categoryID) { _, id in
-                        if let id, categoryContentWidth > geometry.size.width { proxy.scrollTo(id, anchor: .center) }
-                    }
-                    // 溢出时尾部渐隐并提供全部分类菜单，被截断的标签仍可发现和直达，by AI.Coding。
-                    .overlay(alignment: .trailing) {
-                        if categoryContentWidth > geometry.size.width + 1 {
+                HStack(spacing: 2) {
+                    ScrollView(.horizontal) {
+                        HStack(spacing: 2) {
+                            // 紧凑布局把类型收进一个菜单，窄屏剩余宽度优先留给自定义分类，by AI.Coding。
+                            if compact { kindMenu } else { ForEach(ClipKind.allCases, id: \.self) { filter(Self.kindName($0), $0) } }
+                            if !model.categories.isEmpty { Divider().frame(height: 16).padding(.horizontal, 6) }
+                            ForEach(model.categories) { categoryTab($0).id($0.id) }
+                            ToolbarIconButton(symbol: "plus", help: "新建分类") { model.editCategory() }
+                                .popover(isPresented: $model.showingCategoryEditor, arrowEdge: .top) { CategoryEditor(model: model) }
+                        // 标签从收藏右侧依次排列，剩余空间不能把分类推到第二行，by AI.Coding。
+                        }.fixedSize(horizontal: true, vertical: false)
+                            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { categoryContentWidth = $0 }
+                            .frame(minHeight: 32, alignment: .leading)
+                    }.scrollIndicators(.hidden)
+                        // 仅在还有被遮挡标签的一侧透明渐隐，滚到端点时完整显示首尾标签，by AI.Coding。
+                        .onScrollGeometryChange(for: Bool.self) { $0.contentOffset.x > 1 } action: { _, value in categoryFadeLeading = value }
+                        .onScrollGeometryChange(for: Bool.self) { $0.contentOffset.x < $0.contentSize.width - $0.containerSize.width - 1 } action: { _, value in categoryFadeTrailing = value }
+                        .mask {
                             HStack(spacing: 0) {
-                                LinearGradient(colors: [.clear, Color(nsColor: .windowBackgroundColor)], startPoint: .leading, endPoint: .trailing).frame(width: 28)
-                                Menu {
-                                    ForEach(model.categories) { category in
-                                        Button(category.name) { model.selectCategories([category.id]); proxy.scrollTo(category.id, anchor: .center) }
-                                    }
-                                } label: { Image(systemName: "chevron.down.circle").font(.system(size: 15)) }
-                                    .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
-                                    .padding(.leading, 2).background(Color(nsColor: .windowBackgroundColor))
-                                    .help("全部分类").accessibilityLabel("全部分类")
-                            }.allowsHitTesting(true)
+                                if categoryFadeLeading { LinearGradient(colors: [.clear, .black], startPoint: .leading, endPoint: .trailing).frame(width: 28) }
+                                Rectangle()
+                                if categoryFadeTrailing { LinearGradient(colors: [.black, .clear], startPoint: .leading, endPoint: .trailing).frame(width: 28) }
+                            }
                         }
+                        .onChange(of: model.categoryID) { _, id in
+                            if let id, overflow { proxy.scrollTo(id, anchor: .center) }
+                        }
+                    // 被截断的标签仍可从全部分类菜单直达。
+                    if overflow {
+                        Menu {
+                            ForEach(model.categories) { category in
+                                Button(category.name) { model.selectCategories([category.id]); proxy.scrollTo(category.id, anchor: .center) }
+                            }
+                        } label: { Image(systemName: "chevron.down.circle").font(.system(size: 15)) }
+                            .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                            .help("全部分类").accessibilityLabel("全部分类")
                     }
+                }.frame(width: geometry.size.width, alignment: .leading)
             }
         }.frame(height: 32)
     }
+    /// 类型菜单与类型标签同一选择规则；选中时显示类型名并高亮，by AI.Coding。
+    private var kindMenu: some View {
+        let selected = model.kind != nil && model.activeCategories.isEmpty && !model.favorites
+        return Menu {
+            ForEach(ClipKind.allCases, id: \.self) { kind in
+                Button { model.selectKind(kind) } label: {
+                    if selected && model.kind == kind { Label(Self.kindName(kind), systemImage: "checkmark") } else { Text(Self.kindName(kind)) }
+                }
+            }
+        } label: {
+            HStack(spacing: 3) { Text(selected ? model.kind.map(Self.kindName) ?? "类型" : "类型"); Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold)) }
+        }.menuStyle(.button).buttonStyle(ToolbarTabStyle(selected: selected)).menuIndicator(.hidden).fixedSize()
+            .accessibilityLabel(selected ? "类型：\(model.kind.map(Self.kindName) ?? "")" : "类型")
+    }
     /// 收藏独立于类型与分类；全部是唯一的完整历史入口，by AI.Coding。
     private var favoritesTab: some View {
-        Button { model.categoryID = nil; model.categoryFilters = []; model.kind = nil; model.favorites = true } label: { Label("收藏", systemImage: "star").font(.system(size: 13, weight: model.favorites ? .semibold : .regular)).padding(.horizontal, 12).padding(.vertical, 6)
-            .foregroundStyle(model.favorites ? Color.primary : Color.secondary).background(model.favorites ? Color.primary.opacity(0.08) : Color.clear, in: Capsule()) }.buttonStyle(.plain)
+        Button { model.categoryID = nil; model.categoryFilters = []; model.kind = nil; model.favorites = true } label: {
+            Label("收藏", systemImage: model.favorites ? "star.fill" : "star")
+        }.buttonStyle(ToolbarTabStyle(selected: model.favorites))
     }
     /// 类型入口退出自定义分类；全部按钮不会在分类页面伪装成已选中，by AI.Coding。
     private func filter(_ title: String, _ kind: ClipKind?) -> some View {
         let selected = model.kind == kind && model.activeCategories.isEmpty && !model.favorites
-        return Button { model.selectKind(kind) } label: {
-            Text(title).font(.system(size: 13, weight: selected ? .semibold : .regular))
-                .padding(.horizontal, 12).padding(.vertical, 6)
-                .foregroundStyle(Color.primary).background(selected ? Color.primary.opacity(0.08) : Color.clear, in: Capsule())
-        }.buttonStyle(.plain)
+        return Button(title) { model.selectKind(kind) }.buttonStyle(ToolbarTabStyle(selected: selected))
     }
     /// 标签直接注册原生拖放目标，接收卡片拖动并保留点击与右键管理。
     private func categoryTab(_ category: ClipCategory) -> some View {
         CategoryDropTarget(category: category, selected: model.activeCategories.contains(category.id), model: model)
+    }
+    /// 采集状态改用面向用户的说法，内部状态值保持不变。
+    static func statusLabel(_ state: String) -> String {
+        switch state { case "正常": "正在记录"; case "用户暂停": "已暂停记录"; case "定时暂停": "已定时暂停"; case "容量已满": "容量已满，新内容未记录"; default: state }
     }
     /// 类型名称与新增文件筛选保持一致。
     public static func kindName(_ kind: ClipKind) -> String { switch kind { case .text: "文本"; case .url: "链接"; case .richText: "富文本"; case .image: "图片"; case .file: "文件"; case .mixed: "混合" } }
@@ -311,7 +333,7 @@ private struct HistorySelectionActions: View {
                 }
                 Button { model.showingDetail.toggle() } label: { if compact { Image(systemName: "arrow.up.left.and.arrow.down.right") } else { Label("详情", systemImage: "arrow.up.left.and.arrow.down.right") } }.buttonStyle(.plain)
                     .accessibilityLabel("详情").help("详情")
-                    .popover(isPresented: $model.showingDetail, arrowEdge: .top) { ClipInspector(model: model).frame(width: 590, height: 520) }
+                    .popover(isPresented: $model.showingDetail, arrowEdge: .top) { ClipInspector(model: model).frame(width: 520) }
                 Divider().frame(height: 20)
                 if !compact {
                     Button { model.perform(.plainText, action: .copy) } label: { Text("纯文本复制") }
@@ -350,8 +372,9 @@ private struct CategoryEditor: View {
             TextField("分类名称", text: $model.categoryDraft).textFieldStyle(.roundedBorder)
                 .focused($nameFocused).disabled(model.savingCategory).onSubmit { model.saveCategory() }
             HStack(spacing: 10) {
-                ForEach(["34C759","8E8E93","FFCC00","FF3B30","007AFF","AF52DE"], id: \.self) { hex in
+                ForEach([("34C759","绿色"),("8E8E93","灰色"),("FFCC00","黄色"),("FF3B30","红色"),("007AFF","蓝色"),("AF52DE","紫色")], id: \.0) { hex, name in
                     Button { model.categoryColor = hex } label: { Circle().fill(Color(nsColor: RichContent.colorValue(hex))).frame(width:20,height:20).overlay(Circle().strokeBorder(model.categoryColor == hex ? Color.primary : .clear, lineWidth:2).padding(-3)) }.buttonStyle(.plain)
+                        .help(name).accessibilityLabel(name).accessibilityAddTraits(model.categoryColor == hex ? .isSelected : [])
                 }
             }
             Text(model.categoryError.isEmpty ? "1–64个字符，名称不能重复" : model.categoryError)
@@ -387,14 +410,16 @@ private struct ClipCard: View, Equatable {
     @State private var thumbnail: NSImage?
     @State private var isOnscreen = false
     @State private var detectedLanguage: String?
+    @State private var hovering = false
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.item == rhs.item && lhs.index == rhs.index && lhs.selected == rhs.selected && lhs.dragging == rhs.dragging && lhs.editing == rhs.editing && lhs.hidden == rhs.hidden && lhs.height == rhs.height
             && lhs.categoryID == rhs.categoryID && lhs.categories == rhs.categories && lhs.target == rhs.target
     }
     private var code: Bool { item.kind == .text && detectedLanguage != nil }
     private var tint: Color { switch item.kind {
-        case .text: Color(red: 0, green: 0.48, blue: 1)
-        case .url: Color(red: 0.24, green: 0.50, blue: 0.88)
+        // 文本与链接色相拉开，且都不同于选中强调色，选中环不会与标题栏混在一起，by AI.Coding。
+        case .text: Color(red: 0.36, green: 0.38, blue: 0.80)
+        case .url: Color(red: 0.11, green: 0.55, blue: 0.80)
         case .richText: Color(red: 0.66, green: 0.39, blue: 0.62)
         case .image: Color(red: 0.24, green: 0.62, blue: 0.55)
         case .file: Color(red: 0.35, green: 0.49, blue: 0.70)
@@ -468,8 +493,14 @@ private struct ClipCard: View, Equatable {
                 .frame(height: footerHeight)
         }.frame(width: height, height: height).background(Color(nsColor: .textBackgroundColor))
             .clipShape(RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: cardRadius, style: .continuous).strokeBorder(selected ? Color(red: 0, green: 0.48, blue: 1) : Color.primary.opacity(0.07), lineWidth: selected ? 3 : 0.7))
-            .shadow(color: .black.opacity(0.09), radius: 3, y: 2)
+            .overlay(RoundedRectangle(cornerRadius: cardRadius, style: .continuous).strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.7))
+            // 选中用卡片外侧的强调色环，与任何类型标题色都可区分；悬停仅轻微抬升，by AI.Coding。
+            .overlay {
+                if selected { RoundedRectangle(cornerRadius: cardRadius + 4, style: .continuous).strokeBorder(Color.accentColor, lineWidth: 2.5).padding(-4.5) }
+            }
+            .shadow(color: .black.opacity(hovering && !selected ? 0.16 : 0.09), radius: hovering && !selected ? 7 : 3, y: hovering && !selected ? 4 : 2)
+            .onHover { hovering = $0 }
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: hovering)
             .contentShape(RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
             .coordinateSpace(name: item.id)
     }
@@ -601,28 +632,80 @@ private struct CopyAge: View {
         return "\(seconds / 86400)天前"
     }
 }
-private struct ClipInspector: View {
+// 详情按“标题 / 预览 / 信息 / 操作”排列，高度随内容，按钮与面板主次样式一致，by AI.Coding。
+struct ClipInspector: View {
     @ObservedObject var model: HistoryViewModel
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 14) {
             if let detail = model.detail {
-                HStack { Text(detail.summary.title ?? HistoryView.kindName(detail.summary.kind)).font(.title2.bold()); Spacer(); Text(detail.summary.source.name).foregroundStyle(.secondary) }
-                Text(detail.summary.source.basis == "frontmost" ? "来源依据：复制时前台应用推断" : detail.summary.source.basis == "declared" ? "来源依据：应用声明" : "来源依据：未知")
-                    .font(.caption).foregroundStyle(.secondary)
-                ScrollView { VStack(alignment: .leading, spacing: 16) {
-                    if let image = model.image { Image(nsImage: image).resizable().scaledToFit().frame(maxHeight: 230).clipShape(RoundedRectangle(cornerRadius: 10)) }
-                    if !model.previewMessage.isEmpty { Text(model.previewMessage).font(.caption).foregroundStyle(.secondary) }
-                    if let rich = model.richPreview { SyntaxDetailPreview(content: rich).frame(height: 220) }
-                } }.frame(maxHeight: .infinity)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(detail.summary.title ?? HistoryView.kindName(detail.summary.kind)).font(.system(size: 17, weight: .semibold)).lineLimit(1)
+                    Text("\(detail.summary.source.name) · \(detail.summary.source.basis == "frontmost" ? "复制时前台应用推断" : detail.summary.source.basis == "declared" ? "应用声明" : "来源未知")")
+                        .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
+                preview(detail)
+                if !model.previewMessage.isEmpty { Text(model.previewMessage).font(.caption).foregroundStyle(.secondary) }
+                Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 5) {
+                    row("大小", "\(detail.payload.items.count) 项 · \(HistoryViewModel.bytes(detail.payload.byteCount))")
+                    row("复制", "\(detail.summary.copyCount) 次 · 最近 \(Date(timeIntervalSince1970: Double(detail.summary.lastCopiedAt)/1000).formatted(date: .abbreviated, time: .shortened))")
+                    row("格式", detail.payload.items.flatMap { $0.representations.map(\.type) }.sorted().joined(separator: ", "))
+                }.font(.caption)
+                let notes = (detail.summary.kind == .file ? ["保存的是文件引用，未备份文件本体；移动或删除原件后请重新复制。Finder中双击会复制副本到当前实际文件夹，同名冲突会停止，不覆盖已有文件。"] : [])
+                    + (detail.payload.items.contains(where: { !Set($0.declaredTypes).subtracting(SupportedType.all).isEmpty }) ? ["仅保留支持格式，附加私有格式未保存"] : [])
+                if !notes.isEmpty {
+                    Label(notes.joined(separator: "\n"), systemImage: "info.circle").font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
                 Divider()
-                Text("\(detail.payload.items.count) 项 · \(HistoryViewModel.bytes(detail.payload.byteCount)) · 复制\(detail.summary.copyCount)次\n\(Date(timeIntervalSince1970: Double(detail.summary.lastCopiedAt)/1000).formatted())").font(.caption).foregroundStyle(.secondary)
-                Text(detail.payload.items.flatMap { $0.representations.map(\.type) }.sorted().joined(separator: ", ")).font(.caption2).foregroundStyle(.secondary).textSelection(.enabled)
-                if detail.summary.kind == .file { Text("保存的是文件引用，未备份文件本体；移动或删除原件后请重新复制。Finder中双击会复制副本到当前实际文件夹，同名冲突会停止，不覆盖已有文件。").font(.caption).foregroundStyle(.secondary) }
-                if detail.payload.items.contains(where: { !Set($0.declaredTypes).subtracting(SupportedType.all).isEmpty }) { Text("仅保留支持格式，附加私有格式未保存").font(.caption).foregroundStyle(.secondary) }
-                HStack { Button("原格式复制") { model.perform(.original, action: .copy) }; Button("纯文本复制") { model.perform(.plainText, action: .copy) }.disabled(detail.payload.plainText == nil); Spacer(); Button("删除", role: .destructive) { model.change(.delete([detail.summary.id])) } }
-            } else if model.detailLoading { ProgressView("正在读取完整内容…").frame(maxWidth: .infinity, maxHeight: .infinity) }
-            else { ContentUnavailableView("内容已变化", systemImage: "doc.text.magnifyingglass", description: Text("请选择仍存在的历史条目。")) }
-        }.padding(24)
+                HStack(spacing: 8) {
+                    Button(role: .destructive) { model.change(.delete([detail.summary.id])) } label: { Label("删除", systemImage: "trash").font(.system(size: 12)) }
+                        .buttonStyle(.plain).foregroundStyle(.red)
+                    Spacer()
+                    // 默认输出格式为主按钮，放在最右侧，与面板 Return 的默认结果一致，by AI.Coding。
+                    if model.settings.defaultFormat == .plainText { copyButton("原格式复制", .original, enabled: true); copyButton("纯文本复制", .plainText, enabled: detail.payload.plainText != nil) }
+                    else { copyButton("纯文本复制", .plainText, enabled: detail.payload.plainText != nil); copyButton("原格式复制", .original, enabled: true) }
+                }
+            } else if model.detailLoading { ProgressView("正在读取完整内容…").frame(maxWidth: .infinity).frame(height: 220) }
+            else { ContentUnavailableView("内容已变化", systemImage: "doc.text.magnifyingglass", description: Text("请选择仍存在的历史条目。")).frame(height: 220) }
+        }.padding(20)
+            .presentationBackground(Color(nsColor: .windowBackgroundColor))
+    }
+    /// 预览放入浅底圆角容器；文件显示图标、名称与所在文件夹，不把路径当代码高亮，by AI.Coding。
+    @ViewBuilder private func preview(_ detail: ClipDetail) -> some View {
+        let urls = detail.summary.kind == .file ? detail.payload.fileURLs ?? [] : []
+        let text = urls.isEmpty && detail.summary.kind != .image ? model.richPreview.flatMap { $0.length > 0 ? $0 : nil } : nil
+        if model.image != nil || !urls.isEmpty || text != nil {
+            VStack(alignment: .leading, spacing: 10) {
+                if let image = model.image { Image(nsImage: image).resizable().scaledToFit().frame(maxWidth: .infinity, maxHeight: text == nil ? 220 : 150).clipShape(RoundedRectangle(cornerRadius: 6)) }
+                ForEach(Array(urls.prefix(4).enumerated()), id: \.offset) { _, url in
+                    HStack(spacing: 10) {
+                        Image(nsImage: NSWorkspace.shared.icon(forFile: url.path)).resizable().frame(width: 32, height: 32)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(url.lastPathComponent).font(.system(size: 13, weight: .medium)).lineLimit(1).truncationMode(.middle)
+                            Text(url.deletingLastPathComponent().path).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                        }
+                    }
+                }
+                if urls.count > 4 { Text("另有 \(urls.count - 4) 个文件").font(.caption).foregroundStyle(.secondary) }
+                if let text { SyntaxDetailPreview(content: text).frame(height: 180) }
+            }.padding(10).frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 10))
+                .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.primary.opacity(0.06)))
+        }
+    }
+    private func row(_ label: String, _ value: String) -> some View {
+        GridRow {
+            Text(label).foregroundStyle(.secondary).gridColumnAlignment(.trailing)
+            Text(value).lineLimit(2).truncationMode(.middle).textSelection(.enabled)
+        }
+    }
+    /// 主按钮沿用面板蓝色胶囊，次按钮沿用工具栏标签胶囊，by AI.Coding。
+    @ViewBuilder private func copyButton(_ title: String, _ format: OutputFormat, enabled: Bool) -> some View {
+        if model.settings.defaultFormat == format {
+            Button { model.perform(format, action: .copy) } label: {
+                Text(title).font(.system(size: 13, weight: .semibold)).foregroundStyle(.white).padding(.horizontal, 14).frame(height: 28)
+                    .background(Color(red: 0.23, green: 0.43, blue: 0.94), in: Capsule()).contentShape(Capsule())
+            }.buttonStyle(.plain).disabled(!enabled).opacity(enabled ? 1 : 0.45)
+        } else { Button(title) { model.perform(format, action: .copy) }.buttonStyle(ToolbarTabStyle(selected: true)).disabled(!enabled) }
     }
 }
 // 筛选条件显示为可移除标签，与字面检索共同生效，by AI.Coding。
@@ -640,20 +723,79 @@ private struct FilterStrip: View {
     }
     private func chip(_ title: String, remove: @escaping () -> Void) -> some View { Button(action: remove) { HStack(spacing: 5) { Text(title); Image(systemName: "xmark").font(.system(size:8)) }.font(.system(size:10)).padding(.horizontal,8).padding(.vertical,3).background(.primary.opacity(0.07), in: Capsule()) }.buttonStyle(.plain) }
 }
-private struct FilterEditor: View {
+// 筛选按来源/日期/分类分组，与设置同一原生分组表单样式，by AI.Coding。
+struct FilterEditor: View {
     @ObservedObject var model: HistoryViewModel
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("联合筛选").font(.headline)
-            Picker("来源", selection: Binding(get: { model.sourceFilter ?? "*" }, set: { model.sourceFilter = $0 == "*" ? nil : $0 })) {
-                Text("全部来源").tag("*")
-                ForEach(Array(model.sourceSuggestions.enumerated()), id: \.offset) { _, source in Text(source.name).tag(source.bundleID ?? "") }
-            }
-            Toggle("限定复制日期", isOn: $model.dateFilterEnabled)
-            HStack { DatePicker("从", selection: $model.dateFrom, displayedComponents: .date); DatePicker("至", selection: $model.dateUntil, displayedComponents: .date) }.disabled(!model.dateFilterEnabled)
-            Text("日期按本机日历；类型与自定义分类互斥，来源和日期作用于当前范围。").font(.caption).foregroundStyle(.secondary)
-            ForEach(model.categories) { category in Toggle(category.name, isOn: Binding(get: { model.activeCategories.contains(category.id) }, set: { included in var values = model.activeCategories; if included { values.insert(category.id) } else { values.remove(category.id) }; model.selectCategories(values) })) }
+        VStack(spacing: 0) {
+            Form {
+                Section("来源") {
+                    Picker("来源", selection: Binding(get: { model.sourceFilter ?? "*" }, set: { model.sourceFilter = $0 == "*" ? nil : $0 })) {
+                        Text("全部来源").tag("*")
+                        ForEach(Array(model.sourceSuggestions.enumerated()), id: \.offset) { _, source in Text(source.name).tag(source.bundleID ?? "") }
+                    }
+                }
+                Section {
+                    Toggle("限定复制日期", isOn: $model.dateFilterEnabled)
+                    Group {
+                        DatePicker("从", selection: $model.dateFrom, displayedComponents: .date)
+                        DatePicker("至", selection: $model.dateUntil, displayedComponents: .date)
+                    }.disabled(!model.dateFilterEnabled)
+                } header: { Text("日期") } footer: {
+                    Text("日期按本机日历；类型与自定义分类互斥，来源和日期作用于当前范围。").settingsFootnote()
+                }
+                if !model.categories.isEmpty {
+                    Section("分类") {
+                        ForEach(model.categories) { category in Toggle(category.name, isOn: Binding(get: { model.activeCategories.contains(category.id) }, set: { included in var values = model.activeCategories; if included { values.insert(category.id) } else { values.remove(category.id) }; model.selectCategories(values) })) }
+                    }
+                }
+            }.formStyle(.grouped).scrollDisabled(true).fixedSize(horizontal: false, vertical: true)
             HStack { Button("清除筛选") { model.sourceFilter = nil; model.dateFilterEnabled = false; model.categoryFilters = []; model.categoryID = nil; model.kind = nil }; Spacer(); Button("完成") { model.showingFilters = false; model.focusResults?() } }
-        }.padding(18).frame(width: 420)
+                .padding(.horizontal, 20).padding(.bottom, 16)
+        }.frame(width: 360)
+    }
+}
+
+/// 工具栏标签统一样式：选中为浅色胶囊，未选中次要色并带悬停反馈，by AI.Coding。
+struct ToolbarTabStyle: ButtonStyle {
+    let selected: Bool
+    func makeBody(configuration: Configuration) -> some View { TabBody(configuration: configuration, selected: selected) }
+    struct TabBody: View {
+        let configuration: Configuration
+        let selected: Bool
+        @State private var hovering = false
+        @Environment(\.isEnabled) private var isEnabled
+        var body: some View {
+            configuration.label
+                .font(.system(size: 13, weight: selected ? .semibold : .regular))
+                .foregroundStyle(selected ? Color.primary : Color.secondary)
+                .padding(.horizontal, 10).frame(height: 28)
+                .background(Color.primary.opacity(selected ? 0.09 : configuration.isPressed ? 0.08 : hovering ? 0.05 : 0), in: Capsule())
+                .contentShape(Capsule())
+                .onHover { hovering = $0 }
+                .opacity(isEnabled ? 1 : 0.45)
+                .animation(.easeOut(duration: 0.12), value: hovering)
+        }
+    }
+}
+/// 工具栏图标按钮：SF Symbols、统一28pt命中区与悬停底色，by AI.Coding。
+struct ToolbarIconButton: View {
+    let symbol: String
+    var tint: Color? = nil
+    let help: String
+    /// 朗读名称默认去掉提示中的“ · 快捷键”部分，by AI.Coding。
+    var label: String? = nil
+    let action: () -> Void
+    @State private var hovering = false
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: symbol).font(.system(size: 17)).symbolRenderingMode(.monochrome)
+                .foregroundStyle(tint ?? Color.primary.opacity(0.72))
+                .frame(width: 28, height: 28)
+                .background(Color.primary.opacity(hovering ? 0.07 : 0), in: Circle())
+                .contentShape(Circle())
+        }.buttonStyle(.plain).help(help).accessibilityLabel(label ?? help.components(separatedBy: " · ")[0])
+            .onHover { hovering = $0 }
+            .animation(.easeOut(duration: 0.12), value: hovering)
     }
 }

@@ -170,7 +170,10 @@ import LocalClipCore
     /// 菜单栏始终保留，即使快捷键或权限不可用。
     private func makeMenu() {
         status = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        status?.button?.image = NSImage(systemSymbolName: "clipboard", accessibilityDescription: "LocalClip")
+        // 与应用图标同一符号，模板渲染随菜单栏明暗；暂停时按系统禁用样式变淡，by AI.Coding。
+        status?.button?.image = NSImage(systemSymbolName: "square.on.square", accessibilityDescription: "LocalClip")?
+            .withSymbolConfiguration(.init(pointSize: 14, weight: .medium))
+        status?.button?.appearsDisabled = model?.settings.captureEnabled == false
         updateMenu()
     }
     /// 状态在打开菜单前同步，所有操作指向真实服务。
@@ -178,15 +181,25 @@ import LocalClipCore
     /// 菜单构造不创建系统状态项，退出路由可在无窗口测试中验证，by AI.Coding。
     func makeStatusMenu() -> NSMenu {
         let menu = NSMenu()
-        menu.addItem(withTitle: "LocalClip · \(model?.capture.state ?? "准备中")", action: nil, keyEquivalent: "")
+        // 原生分区标题显示面向用户的状态；各项配 SF Symbols，与面板用词一致，by AI.Coding。
+        menu.addItem(.sectionHeader(title: statusMenuTitle))
         let show = menu.addItem(withTitle: "打开历史", action: #selector(showHistory), keyEquivalent: ""); show.target = self
-        let pause = menu.addItem(withTitle: model?.settings.captureEnabled == false ? "恢复采集" : "暂停采集", action: #selector(toggleCapture), keyEquivalent: ""); pause.target = self
+        show.image = NSImage(systemSymbolName: "square.on.square", accessibilityDescription: nil)
+        let pause = menu.addItem(withTitle: "", action: #selector(toggleCapture), keyEquivalent: ""); pause.target = self
+        updateCaptureItem(pause)
         let settings = menu.addItem(withTitle: "设置…", action: #selector(showSettings), keyEquivalent: ","); settings.target = self
+        settings.image = NSImage(systemSymbolName: "gearshape", accessibilityDescription: nil)
         menu.addItem(.separator())
         // 菜单栏非激活窗口不依赖外部应用的响应链，by AI.Coding。
         let quit = menu.addItem(withTitle: "退出 LocalClip", action: #selector(quitApplication(_:)), keyEquivalent: "q")
         quit.target = self
         menu.delegate = self; return menu
+    }
+    private var statusMenuTitle: String { "LocalClip · " + HistoryView.statusLabel(model?.capture.state ?? "准备中") }
+    private func updateCaptureItem(_ item: NSMenuItem) {
+        let paused = model?.settings.captureEnabled == false
+        item.title = paused ? "恢复记录" : "暂停记录"
+        item.image = NSImage(systemSymbolName: paused ? "play.circle" : "pause.circle", accessibilityDescription: nil)
     }
     /// 同一快捷键按实际可见状态切换；关闭不刷新历史或重记粘贴目标。
     private func toggleHistory() {
@@ -286,6 +299,7 @@ import LocalClipCore
         }
         let registered = hotkeys.register(model.settings.shortcut)
         status?.isVisible = model.settings.showMenuIcon || !registered
+        status?.button?.appearsDisabled = !model.settings.captureEnabled
         if !registered { model.message = "快捷键冲突，菜单栏入口保留" }
         panel?.sharingType = model.settings.excludeFromSharing ? .none : .readOnly
         model.actualPanelHeight = model.settings.panelHeight; pinPanel(to: panel?.screen)
@@ -511,6 +525,8 @@ import LocalClipCore
             if carbon == model.settings.quickModifiers, let number = [UInt16(18),19,20,21,23,22,26,28,25].firstIndex(of: event.keyCode), model.items.indices.contains(number) {
                 model.select(model.items[number].id); model.perform(action: .directPaste); return nil
             }
+            // ⌘, 是macOS打开设置的通用快捷键，面板内同样生效，by AI.Coding。
+            if flags == [.command], event.keyCode == 43 { model.openSettings?(); return nil }
             // 搜索文字未改变且最后动作是记录删除时，仍可撤销该记录。
             if flags == [.command], event.keyCode == 6, editing, model.canUndoFromSearch { model.undoDeletion(); return nil }
             if flags == [.command] && !editing {
@@ -566,7 +582,7 @@ import LocalClipCore
 extension AppDelegate: NSMenuDelegate {
     /// 打开菜单时反映真实状态，而不是创建时的开关值。
     public func menuNeedsUpdate(_ menu: NSMenu) {
-        menu.items.first?.title = "LocalClip · \(model?.capture.state ?? "准备中")"
-        if menu.items.count > 2 { menu.items[2].title = model?.settings.captureEnabled == false ? "恢复采集" : "暂停采集" }
+        menu.items.first?.title = statusMenuTitle
+        if menu.items.count > 2 { updateCaptureItem(menu.items[2]) }
     }
 }

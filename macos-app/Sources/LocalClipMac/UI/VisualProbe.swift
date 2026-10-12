@@ -10,7 +10,7 @@ import LocalClipCore
     public static func render(at output: URL, dark: Bool, width: CGFloat = 1400, height: CGFloat = 400, keepOpen: Bool = false, codeDetail: Bool = false) async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("LocalClip-Visual-" + UUID().uuidString)
         defer { if !keepOpen { try? FileManager.default.removeItem(at: directory) } }
-        var settings = SettingsSnapshot(); settings.panelHeight = height
+        var settings = SettingsSnapshot(); settings.panelHeight = min(height, 520)
         settings.smartCodeFilePaste = ProcessInfo.processInfo.environment["LOCALCLIP_VISUAL_SMART_PASTE"] == "1"
         let store = try HistoryStore(location: directory, initialSettings: settings, extractor: ContentDecoder.extract)
         // 长文件名fixture用于检查卡片正文与辅助图标的空间分配。
@@ -38,9 +38,7 @@ import LocalClipCore
             guard case .inserted = result else { throw StoreError.ioFailure }
             if index == 2, case .inserted(let id) = result { let preview = try await store.preview(.favorite(id, true)); _ = try await store.apply(preview.token) }
         }
-        // 合成记录写入后才暂停，暂停策略同样会阻止测试fixture入库。
-        settings = try await store.settings(); settings.captureEnabled = false
-        _ = try await store.updateCaptureSettings(settings)
+        // 保持“正在记录”外观；采集只监听下方私有命名剪贴板，不读取通用剪贴板，by AI.Coding。
         for (name, color) in [("自定义", "34C759"), ("提示词", "8E8E93"), ("物理知识", "FFCC00")] {
             _ = try await store.createCategory(name: name, colorHex: color)
         }
@@ -50,7 +48,14 @@ import LocalClipCore
         let model = HistoryViewModel(store: store, capture: capture, paste: paste, derived: DerivedContentService(store: store))
         try await model.start(); defer { if !keepOpen { capture.stop() } }
         model.actualPanelHeight = height
-        let view: AnyView = codeDetail
+        // 弹出框离屏无法截取，单独渲染筛选与详情内容供视觉检查，by AI.Coding。
+        let popover = ProcessInfo.processInfo.environment["LOCALCLIP_VISUAL_POPOVER"]
+        if popover == "detail" { while model.items.isEmpty { try await Task.sleep(for: .milliseconds(20)) }; model.select(model.items.first(where: { HistoryView.kindName($0.kind) == ProcessInfo.processInfo.environment["LOCALCLIP_VISUAL_KIND"] })?.id ?? model.items.first?.id); model.showingDetail = true; model.detailVisibilityChanged() }
+        let view: AnyView = popover == "filter" ? AnyView(FilterEditor(model: model).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top).background(Color(nsColor: .windowBackgroundColor)))
+            : popover == "detail" ? AnyView(ClipInspector(model: model).frame(width: 520).frame(maxHeight: .infinity, alignment: .top).background(Color(nsColor: .windowBackgroundColor)))
+            : ProcessInfo.processInfo.environment["LOCALCLIP_VISUAL_SETTINGS"] == "1"
+            ? AnyView(SettingsView(model: model, login: LoginItemService()))
+            : codeDetail
             ? AnyView(VStack(alignment: .leading, spacing: 12) { Text("代码详情 · JSON").font(.headline); SyntaxDetailPreview(content: NSAttributedString(string: codeFixtures[0])) }.padding(24).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).background(Color(nsColor: .windowBackgroundColor)))
             : AnyView(HistoryView(model: model))
         // 离屏窗口不会可靠传播外观变化；显式传递指定主题才能验证同主题的SwiftUI颜色。

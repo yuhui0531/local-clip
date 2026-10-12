@@ -104,6 +104,8 @@ import LocalClipCore
     private let clock: any ClipClock
     private var savingSettings = false
     @Published public private(set) var recordUndoQuery: String?
+    /// 最近一次变更后存储是否仍有可撤销删除，供菜单禁用状态使用，by AI.Coding。
+    @Published public private(set) var canUndoDeletion = false
     public var canUndoFromSearch: Bool { recordUndoQuery != nil && recordUndoQuery == query }
     private var pendingSettingsEdits: [(inout SettingsSnapshot) -> Void] = []
     public private(set) var panelVisible = true
@@ -633,7 +635,7 @@ import LocalClipCore
                 case .delete, .clearOrdinary, .quota, .retention, .deleteCategory: await refreshUsage()
                 default: if settingsVisible { await refreshUsage() }
                 }
-                let undo = await store.undoAvailable()
+                let undo = await store.undoAvailable(); canUndoDeletion = undo
                 let deleted = { if case .delete = change { return true }; return false }()
                 if deleted { recordUndoQuery = undo ? query : nil }
                 // 分类归属成功后明确目标名称；只有提交完成才报告加入成功。
@@ -805,8 +807,11 @@ import LocalClipCore
         }
     }
     private var lastIntegrityCheck: ContinuousClock.Instant?
-    /// 二进制容量单位与真实计量一致。
-    public static func bytes(_ value: Int64) -> String { ByteCountFormatter.string(fromByteCount: value, countStyle: .binary) }
+    /// 二进制容量单位与真实计量一致；零值显示数字而非“Zero KB”，by AI.Coding。
+    public static func bytes(_ value: Int64) -> String {
+        let formatter = ByteCountFormatter(); formatter.countStyle = .binary; formatter.allowsNonnumericFormatting = false
+        return formatter.string(fromByteCount: value)
+    }
     public var ignoreDescription: String {
         guard let captureNotice else { return "" }
         let reason = captureNotice.reason, time = captureNotice.at
@@ -922,7 +927,7 @@ import LocalClipCore
         Task { do { try await store.moveItem(id: selectedID, categoryID: categoryID, delta: delta) } catch { message = "记录排序未保存" } }
     }
     public func undoDeletion() {
-        Task { do { try await store.undoDelete(); recordUndoQuery = nil; pendingDeletion.removeAll(); message = "已撤销删除" } catch { message = "不能撤销：期限、容量、策略或内容已变化" } }
+        Task { do { try await store.undoDelete(); recordUndoQuery = nil; canUndoDeletion = false; pendingDeletion.removeAll(); message = "已撤销删除" } catch { canUndoDeletion = false; message = "不能撤销：期限、容量、策略或内容已变化" } }
     }
     /// 依据当前记录ID逐页定位，不使用旧偏移。
     public func jumpToHistory(category: String? = nil) {

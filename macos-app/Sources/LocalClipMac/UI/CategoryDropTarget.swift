@@ -13,7 +13,7 @@ struct CategoryDropTarget: NSViewRepresentable {
         let button = CategoryButton()
         button.isBordered = false; button.bezelStyle = .rounded
         button.imagePosition = .imageLeft; button.imageHugsTitle = true
-        button.wantsLayer = true; button.layer?.cornerRadius = 16
+        button.wantsLayer = true; button.layer?.cornerRadius = 14
         button.target = button; button.action = #selector(CategoryButton.choose)
         button.registerForDraggedTypes([.init(HistoryViewModel.categoryDragType)])
         updateNSView(button, context: context)
@@ -23,8 +23,9 @@ struct CategoryDropTarget: NSViewRepresentable {
     /// 选择变化只更新标签外观，拖放会话及高亮保留在同一个原生按钮中。
     func updateNSView(_ button: CategoryButton, context: Context) {
         button.model = model; button.category = category; button.selected = selected
-        button.title = category.name
+        // 与SwiftUI工具栏标签一致：未选中次要色，选中主色加粗，by AI.Coding。
         button.font = .systemFont(ofSize: 13, weight: selected ? .semibold : .regular)
+        button.attributedTitle = NSAttributedString(string: category.name, attributes: [.font: button.font!, .foregroundColor: selected ? NSColor.labelColor : NSColor.secondaryLabelColor])
         let color = RichContent.colorValue(category.colorHex)
         button.image = NSImage(size: .init(width: 16, height: 14), flipped: false) { rect in
             let circle = NSBezierPath(ovalIn: .init(x: 0, y: 1, width: 12, height: 12))
@@ -47,15 +48,26 @@ struct CategoryDropTarget: NSViewRepresentable {
         var category: ClipCategory?
         var selected = false
         private var targeted = false
+        private var hovering = false
         override var intrinsicContentSize: NSSize {
             let width = (title as NSString).size(withAttributes: [.font: font ?? NSFont.systemFont(ofSize: 13)]).width
-            return .init(width: ceil(width) + 48, height: 32)
+            return .init(width: ceil(width) + 40, height: 28)
         }
+        override func updateTrackingAreas() {
+            super.updateTrackingAreas()
+            trackingAreas.forEach(removeTrackingArea)
+            addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self))
+        }
+        override func mouseEntered(with event: NSEvent) { hovering = true; updateAppearance() }
+        override func mouseExited(with event: NSEvent) { hovering = false; updateAppearance() }
 
         /// 悬停反馈直接改变原生层，不触发历史卡片的整体刷新。
         func updateAppearance() {
             let tint = RichContent.colorValue(category?.colorHex ?? "34C759")
-            layer?.backgroundColor = (targeted ? tint.withAlphaComponent(0.18) : selected ? NSColor.labelColor.withAlphaComponent(0.08) : .clear).cgColor
+            // 动态颜色需在当前外观下解析为CGColor，深浅切换后不残留旧值。
+            effectiveAppearance.performAsCurrentDrawingAppearance {
+                layer?.backgroundColor = (targeted ? tint.withAlphaComponent(0.18) : selected ? NSColor.labelColor.withAlphaComponent(0.09) : hovering ? NSColor.labelColor.withAlphaComponent(0.05) : .clear).cgColor
+            }
             layer?.borderColor = (targeted ? tint : .clear).cgColor
             layer?.borderWidth = targeted ? 1.5 : 0
         }
