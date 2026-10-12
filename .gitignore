@@ -36,11 +36,11 @@ DerivedData/
 *.zip
 
 # Benchmark & Probe Binaries
+# 只忽略探针二进制，不能误伤 *Probe.swift 等源码
 probe
 sql-probe
 rowid-probe
-*probe*
-*-probe-*
+**/bin/*probe*
 
 # SQLite Databases & Journal / WAL files (Runtime & Test generated)
 *.sqlite

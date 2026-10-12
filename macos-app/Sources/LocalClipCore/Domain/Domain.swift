@@ -115,6 +115,8 @@ public struct ClipboardSnapshot: Sendable {
     public var payload: ClipboardPayload
     public var source: SourceAttribution
     public var policyRevision: Int64
+    /// 采集后台解码阶段生成的派生缩略图；不参与内容身份。
+    public var thumbnail: Data?
     public init(payload: ClipboardPayload, count: Int = 0, at: Instant = SystemClock().now(), source: SourceAttribution = .unknown, revision: Int64 = 0, id: String = UUID().uuidString) {
         self.captureID = id; self.changeCount = count; self.capturedAt = at
         self.payload = payload; self.source = source; self.policyRevision = revision
@@ -141,12 +143,6 @@ public struct SettingsSnapshot: Codable, Equatable, Sendable {
         get { compactLayoutValue == true }
         set { compactLayoutValue = newValue }
     }
-    // 名称属于可选显示元数据，沿用同库JSON字段，不新增结构或迁移，by AI.Coding。
-    private var clipTitlesValue: [ClipID: String]?
-    public internal(set) var clipTitles: [ClipID: String] {
-        get { clipTitlesValue ?? [:] }
-        set { clipTitlesValue = newValue.isEmpty ? nil : newValue }
-    }
     public var retentionDays = 30
     public var defaultFormat: OutputFormat = .original
     public var pauseUntil: Instant?
@@ -158,6 +154,12 @@ public struct SettingsSnapshot: Codable, Equatable, Sendable {
         get { codeFilePasteEnabled == true }
         set { codeFilePasteEnabled = newValue }
     }
+    // 通过本应用复制/粘贴后置前；缺失字段按开启处理，by AI.Coding。
+    private var moveUsedToFrontValue: Bool?
+    public var moveUsedToFront: Bool {
+        get { moveUsedToFrontValue ?? true }
+        set { moveUsedToFrontValue = newValue }
+    }
     public var captureSounds = false
     public var showMenuIcon = true
     public var hideContents = false
@@ -166,7 +168,8 @@ public struct SettingsSnapshot: Codable, Equatable, Sendable {
     public var quickModifiers: UInt32 = 256
     public var boardModifiers: UInt32 = 2304
     public var quotaBytes = 500 * MiB
-    public var defaultAction: PasteAction = .copy
+    // 新安装Enter直接粘贴；已保存的设置按原值解码，不改变老用户行为，by AI.Coding。
+    public var defaultAction: PasteAction = .directPaste
     public var captureEnabled = true
     public var excludedBundleIDs: Set<String> = []
     // opt-in 编辑器列表默认关闭；缺失字段按空集合处理，by AI.Coding。

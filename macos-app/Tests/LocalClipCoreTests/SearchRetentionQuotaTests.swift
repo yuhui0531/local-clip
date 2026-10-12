@@ -157,7 +157,6 @@ struct SearchRetentionQuotaTests {
         clock.advance(1)
         let ordinary = insertedID(try await store.ingest(image(2, 70_000), at: clock.now()))
         settings = try await store.settings(); settings.quotaBytes = try await store.usage().measuredTotal + 64 * 1024
-        await store.waitForPageCacheWarmupForTesting()
         let db = try SQLiteConnection(root.appendingPathComponent("History/history.sqlite")); try db.configure(); try Schema.writeSettings(db, settings); try db.close()
         let old = try Data(contentsOf: root.appendingPathComponent("History/history.sqlite"))
         do { _ = try await store.ingest(image(3, 300_000), at: clock.now()); Issue.record("不可能容量仍成功") } catch { #expect(error as? StoreError == .quotaExceeded) }
@@ -176,7 +175,6 @@ struct SearchRetentionQuotaTests {
         let store = try HistoryStore(location: root)
         let id = insertedID(try await store.ingest(fixture("FULL-TAIL-需求"), at: SystemClock().now()))
         let detail = try await store.detail(id: id, at: SystemClock().now())
-        await store.waitForPageCacheWarmupForTesting()
         let strategy = try CommitStrategy(root: root)
         try strategy.read { try $0.exec("DELETE FROM text_content") }
         #expect(try await store.search(.init("需求")).items.count == 1)

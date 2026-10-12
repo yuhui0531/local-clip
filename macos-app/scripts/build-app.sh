@@ -19,6 +19,12 @@ cp "$root/Resources/LocalClip.icns" "$bundle/Contents/Resources/LocalClip.icns"
 for resource in "$bin"/*.bundle; do
   [ ! -d "$resource" ] || cp -R "$resource" "$bundle/Contents/Resources/"
 done
-codesign --force --sign - "$bundle"
+# 设置 LOCALCLIP_SIGN_IDENTITY（如 "Developer ID Application: …"）可用稳定证书签名，
+# 更新后辅助功能授权不失效；未设置时保持 ad hoc 签名，by AI.Coding。
+if [ -n "${LOCALCLIP_SIGN_IDENTITY:-}" ]; then
+  codesign --force --options runtime --timestamp --sign "$LOCALCLIP_SIGN_IDENTITY" "$bundle"
+else
+  codesign --force --sign - "$bundle"
+fi
 codesign --verify --strict "$bundle"
 printf '%s\n' "$bundle"

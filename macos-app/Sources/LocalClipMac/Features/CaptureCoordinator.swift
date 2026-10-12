@@ -125,7 +125,12 @@ import LocalClipCore
             let epoch = captureEpoch
             let raw = queue.removeFirst(); queueBytes -= raw.payload.byteCount
             let started = ContinuousClock.now
-            var snapshot = await Task.detached(priority: .utility) { ContentDecoder.decode(raw) }.value
+            // 缩略图在同一后台阶段生成并随记录落库，展示时不再读取与解码原图，by AI.Coding。
+            var snapshot = await Task.detached(priority: .utility) { () -> ClipboardSnapshot in
+                var decoded = ContentDecoder.decode(raw)
+                if [.image, .mixed].contains(decoded.payload.kind), case .image(let data) = ThumbnailRenderer.render(decoded.payload) { decoded.thumbnail = data }
+                return decoded
+            }.value
             if policy.timingEnabled { StageTiming.record("capture_decode", since: started, count: snapshot.payload.items.count) }
             guard !pausePending, policy.captureEnabled, (policy.pauseUntil ?? 0) <= clock.now(), epoch == captureEpoch else { ignored(.paused); continue }
             do {

@@ -52,7 +52,7 @@ struct BenchmarkGenerator {
                 imageManifest.append(["index": index - 10000, "type": type, "bytes": data.count, "sha256": ContentFingerprint.hash(data), "width":1920,"height":1080]) }
             let payload = ClipboardPayload([.init([.init(type, data)])]); let id = "benchmark-\(index)"; let digest = ContentFingerprint.hash(data)
             hash.update(data: Data(type.utf8)); hash.update(data: data)
-            try db.run("INSERT INTO clips VALUES(?,?,?,?,?, ?,?,?,?,?,?)", [.text(id), .text(payload.fingerprint), .integer(now), .integer(now + Int64(index)), .integer(1), .text(payload.kind.rawValue), .integer(index % 20 == 0 ? 1 : 0), .null, .text("来源未知"), .text("unknown"), .text(String(text.prefix(180)))])
+            try db.run("INSERT INTO clips(id,contentHash,firstCopiedAtMs,lastCopiedAtMs,copyCount,kind,isFavorite,sourceBundleID,sourceName,sourceBasis,previewText) VALUES(?,?,?,?,?, ?,?,?,?,?,?)", [.text(id), .text(payload.fingerprint), .integer(now), .integer(now + Int64(index)), .integer(1), .text(payload.kind.rawValue), .integer(index % 20 == 0 ? 1 : 0), .null, .text("来源未知"), .text("unknown"), .text(String(text.prefix(180)))])
             try db.run("INSERT INTO items VALUES(?,?,?)", [.text(id), .integer(0), .text("[\"\(type)\"]")])
             try db.run("INSERT INTO blobs VALUES(?,?,?)", [.text(digest), .integer(Int64(data.count)), .blob(data)])
             try db.run("INSERT INTO representations VALUES(?,?,?,?)", [.text(id), .integer(0), .text(type), .text(digest)])

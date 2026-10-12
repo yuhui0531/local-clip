@@ -68,7 +68,7 @@ import LocalClipCore
                 if event.window === window {
                     let text = "type=\(event.type.rawValue) point=\(NSStringFromPoint(event.locationInWindow)) buttons=\(NSEvent.pressedMouseButtons)\n"
                     let log = output.deletingLastPathComponent().appendingPathComponent("pointer-events.log")
-                    if let handle = try? FileHandle(forWritingTo: log) { try? handle.seekToEnd(); try? handle.write(contentsOf: Data(text.utf8)); try? handle.close() }
+                    if let handle = try? FileHandle(forWritingTo: log) { _ = try? handle.seekToEnd(); try? handle.write(contentsOf: Data(text.utf8)); try? handle.close() }
                     else { try? Data(text.utf8).write(to: log) }
                 }
                 return event

@@ -49,8 +49,8 @@ Whether you are copying plain text, rich formats (RTF/HTML), code snippets, high
 - **Drag-and-Drop Categorization**: Effortlessly organize clips by dragging cards into category tabs. Items within a category maintain convenient newest-first ordering.
 
 #### ⚡ Blazing Fast Performance
-- **Swift 6.2 & SQLite WAL Engine**: Native AppKit + SwiftUI architecture backed by a robust SQLite persistence layer with atomic fault-tolerant commits.
-- **Sub-Millisecond Queries**: Paginated memory caching, viewport-driven progressive rendering, and instant literal search across Chinese phrases, code symbols, and URL fragments.
+- **Swift 6.2 & Transactional SQLite**: Native AppKit + SwiftUI architecture. Every change is a single SQLite transaction with a rollback journal and full fsync, so a crash leaves either the complete old state or the complete new state. Saving a copy takes ~3 ms and stays flat as history grows.
+- **Fast Queries**: Browsing pages in ~1 ms and literal search (body text, custom card names, source app) across Chinese phrases, code symbols, and URL fragments in ~10–30 ms for thousands of clips, with viewport-driven progressive loading.
 - **Zero Startup Lag**: Automatic monitoring resumes seamlessly upon storage recovery without requiring manual activation.
 
 ---
@@ -70,7 +70,8 @@ Whether you are copying plain text, rich formats (RTF/HTML), code snippets, high
 | **Toggle Drawer** | `⌥ + ⌘ + V` (Option-Command-V) | Open or dismiss the LocalClip history panel from anywhere |
 | **Navigate** | `←` / `→` or Scroll Wheel | Browse history horizontally |
 | **Direct Paste** | `Double Click` (Card body) | Restore original formats and paste into target app |
-| **Copy to Board** | `Enter` / `Return` | Restore selected item to system clipboard |
+| **Paste** | `Enter` / `Return` | Paste the selected item into the previously focused app (configurable to copy only in Settings) |
+| **Copy to Board** | `⌘ + C` | Restore selected item to system clipboard without pasting |
 | **Rename Card** | `Double Click` (Card Header) / Context Menu | In-line rename (Press `Enter` to commit, `Esc` to cancel) |
 | **Inspect Detail** | `Space` | Toggle detailed metadata and preview inspector |
 | **Dismiss Panel** | `Esc` / Click Outside | Instantly close the bottom drawer |

@@ -136,9 +136,12 @@ import LocalClipCore
             let alert = NSAlert(); alert.messageText = "LocalClip 无法打开存储"; alert.informativeText = "原库未覆盖。请检查磁盘、权限或数据库版本。错误类别：\(error)"; alert.runModal()
         }
     }
-    /// LaunchServices可能把再次打开交给旧进程；显式启动新实例，由其接替当前进程。
+    /// 同版本再次打开直接显示历史；只有磁盘上已安装新版本时才启动新实例接替，by AI.Coding。
     public func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         guard !relaunchRequested else { return false }
+        if !Self.installedVersionChanged(running: Bundle.main.infoDictionary, installed: NSDictionary(contentsOf: Bundle.main.bundleURL.appendingPathComponent("Contents/Info.plist")) as? [String: Any]) {
+            showHistory(); return false
+        }
         relaunchRequested = true
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.createsNewApplicationInstance = true
@@ -157,6 +160,12 @@ import LocalClipCore
             }
         }
         return false
+    }
+    /// 读不到磁盘版本时按未变化处理，避免误杀当前实例。
+    static func installedVersionChanged(running: [String: Any]?, installed: [String: Any]?) -> Bool {
+        guard let installed else { return false }
+        let key = { (info: [String: Any]?) in "\(info?["CFBundleShortVersionString"] ?? "")-\(info?["CFBundleVersion"] ?? "")" }
+        return key(running) != key(installed)
     }
     /// 菜单栏始终保留，即使快捷键或权限不可用。
     private func makeMenu() {

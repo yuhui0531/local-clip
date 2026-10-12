@@ -2,6 +2,30 @@
 import AppKit
 import SwiftUI
 
+/// 历史横向滚动条固定为细的悬浮样式：连接鼠标或系统设为“始终显示”时也不出现粗的常驻滚动条，
+/// 仍可拖动，只在滚动时出现。放在滚动内容内部以取得所在的NSScrollView，by AI.Coding。
+struct OverlayScrollerStyle: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { Probe() }
+    func updateNSView(_ nsView: NSView, context: Context) { (nsView as? Probe)?.apply() }
+    @MainActor final class Probe: NSView {
+        override init(frame: NSRect) {
+            super.init(frame: frame)
+            // 系统偏好变化时NSScrollView会重置样式，需要重新应用；selector观察者随视图释放自动移除。
+            NotificationCenter.default.addObserver(self, selector: #selector(preferenceChanged), name: NSScroller.preferredScrollerStyleDidChangeNotification, object: nil)
+        }
+        required init?(coder: NSCoder) { nil }
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+        override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); apply() }
+        @objc private func preferenceChanged() { DispatchQueue.main.async { [weak self] in self?.apply() } }
+        func apply() {
+            guard let scrollView = enclosingScrollView else { return }
+            if scrollView.scrollerStyle != .overlay { scrollView.scrollerStyle = .overlay }
+            scrollView.autohidesScrollers = true
+            scrollView.horizontalScroller?.controlSize = .small
+        }
+    }
+}
+
 struct HistoryScrollMetrics: Equatable {
     var offset: CGFloat = 0
     var maximum: CGFloat = 0

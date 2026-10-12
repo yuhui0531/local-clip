@@ -54,16 +54,20 @@ struct ReviewStorageRegressionTests {
         #expect(try await store.usage().measuredTotal <= settings.quotaBytes)
         try db.close()
     }
-    /// 每个缩略图只写有界内存，数据库字节、修订和磁盘占用均保持。
+    /// 缩略图首次生成后落库一次；不递增历史修订，重复缓存不再写库，by AI.Coding。
     @Test func thumbnailsDoNotCommitHistory() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let store = try HistoryStore(location: root)
         let id = insertedID(try await store.ingest(fixture("thumbnail-fixture"), at: SystemClock().now()))
         let metadata = try await store.metadata(id: id, at: SystemClock().now())
-        let path = root.appendingPathComponent("History/history.sqlite"), before = try Data(contentsOf: path)
-        for value in 0..<20 { #expect(try await store.cacheThumbnail(id: id, revision: metadata.revision, data: Data([UInt8(value)]))) }
+        let path = root.appendingPathComponent("History/history.sqlite")
+        #expect(try await store.cacheThumbnail(id: id, revision: metadata.revision, data: Data([0])))
+        let before = try Data(contentsOf: path)
+        for value in 1..<20 { #expect(try await store.cacheThumbnail(id: id, revision: metadata.revision, data: Data([UInt8(value)]))) }
         #expect(try Data(contentsOf: path) == before)
+        let reopened = try HistoryStore(location: root)
+        #expect(try await reopened.thumbnail(id: id, at: SystemClock().now()) == Data([0]))
         #expect(try await store.thumbnail(id: id, at: SystemClock().now()) == Data([19]))
         #expect(try await store.metadata(id: id, at: SystemClock().now()).revision == metadata.revision)
         let deletion = try await store.preview(.delete([id])); _ = try await store.apply(deletion.token)
@@ -86,7 +90,6 @@ struct ReviewStorageRegressionTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let store = try HistoryStore(location: root)
         for index in 0..<7 { _ = try await store.ingest(fixture("rebuild-\(index)-tail"), at: SystemClock().now()) }
-        await store.waitForPageCacheWarmupForTesting()
         let db = try SQLiteConnection(root.appendingPathComponent("History/history.sqlite")); try db.configure(); try db.exec("DELETE FROM text_content"); try db.close()
         #expect(try await store.search(.init("tail")).items.count == 7)
         #expect(try await store.rebuildSearchIndex(limit: 3) == 3)

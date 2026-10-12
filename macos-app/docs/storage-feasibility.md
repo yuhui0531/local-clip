@@ -3,6 +3,7 @@
 实际执行：`rtk proxy bash macos-app/scripts/test.sh`。完整输出在 evidence/automated 各运行目录。
 
 使用生产 CommitStrategy、临时真实 SQLite 文件、DELETE journal、synchronous FULL、foreign_keys ON、auto_vacuum FULL，均读回校验。
+> 已被取代：数据库schema v4起写入改为原库单事务，候选库仅用于首次建库，见[architecture.md](architecture.md)。
 源库所有连接关闭后优先 APFS clonefile 生成独立候选；不支持 clone 时回退 SQLite backup。候选内变更与回收，完整 quick_check / FK校验后关闭、实际计量、fsync/F_FULLFSYNC、同卷 rename 提交、目录fsync。重开核对候选预期的 storeRevision 和 lastOperationID；提交点后的不可用单独报告，不能假称已回滚或重放新增。
 
 实际500MiB场景：490MiB不可释放载荷、5MiB普通载荷，原库520,192,000字节；新增20MiB，即便只在候选删除普通载荷仍超配额。拒绝后原库字节和两条旧记录保持。

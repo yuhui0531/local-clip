@@ -17,10 +17,11 @@ public enum StorageProbe {
     /// 独立数据目录与固定 fixture，不能进入正式 UI 或 Release。
     public static func run(root: URL, point: String) throws {
         let setup = try CommitStrategy(root: root)
-        try setup.initialize { db in try db.exec("CREATE TABLE fixture(id INTEGER PRIMARY KEY, data BLOB); INSERT INTO fixture VALUES(1,zeroblob(65536))") }
+        try setup.initialize { db in try db.exec("CREATE TABLE fixture(id INTEGER PRIMARY KEY, data BLOB); INSERT INTO fixture VALUES(1,randomblob(4194304))") }
         guard let point = FaultPoint(rawValue: point) else { throw StoreError.invalidSettings }
         let crashing = try CommitStrategy(root: root, faults: KillAt(point: point))
-        try crashing.commit(quota: 4 * MiB) { db in try db.exec("DELETE FROM fixture; INSERT INTO fixture VALUES(2,zeroblob(131072))") }
+        // 大事务配合小页缓存强制脏页溢写进原库，提交前被杀必须真正依赖热日志回滚，by AI.Coding。
+        try crashing.commit(quota: 64 * MiB) { db in try db.exec("PRAGMA mmap_size=0; PRAGMA cache_size=16; PRAGMA cache_spill=16; DELETE FROM fixture; INSERT INTO fixture VALUES(2,randomblob(16777216))") }
     }
     /// 生产历史模型包含收藏、普通条目、共享引用及需要淘汰的新内容。
     public static func runHistory(root: URL, point: String) async throws {
@@ -33,7 +34,6 @@ public enum StorageProbe {
         _ = try await store.ingest(input(2,70_000), at: now + 1)
         // 根据当前schema的真实磁盘占用限定fixture，不沿用旧schema的固定页开销，by AI.Coding。
         settings = try await store.settings(); settings.quotaBytes = try await store.usage().measuredTotal + 64 * 1024
-        await store.waitForPageCacheWarmupForTesting()
         let db = try SQLiteConnection(root.appendingPathComponent("History/history.sqlite")); try db.configure(); try Schema.writeSettings(db, settings); try db.close()
         let bytes = try Data(contentsOf: root.appendingPathComponent("History/history.sqlite"))
         try Data(ContentFingerprint.hash(bytes).utf8).write(to: root.appendingPathComponent("before.sha256"))

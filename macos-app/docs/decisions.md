@@ -8,6 +8,7 @@ PROJECT_ROOT=/Users/ronny/VscodeProjects/rea，CHANGE_DIR=paste-report/developme
 来源只认声明 org.nspasteboard.source，不用前台应用推断。未知默认记录，排除不覆盖未知。
 不引入远程依赖，不访问剪贴板中的链接。候选提交先保证正确性；没有预算证明时不启用普通事务快路径。
 
+> 已被取代：数据库schema v4起写入改为原库单事务，见[architecture.md](architecture.md)。
 性能优化的明确差异：候选复制从每次SQLite backup改为APFS clonefile优先，unsupported回退backup；完整候选quick_check/FK、FULL事务、同步与原子替换不变。重开按设计核对revision/operationID，避免重复完整扫描。SQLite可用时启用192MiB mmap以减少扫描复制；不是常驻分配承诺。
 
 字面全文查询的内存派生快照绑定storeRevision：NFC+ASCII标准化后用UTF8 Data字面匹配，仅为内存加速，不是第二份持久存储。缺文本缓存时从完整原始正文恢复。变更立即丢弃旧快照；分页、queryID、详情generation与缩略图revision共同阻止删除内容复活。

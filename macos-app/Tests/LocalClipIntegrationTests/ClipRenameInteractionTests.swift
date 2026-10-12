@@ -62,7 +62,7 @@ private final class RenameClock: ClipClock, @unchecked Sendable {
         // 明确暂停持久化尚未执行的窗口，再让名称事件发布同版本策略，by AI.Coding。
         model.capture.requestPause()
         model.beginRename(id); model.saveRename(id: id, title: "Saved name")
-        try await wait { model.items.first?.title == "Saved name" && model.settings.clipTitles[id] == "Saved name" && !model.historyBusy }
+        try await wait { model.items.first?.title == "Saved name" && !model.historyBusy }
         raw.user("must-not-read"); model.capture.tick()
         #expect(raw.reads.isEmpty)
         #expect(model.selectedIDs == selection && model.selectedID == selected)

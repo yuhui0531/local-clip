@@ -17,7 +17,7 @@ import Testing
             let font = try #require(normal.attribute(.font, at: index, effectiveRange: nil) as? NSFont)
             let paragraph = try #require(normal.attribute(.paragraphStyle, at: index, effectiveRange: nil) as? NSParagraphStyle)
             #expect(font.pointSize == 10)
-            #expect(paragraph.lineBreakMode == .byCharWrapping)
+            #expect(paragraph.lineBreakMode == .byWordWrapping)
             #expect(paragraph.lineSpacing == 3)
             #expect(paragraph.paragraphSpacing == 0)
             let compact = try #require(tiny.attribute(.paragraphStyle, at: index, effectiveRange: nil) as? NSParagraphStyle)

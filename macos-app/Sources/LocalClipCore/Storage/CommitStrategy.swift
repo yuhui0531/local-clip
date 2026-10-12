@@ -1,4 +1,4 @@
-// 单卷候选库提交；任何提交前失败不修改原库，by AI.Coding。
+// 原库事务提交；任何提交前失败由SQLite回滚日志恢复完整旧态，by AI.Coding。
 import Foundation
 import Darwin
 final class CommitStrategy {
@@ -9,9 +9,6 @@ final class CommitStrategy {
     private(set) var peakTemporaryBytes: Int64 = 0
     private(set) var lastCandidateClipCount: Int64 = 0
     private(set) var lastCandidateBytes: Int64 = 0
-    private var validatedSource = false
-    /// 启动/恢复完成全库与外键校验后，才允许已验证APFS源库的局部提交校验，by AI.Coding。
-    func sourceDidValidate() { validatedSource = true }
     /// 创建专用布局；历史日志与待回收候选均纳入实际占用。
     init(root: URL, faults: any StorageFaultInjector = NoStorageFault()) throws {
         self.root = root; self.faults = faults
@@ -20,10 +17,10 @@ final class CommitStrategy {
         try FileManager.default.createDirectory(at: databaseURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
     }
-    /// 首次初始化也在候选内完成，不能留下半份 schema。
+    /// 首次初始化在独立候选内完成并rename发布，不能留下半份 schema。
     func initialize(_ body: (SQLiteConnection) throws -> Void) throws {
         guard !FileManager.default.fileExists(atPath: databaseURL.path) else { return }
-        try commit(quota: Int64.max, body)
+        try create(body)
     }
     /// 每次访问一个连接，actor 调用期间没有 await。
     func read<T>(_ body: (SQLiteConnection) throws -> T) throws -> T {
@@ -57,94 +54,83 @@ final class CommitStrategy {
         for file in try FileManager.default.contentsOfDirectory(at: staging, includingPropertiesForKeys: nil) {
             do { try FileManager.default.removeItem(at: file) } catch { /* 无法回收时仍纳入容量，不能报已释放。 */ }
         }
+        try discardStaleJournal()
         return try Self.bytes(staging)
     }
-    /// 候选变更 → 校验和物理计量 → fsync → rename，提交点只有一个。
+    /// 崩溃于页写入前会留下非热日志：取得排他锁时SQLite先回滚任何热日志，
+    /// 之后仍存在的日志不含需要恢复的数据，删除以免虚占容量，by AI.Coding。
+    private func discardStaleJournal() throws {
+        let journal = URL(fileURLWithPath: databaseURL.path + "-journal")
+        guard FileManager.default.fileExists(atPath: databaseURL.path), FileManager.default.fileExists(atPath: journal.path) else { return }
+        let db = try SQLiteConnection(databaseURL)
+        try db.exec("BEGIN EXCLUSIVE; ROLLBACK")
+        try db.close()
+        if FileManager.default.fileExists(atPath: journal.path) { try FileManager.default.removeItem(at: journal) }
+    }
+    /// 原库上的单一SQLite事务：回滚日志保证中断只留下完整旧态，COMMIT是唯一提交点。
+    /// 配额按事务内实际页数检查，超额回滚；dryRun执行同样变更后回滚，不改原库，by AI.Coding。
+    /// 旧协议每次写入都克隆并替换整库，耗时随库大小线性增长，因此改为原地事务。
     func commit(quota: Int64, allowOverQuota: Bool = false, estimatedGrowth: Int64 = 0, dryRun: Bool = false, finalize: ((SQLiteConnection, Int64) throws -> Void)? = nil, _ body: (SQLiteConnection) throws -> Void) throws {
-        let oldSize = try Self.bytes(databaseURL.deletingLastPathComponent())
         let filesystem = try FileManager.default.attributesOfFileSystem(forPath: root.path)
+        // 回滚日志只保存被改页的原像；按增量三倍预留，不再需要整库副本空间。
         guard let free = filesystem[.systemFreeSize] as? NSNumber,
-              free.int64Value > oldSize * 3 + estimatedGrowth * 3 + 8 * MiB else { throw StoreError.diskFull }
-        let operation = staging.appendingPathComponent(UUID().uuidString)
-        try FileManager.default.createDirectory(at: operation, withIntermediateDirectories: true)
-        let candidate = operation.appendingPathComponent("candidate.sqlite")
+              free.int64Value > estimatedGrowth * 3 + 8 * MiB else { throw StoreError.diskFull }
+        let pending = try Self.bytes(staging) + Self.bytes(root.appendingPathComponent("Exports"))
+        let db = try SQLiteConnection(databaseURL)
+        defer { try? db.close() }
+        try db.configure()
+        // macOS的fsync不刷写盘缓存；保持原协议F_FULLFSYNC级别的持久性。
+        try db.exec("PRAGMA fullfsync=ON")
+        try db.exec("BEGIN IMMEDIATE")
         var committed = false
         do {
-            var cloned = false
-            if FileManager.default.fileExists(atPath: databaseURL.path) {
-                // actor中原库无开放写事务；APFS克隆为独立COW文件，候选改动不影响原库。
-                if Darwin.clonefile(databaseURL.path, candidate.path, 0) == 0 { cloned = true }
-                else if errno != ENOTSUP && errno != EINVAL && errno != EXDEV {
-                    if errno == ENOSPC { throw StoreError.diskFull }
-                    throw StoreError.ioFailure
-                }
-            }
-            let db = try SQLiteConnection(candidate)
-            if FileManager.default.fileExists(atPath: databaseURL.path) {
-                if !cloned {
-                    let old = try SQLiteConnection(databaseURL)
-                    try old.configure(); try old.backup(to: db); try old.close()
-                }
-            } else { try db.exec("PRAGMA auto_vacuum=FULL") }
             try faults.check(.candidateCreated)
-            // 不用全文件预读验证权限；候选读写权限失败仍在变更事务之前拒绝，by AI.Coding。
-            guard Darwin.access(candidate.path, R_OK | W_OK) == 0 else { throw StoreError.ioFailure }
-            try db.configure()
-            guard try db.scalarInt("PRAGMA auto_vacuum") == 1 else { throw StoreError.ioFailure }
-            try db.exec("BEGIN IMMEDIATE")
-            do {
-                try body(db)
-                peakTemporaryBytes = max(peakTemporaryBytes, try Self.bytes(operation))
-                try faults.check(.candidateWritten); try db.exec("COMMIT")
-            }
-            catch { try? db.exec("ROLLBACK"); throw error }
-            if let finalize {
-                let pending = try Self.bytes(staging) + Self.bytes(root.appendingPathComponent("Exports")) - Self.bytes(operation)
-                try finalize(db, pending)
-            }
-            // 已验证源库的COW副本由SQLite约束校验变更页；不再为小写入读取全部正文。
-            // 初始化、未验证源库和非APFS备份仍执行完整校验，by AI.Coding。
-            if !cloned || !validatedSource {
-                guard try db.scalarText("PRAGMA quick_check") == "ok", try db.rows("PRAGMA foreign_key_check").isEmpty else { throw StoreError.corruptPayload }
-            }
-            let identity: (Int64, String)?
-            if try db.scalarInt("SELECT COUNT(*) FROM sqlite_master WHERE name='store_meta'") == 1 {
-                identity = (try db.scalarInt("SELECT storeRevision FROM store_meta WHERE singletonID=1"), try db.scalarText("SELECT lastOperationID FROM store_meta WHERE singletonID=1"))
-            } else { identity = nil }
+            try body(db)
+            try finalize?(db, pending)
+            try faults.check(.candidateWritten)
+            let used = try Self.pageBytes(db)
+            peakTemporaryBytes = max(peakTemporaryBytes, used)
             if try db.scalarInt("SELECT COUNT(*) FROM sqlite_master WHERE name='clips'") == 1 { lastCandidateClipCount = try db.scalarInt("SELECT COUNT(*) FROM clips") }
+            lastCandidateBytes = used
+            if !allowOverQuota && used + pending > quota { throw StoreError.quotaExceeded }
             try faults.check(.candidateValidated)
-            peakTemporaryBytes = max(peakTemporaryBytes, try Self.bytes(operation))
-            try db.close()
-            let actual = try Self.bytes(operation)
-            lastCandidateBytes = actual
-            let pending = try Self.bytes(staging) + Self.bytes(root.appendingPathComponent("Exports")) - actual
-            if !allowOverQuota && actual + pending > quota { throw StoreError.quotaExceeded }
-            if dryRun {
-                try FileManager.default.removeItem(at: operation)
-                return
-            }
-            try syncFile(candidate)
+            if dryRun { try db.exec("ROLLBACK"); return }
             try faults.check(.beforeReplace)
-            // rename 在同卷替换已有文件为原子操作，原库从未先删除。
-            guard Darwin.rename(candidate.path, databaseURL.path) == 0 else { throw StoreError.ioFailure }
+            try db.exec("COMMIT")
             committed = true
-            try syncDirectory(databaseURL.deletingLastPathComponent())
             try faults.check(.afterReplace)
             try faults.check(.reopen)
-            let verify = try SQLiteConnection(databaseURL)
-            if let identity {
-                guard try verify.scalarInt("SELECT storeRevision FROM store_meta WHERE singletonID=1") == identity.0,
-                      try verify.scalarText("SELECT lastOperationID FROM store_meta WHERE singletonID=1") == identity.1 else { throw StoreError.postCommitUnavailable }
-            } else {
-                guard try verify.scalarText("PRAGMA quick_check") == "ok" else { throw StoreError.postCommitUnavailable }
-            }
-            try verify.close()
-            do { try FileManager.default.removeItem(at: operation) } catch { /* 保留可计量的待回收目录。 */ }
         } catch {
-            do { try FileManager.default.removeItem(at: operation) } catch { /* 删除失败计入容量。 */ }
             if committed { throw StoreError.postCommitUnavailable }
+            try? db.exec("ROLLBACK")
             throw error
         }
+    }
+    /// 事务内实际占用：FULL autovacuum在提交时截断空闲页，故按非空闲页计算。
+    static func pageBytes(_ db: SQLiteConnection) throws -> Int64 {
+        try (db.scalarInt("PRAGMA page_count") - db.scalarInt("PRAGMA freelist_count")) * db.scalarInt("PRAGMA page_size")
+    }
+    /// 新库在staging完整建成、校验、同步后一次rename发布。
+    private func create(_ body: (SQLiteConnection) throws -> Void) throws {
+        let operation = staging.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: operation, withIntermediateDirectories: true)
+        defer { do { try FileManager.default.removeItem(at: operation) } catch { /* 删除失败计入容量。 */ } }
+        let candidate = operation.appendingPathComponent("candidate.sqlite")
+        let db = try SQLiteConnection(candidate)
+        defer { try? db.close() }
+        try db.exec("PRAGMA auto_vacuum=FULL")
+        try db.configure()
+        try faults.check(.candidateCreated)
+        try db.exec("BEGIN IMMEDIATE")
+        do { try body(db); try faults.check(.candidateWritten); try db.exec("COMMIT") }
+        catch { try? db.exec("ROLLBACK"); throw error }
+        guard try db.scalarText("PRAGMA quick_check") == "ok", try db.rows("PRAGMA foreign_key_check").isEmpty else { throw StoreError.corruptPayload }
+        try faults.check(.candidateValidated)
+        try db.close()
+        try syncFile(candidate)
+        try faults.check(.beforeReplace)
+        guard Darwin.rename(candidate.path, databaseURL.path) == 0 else { throw StoreError.ioFailure }
+        try syncDirectory(databaseURL.deletingLastPathComponent())
     }
     /// 候选内容同步到磁盘，失败属于提交前失败。
     private func syncFile(_ url: URL) throws {

@@ -40,9 +40,13 @@ import LocalClipCore
         get { listState[\.items] }
         set {
             listState[\.items] = newValue
-            if let renamingID, !newValue.contains(where: { $0.id == renamingID }) { cancelRename(id: renamingID) }
+            itemIDs = Set(newValue.map(\.id))
+            if let renamingID, !itemIDs.contains(renamingID) { cancelRename(id: renamingID) }
         }
     }
+    /// 与items同步的ID集合；卡片任务与选择检查O(1)，全选大量历史时不逐项线性扫描，by AI.Coding。
+    private var itemIDs: Set<ClipID> = []
+    public func contains(_ id: ClipID) -> Bool { itemIDs.contains(id) }
     public private(set) var selectedID: ClipID? { get { listState[\.selectedID] } set { listState[\.selectedID] = newValue } }
     public private(set) var selectedMetadata: ClipMetadata? { get { listState.selectedMetadata } set { listState.selectedMetadata = newValue } }
     @Published public private(set) var detailLoading = false
@@ -348,7 +352,7 @@ import LocalClipCore
                     items = visible; cursor = window.cursor; pageRevision = page.revision; loading = false
                     if preserveWindow {
                         selectedIDs.formIntersection(Set(items.map(\.id)))
-                        if let selectedID, items.contains(where: { $0.id == selectedID }) { select(selectedID, preserveSelection: true) }
+                        if let selectedID, contains(selectedID) { select(selectedID, preserveSelection: true) }
                         else { select(items.isEmpty ? nil : items[min(previousIndex, items.count - 1)].id) }
                     } else {
                         select(items.first?.id)
@@ -402,7 +406,7 @@ import LocalClipCore
         }
         let id = queryID; loading = true
         let previousCount = items.count, previousSelection = selectedID
-        let request = SearchRequest(query, favorites: favorites, kind: kind, cursor: cursor, queryID: id, pageSize: pageSize ?? min(50, max(8, viewportPageSize * 2)), categoryIDs: activeCategories, sourceBundleID: sourceFilter, from: dateBounds?.0, until: dateBounds?.1)
+        let request = pageRequest(cursor: cursor, queryID: id, pageSize: pageSize ?? min(50, max(8, viewportPageSize * 2)))
         // 一个在途分页任务合并连续滚动；查询切换立即取消，旧页不能混入新筛选，by AI.Coding。
         paging = Task {
             do {
@@ -509,7 +513,7 @@ import LocalClipCore
         let previousCount = items.count
         items.removeAll { !isVisible($0) }; selectedIDs.subtract(pendingDeletion)
         if let detail, !isVisible(detail.summary) { invalidateDetail() }
-        if let selectedID, !items.contains(where: { $0.id == selectedID }) { select(items.first?.id) }
+        if let selectedID, !contains(selectedID) { select(items.first?.id) }
         // 本页到期后重新取第一页，让更旧但仍有效的收藏不会困在不可见的下一页。
         if previousCount != items.count { refresh() }
         scheduleVisibilityDeadline()
@@ -543,12 +547,13 @@ import LocalClipCore
             let result = await paste.perform(.init(ids: ids, format: format ?? settings.defaultFormat, action: action ?? settings.defaultAction, target: target))
             message = result.message + (paste.smartPasteNotice.map { "；" + $0 } ?? "")
             notifyPasteResult(result)
+            await recordUse(ids, result)
         }
     }
     @Published public private(set) var renamingID: ClipID?
     /// 只编辑指定卡片的名称，不改变单选/多选与当前滚动窗口，by AI.Coding。
     public func beginRename(_ id: ClipID) {
-        guard !dragActive, items.contains(where: { $0.id == id }) else { return }
+        guard !dragActive, contains(id) else { return }
         renamingID = id
     }
     /// 取消仅移除编辑状态，不写库，by AI.Coding。
@@ -567,7 +572,7 @@ import LocalClipCore
     }
     /// 双击恢复原格式后向原应用焦点粘贴；Finder文件对象仍复制到其当前实际目录。
     public func doubleClick(_ id: ClipID) {
-        guard items.contains(where: { $0.id == id }) else { return }
+        guard contains(id) else { return }
         if !selectedIDs.contains(id) { select(id) }
         focusResults?()
         let ids = orderedSelection
@@ -578,6 +583,15 @@ import LocalClipCore
             let result = await paste.perform(.init(ids: ids, format: settings.defaultFormat, action: copyFiles ? .copy : .directPaste, target: rememberedTarget), copyFilesToFinder: copyFiles)
             message = result.message + (paste.smartPasteNotice.map { "；" + $0 } ?? "")
             notifyPasteResult(result)
+            await recordUse(ids, result)
+        }
+    }
+    /// 内容已写入剪贴板的结果视为一次使用；按设置置前，失败不影响已完成的复制，by AI.Coding。
+    private func recordUse(_ ids: [ClipID], _ result: PasteResult) async {
+        guard settings.moveUsedToFront else { return }
+        switch result {
+        case .copied, .commandSent, .filesCopied, .fallback: try? await store.touch(ids: ids, at: clock.now())
+        case .failed: break
         }
     }
     /// 仅在失败或回退时提示；发出粘贴指令后不弹窗打断使用。
@@ -635,7 +649,7 @@ import LocalClipCore
     }
     /// 键盘删除沿用同一预览/确认/事务流程，不另造直接删库入口。
     public func deleteSelected() {
-        guard let id = selectedID, items.contains(where: { $0.id == id }), !changingHistory else { return }
+        guard let id = selectedID, contains(id), !changingHistory else { return }
         change(.delete(orderedSelection))
     }
     /// 分类在面板内编辑，只有持久化成功后才更新标签和归属入口。
@@ -710,7 +724,7 @@ import LocalClipCore
               clock.now() <= drag.expiresAt, !showingCategoryEditor,
               categories.contains(where: { $0.id == categoryID }) else { return false }
         return !drag.ids.isEmpty && drag.ids.allSatisfy { id in
-            items.contains(where: { $0.id == id }) && !pendingDeletion.contains(id)
+            contains(id) && !pendingDeletion.contains(id)
         }
     }
     /// 放下时先认领令牌，再结束拖动；提交失败仍由统一变更入口报告，不把接收当保存成功。
@@ -781,7 +795,16 @@ import LocalClipCore
             if expired.removed > 0 { refresh() }
         }
         catch { message = "清理失败，未报告已释放" }
+        // 启动只做快速检查；完整页级校验在面板隐藏时每天后台执行一次，不阻塞采集与界面，by AI.Coding。
+        if !panelVisible, lastIntegrityCheck.map({ ContinuousClock.now - $0 > .seconds(86_400) }) ?? true {
+            lastIntegrityCheck = ContinuousClock.now
+            // 读取失败（如磁盘忙）不当作损坏，次日再查；确认损坏才暂停采集。
+            if (try? await store.integrityCheck()) == false {
+                capture.requestPause(); message = "数据库完整性检查失败，已暂停采集，请备份后重启"
+            }
+        }
     }
+    private var lastIntegrityCheck: ContinuousClock.Instant?
     /// 二进制容量单位与真实计量一致。
     public static func bytes(_ value: Int64) -> String { ByteCountFormatter.string(fromByteCount: value, countStyle: .binary) }
     public var ignoreDescription: String {
@@ -835,42 +858,39 @@ import LocalClipCore
     public func selectAllResults() {
         guard !queryPending else { return }
         selectedIDs.formUnion(items.map(\.id)); select(items.first?.id, preserveSelection: true)
-        guard let cursor else { return }
-        searching?.cancel(); paging?.cancel(); pendingPageNavigation = nil; queryID = UUID(); let generation = queryID; loading = true
-        // 全选与滚动预读共用分页所有权，旧页只能被取消，不能重复追加，by AI.Coding。
-        paging = Task {
-            defer { if generation == queryID { loading = false; paging = nil } }
-            var next: SearchCursor? = cursor
-            do {
-                while let pageCursor = next {
-                    let page = try await store.search(SearchRequest(query, favorites: favorites, kind: kind, cursor: pageCursor, queryID: generation, categoryIDs: activeCategories, sourceBundleID: sourceFilter, from: dateBounds?.0, until: dateBounds?.1))
-                    guard !Task.isCancelled, generation == queryID else { return }
-                    let values = page.items.filter(isVisible); items += values; selectedIDs.formUnion(values.map(\.id)); next = page.next; self.cursor = next
-                }
-            } catch is CancellationError { }
-            catch { if generation == queryID { message = "结果已变化，请重新全选"; refresh() } }
-        }
+        guard cursor != nil else { return }
+        loadRemainingPages(failure: "结果已变化，请重新全选", onPage: { [weak self] in self?.selectedIDs.formUnion($0.map(\.id)) })
     }
     public func edgeSelection(_ last: Bool, extend: Bool) {
         guard !queryPending else { return }
         if last && hasMore {
-            // End接管在途预读；重复按键更新代次，不产生多个同游标循环，by AI.Coding。
-            searching?.cancel(); paging?.cancel(); pendingPageNavigation = nil; queryID = UUID()
-            let generation = queryID, anchor = anchorID
-            loading = true
-            paging = Task {
-                defer { if generation == queryID { loading = false; paging = nil } }
-                do {
-                    while let next = cursor {
-                        let page = try await store.search(SearchRequest(query, favorites: favorites, kind: kind, cursor: next, queryID: generation, categoryIDs: activeCategories, sourceBundleID: sourceFilter, from: dateBounds?.0, until: dateBounds?.1))
-                        guard !Task.isCancelled, generation == queryID else { return }; items += page.items.filter(isVisible); cursor = page.next
-                    }
-                    if let id = items.last?.id { anchorID = anchor; choose(id, modifiers: extend ? .shift : []) }
-                } catch is CancellationError { }
-                catch { if generation == queryID { message = "结果已变化，请重试"; refresh() } }
-            }; return
+            let anchor = anchorID
+            loadRemainingPages(failure: "结果已变化，请重试", completion: { [weak self] in
+                guard let self, let id = self.items.last?.id else { return }
+                self.anchorID = anchor; self.choose(id, modifiers: extend ? .shift : [])
+            }); return
         }
         if let id = (last ? items.last : items.first)?.id { choose(id, modifiers: extend ? .shift : []) }
+    }
+    /// 当前筛选条件下的分页请求；所有续页入口共用，避免各处重复拼装条件，by AI.Coding。
+    private func pageRequest(cursor: SearchCursor?, queryID: UUID, pageSize: Int = 50) -> SearchRequest {
+        SearchRequest(query, favorites: favorites, kind: kind, cursor: cursor, queryID: queryID, pageSize: pageSize, categoryIDs: activeCategories, sourceBundleID: sourceFilter, from: dateBounds?.0, until: dateBounds?.1)
+    }
+    /// 全选与End共用的读完剩余分页：接管在途查询与预读，新代次使旧页只能被取消、不能重复追加，by AI.Coding。
+    private func loadRemainingPages(failure: String, onPage: @escaping ([ClipSummary]) -> Void = { _ in }, completion: @escaping () -> Void = {}) {
+        searching?.cancel(); paging?.cancel(); pendingPageNavigation = nil; queryID = UUID(); let generation = queryID; loading = true
+        paging = Task {
+            defer { if generation == queryID { loading = false; paging = nil } }
+            do {
+                while let next = cursor {
+                    let page = try await store.search(pageRequest(cursor: next, queryID: generation))
+                    guard !Task.isCancelled, generation == queryID else { return }
+                    let values = page.items.filter(isVisible); items += values; cursor = page.next; onPage(values)
+                }
+                completion()
+            } catch is CancellationError { }
+            catch { if generation == queryID { message = failure; refresh() } }
+        }
     }
     /// 类型入口切换到整个历史，清除自定义分类及收藏范围，保留字面搜索和显式来源／日期条件。
     public func selectKind(_ value: ClipKind?) {

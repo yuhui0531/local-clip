@@ -69,7 +69,8 @@ struct ImageFixtures {
     /// 真正UI调用链在正文读取期间请求暂停，在途A不落库，恢复仅保存新的B。
     @Test func AC11_E04_modelPauseGateAndSaveFailure() async throws {
         let root=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        let staging=root.appendingPathComponent("Staging")
+        // 写入改为原库事务；锁住数据库目录使回滚日志无法创建，即真实的保存失败，by AI.Coding。
+        let staging=root.appendingPathComponent("History")
         defer { try? FileManager.default.setAttributes([.posixPermissions:0o755],ofItemAtPath:staging.path); try? FileManager.default.removeItem(at:root) }
         let store=try HistoryStore(location:root),raw=RawBoard(),apps=FakeApplications()
         let board=MacPasteboardClient(access:raw),capture=CaptureCoordinator(board:board,store:store)

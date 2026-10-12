@@ -35,8 +35,9 @@ public struct SettingsView: View {
                         Toggle("记录新的剪贴板变化", isOn: Binding(get: { model.settings.captureEnabled }, set: { value in model.setCaptureEnabled(value) }))
                         Text("启动后自动监听新复制内容；手动暂停只作用于本次运行，定时暂停按期限保留。").font(.caption).foregroundStyle(.secondary)
                         Picker("Enter 默认操作", selection: Binding(get: { model.settings.defaultAction }, set: { value in model.updateSettings { $0.defaultAction = value } })) {
-                            Text("复制（默认）").tag(PasteAction.copy); Text("直接粘贴").tag(PasteAction.directPaste)
+                            Text("直接粘贴（默认）").tag(PasteAction.directPaste); Text("仅复制").tag(PasteAction.copy)
                         }
+                        Toggle("复制或粘贴后移到最前", isOn: Binding(get: { model.settings.moveUsedToFront }, set: { value in model.updateSettings { $0.moveUsedToFront = value } }))
                         Picker("默认输出格式", selection: Binding(get: { model.settings.defaultFormat }, set: { value in model.updateSettings { $0.defaultFormat = value } })) { Text("原格式").tag(OutputFormat.original); Text("纯文本").tag(OutputFormat.plainText) }
                         HStack { Button("暂停15分钟") { model.updateSettings { $0.pauseUntil = SystemClock().now() + 15 * 60_000 } }; Button("暂停1小时") { model.updateSettings { $0.pauseUntil = SystemClock().now() + 60 * 60_000 } }; Button("取消定时暂停") { model.updateSettings { $0.pauseUntil = nil } } }
                         if let deadline = model.settings.pauseUntil, deadline > SystemClock().now() { Text("暂停至 " + Date(timeIntervalSince1970: Double(deadline)/1000).formatted()).font(.caption) }

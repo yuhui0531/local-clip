@@ -4,38 +4,38 @@
 <dict>
 	<key>CFBundleExecutable</key>
 	<string>LocalClip</string>
+	<key>CFBundleIconFile</key>
+	<string>LocalClip.icns</string>
 	<key>CFBundleIdentifier</key>
 	<string>local.localclip.dev</string>
 	<key>CFBundleName</key>
 	<string>LocalClip</string>
-	<key>CFBundleIconFile</key>
-	<string>LocalClip.icns</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.3.12</string>
+	<string>0.3.13</string>
 	<key>CFBundleVersion</key>
-	<string>34</string>
+	<string>35</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>15.0</string>
 	<key>LSUIElement</key>
 	<true/>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>在您双击文件历史时，读取Finder当前文件夹，将文件副本复制到该目录。</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>UTExportedTypeDeclarations</key>
 	<array>
 		<dict>
-			<key>UTTypeIdentifier</key>
-			<string>local.localclip.history-item</string>
-			<key>UTTypeDescription</key>
-			<string>LocalClip 内部历史记录</string>
 			<key>UTTypeConformsTo</key>
 			<array>
 				<string>public.data</string>
 			</array>
+			<key>UTTypeDescription</key>
+			<string>LocalClip 内部历史记录</string>
+			<key>UTTypeIdentifier</key>
+			<string>local.localclip.history-item</string>
 		</dict>
 	</array>
-	<key>NSAppleEventsUsageDescription</key>
-	<string>在您双击文件历史时，读取Finder当前文件夹，将文件副本复制到该目录。</string>
 </dict>
 </plist>

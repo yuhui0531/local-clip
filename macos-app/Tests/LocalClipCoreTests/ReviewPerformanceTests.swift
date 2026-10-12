@@ -113,7 +113,7 @@ struct ReviewPerformanceTests {
             for index in 0..<16 {
                 let data = Data(repeating: UInt8(index), count: target * 1_048_576 / 16)
                 let payload = ClipboardPayload([.init([.init(SupportedType.png, data)])]), digest = ContentFingerprint.hash(data), id = "scale-\(index)"
-                try db.run("INSERT INTO clips VALUES(?,?,?,?,?, ?,?,?,?,?,?)", [.text(id), .text(payload.fingerprint), .integer(SystemClock().now()), .integer(SystemClock().now()), .integer(1), .text("image"), .integer(0), .null, .text("unknown"), .text("unknown"), .text("")])
+                try db.run("INSERT INTO clips(id,contentHash,firstCopiedAtMs,lastCopiedAtMs,copyCount,kind,isFavorite,sourceBundleID,sourceName,sourceBasis,previewText) VALUES(?,?,?,?,?, ?,?,?,?,?,?)", [.text(id), .text(payload.fingerprint), .integer(SystemClock().now()), .integer(SystemClock().now()), .integer(1), .text("image"), .integer(0), .null, .text("unknown"), .text("unknown"), .text("")])
                 try db.run("INSERT INTO items VALUES(?,?,?)", [.text(id), .integer(0), .text("[]")])
                 try db.run("INSERT INTO blobs VALUES(?,?,?)", [.text(digest), .integer(Int64(data.count)), .blob(data)])
                 try db.run("INSERT INTO representations VALUES(?,?,?,?)", [.text(id), .integer(0), .text(SupportedType.png), .text(digest)])
@@ -136,7 +136,7 @@ struct ReviewPerformanceTests {
             #expect(try verified.scalarText("PRAGMA integrity_check") == "ok"); #expect(try verified.rows("PRAGMA foreign_key_check").isEmpty); try verified.close()
             curves.append(["targetMiB":target,"initialBytes":bytes,"textInsert":BenchmarkGenerator.metrics(inserts),"settings":BenchmarkGenerator.metrics(preferences),"dedup":BenchmarkGenerator.metrics(dedup)])
         }
-        try BenchmarkGenerator.write(["build":"Release", "boundary":"HistoryStore call to return, APFS COW candidate / FULL sync / atomic replacement", "fixture":"16 equal-sized synthetic opaque image blobs; isolates storage size, not image decoding", "curves":curves], to: output.appendingPathComponent("scaling.json"))
+        try BenchmarkGenerator.write(["build":"Release", "boundary":"HistoryStore call to return, in-place SQLite transaction / rollback journal / fullfsync", "fixture":"16 equal-sized synthetic opaque image blobs; isolates storage size, not image decoding", "curves":curves], to: output.appendingPathComponent("scaling.json"))
     }
     @Test(.enabled(if: ProcessInfo.processInfo.environment["LOCALCLIP_REVIEW_BENCHMARK"] == "1"))
     func coldWarmAndPostQuotaSearch() async throws {

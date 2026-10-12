@@ -9,30 +9,26 @@ struct ThrowAt: StorageFaultInjector {
     func check(_ point: FaultPoint) throws { if point == self.point { throw StoreError.diskFull } }
 }
 struct StorageFeasibilityTests {
-    /// 真实候选读取权限失败覆盖预读分支；不通过抛出模拟错误代替系统失败，by AI.Coding。
-    @Test func AC15_AC26_prefetchAccessFailureKeepsOriginal() throws {
+    /// 真实文件系统拒绝创建回滚日志时提交失败，原库字节与计量不变；不用抛错模拟系统失败，by AI.Coding。
+    @Test func AC15_AC26_journalAccessFailureKeepsOriginal() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
+        let history = root.appendingPathComponent("History")
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: history.path); try? FileManager.default.removeItem(at: root) }
         let strategy = try CommitStrategy(root: root)
         try strategy.initialize { db in
             try db.exec("CREATE TABLE fixture(id INTEGER PRIMARY KEY,data BLOB); INSERT INTO fixture VALUES(1,zeroblob(41943040))")
         }
         let before = try Data(contentsOf: strategy.databaseURL)
         let bytes = try strategy.measuredBytes()
-        let failing = try CommitStrategy(root: root, faults: DenyCandidateRead(staging: strategy.staging))
-        var bodyCalled = false
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: history.path)
         #expect(throws: StoreError.ioFailure) {
-            try failing.commit(quota: 100 * MiB) { db in
-                bodyCalled = true
-                try db.exec("DELETE FROM fixture")
-            }
+            try strategy.commit(quota: 100 * MiB) { db in try db.exec("DELETE FROM fixture") }
         }
-        #expect(!bodyCalled)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: history.path)
         #expect(try Data(contentsOf: strategy.databaseURL) == before)
         #expect(try strategy.measuredBytes() == bytes)
         #expect(try strategy.read { try $0.scalarInt("SELECT COUNT(*) FROM fixture") } == 1)
         #expect(try strategy.read { try $0.scalarText("PRAGMA integrity_check") } == "ok")
-        print("AC15 prefetch actual EACCES; old bytes=\(bytes); original unchanged; candidate cleaned")
     }
     /// 共享载荷删除普通引用不删除收藏所需的 BLOB。
     @Test func AC25_sharedBlobAndJournalBudget() throws {
@@ -102,21 +98,5 @@ struct StorageFeasibilityTests {
         #expect(try strategy.measuredBytes() < before)
         #expect(try strategy.read { try $0.scalarInt("SELECT id FROM fixture") } == 2)
         #expect(try strategy.read { try $0.scalarText("PRAGMA integrity_check") } == "ok")
-    }
-}
-
-private struct DenyCandidateRead: StorageFaultInjector {
-    let staging: URL
-    /// 只撤销专用临时候选的读权限；实际失败由生产预读 open 返回，by AI.Coding。
-    func check(_ point: FaultPoint) throws {
-        guard point == .candidateCreated else { return }
-        guard let files = FileManager.default.enumerator(at: staging, includingPropertiesForKeys: nil),
-              let candidate = (files.allObjects as? [URL])?.first(where: { $0.lastPathComponent == "candidate.sqlite" }) else { throw StoreError.invalidSettings }
-        guard (try candidate.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0) >= 32 * MiB else { throw StoreError.invalidSettings }
-        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: candidate.path)
-        let descriptor = Darwin.open(candidate.path, O_RDONLY)
-        let actualError = errno
-        if descriptor >= 0 { Darwin.close(descriptor) }
-        guard descriptor < 0 && actualError == EACCES else { throw StoreError.invalidSettings }
     }
 }

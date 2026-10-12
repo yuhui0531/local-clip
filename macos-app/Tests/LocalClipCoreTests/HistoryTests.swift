@@ -29,7 +29,6 @@ struct HistoryTests {
         let favorite = try await store.preview(.favorite(favoriteID, true)); _ = try await store.apply(favorite.token)
         let path = root.appendingPathComponent("History/history.sqlite")
         // 单独fixture插入在没有在途actor操作的真实库中，生产写入从不生成NULL指纹。
-        await store.waitForPageCacheWarmupForTesting()
         let db = try SQLiteConnection(path); try db.configure()
         try db.exec("INSERT INTO blobs VALUES(NULL,6,x'4f525048414e')")
         #expect(try db.scalarText("PRAGMA quick_check") == "ok"); try db.close()

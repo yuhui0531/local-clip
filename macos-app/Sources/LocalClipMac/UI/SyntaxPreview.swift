@@ -31,7 +31,7 @@ struct SyntaxText: View {
     var body: some View {
         Group {
             if source == text, let highlighted {
-                // 窄卡片按字符软换行，并以源行缩进作为续行悬挂缩进，by AI.Coding。
+                // 窄卡片按词软换行，并以源行缩进作为续行悬挂缩进，by AI.Coding。
                 SyntaxCardPreview(content: SyntaxLineCache.content(text, highlight: highlighted, size: size, dark: scheme == .dark, spacing: spacing))
             }
             else { Text(text).font(.system(size: size)) }
@@ -85,7 +85,8 @@ struct SyntaxText: View {
                 paragraph.defaultTabInterval = tabWidth
                 paragraph.firstLineHeadIndent = 0
                 paragraph.headIndent = indent
-                paragraph.lineBreakMode = .byCharWrapping
+                // 按词折行，标识符不从中间断开；超宽单词仍由排版器强制断开，by AI.Coding。
+                paragraph.lineBreakMode = .byWordWrapping
                 paragraph.lineSpacing = spacing
                 paragraph.paragraphSpacing = 0
                 attributed.addAttribute(.paragraphStyle, value: paragraph, range: NSRange(location: 0, length: attributed.length))

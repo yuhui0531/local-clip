@@ -63,7 +63,7 @@ public struct HistoryView: View {
                         if !compact { Text("LocalClip").font(.system(size: 16, weight: .bold, design: .rounded)) }
                     }
                     // 全部/收藏固定可见，类型与分类紧随其后，避免重复历史入口，by AI.Coding。
-                    HStack(spacing: 5) { filter("剪切板", nil); favoritesTab }.fixedSize()
+                    HStack(spacing: 5) { filter("剪贴板", nil); favoritesTab }.fixedSize()
                     categoryNavigation
                     HistorySearchInput(model: model, input: model.queryState, focus: model.focusRequest).frame(width: compact ? 160 : 240, height: 30)
                     Button { model.showingFilters.toggle() } label: { toolbarGlyph(filter: true) }.buttonStyle(.plain).accessibilityLabel("筛选").popover(isPresented: $model.showingFilters) { FilterEditor(model: model) }
@@ -128,6 +128,22 @@ public struct HistoryView: View {
                     .onChange(of: model.categoryID) { _, id in
                         if let id, categoryContentWidth > geometry.size.width { proxy.scrollTo(id, anchor: .center) }
                     }
+                    // 溢出时尾部渐隐并提供全部分类菜单，被截断的标签仍可发现和直达，by AI.Coding。
+                    .overlay(alignment: .trailing) {
+                        if categoryContentWidth > geometry.size.width + 1 {
+                            HStack(spacing: 0) {
+                                LinearGradient(colors: [.clear, Color(nsColor: .windowBackgroundColor)], startPoint: .leading, endPoint: .trailing).frame(width: 28)
+                                Menu {
+                                    ForEach(model.categories) { category in
+                                        Button(category.name) { model.selectCategories([category.id]); proxy.scrollTo(category.id, anchor: .center) }
+                                    }
+                                } label: { Image(systemName: "chevron.down.circle").font(.system(size: 15)) }
+                                    .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                                    .padding(.leading, 2).background(Color(nsColor: .windowBackgroundColor))
+                                    .help("全部分类").accessibilityLabel("全部分类")
+                            }.allowsHitTesting(true)
+                        }
+                    }
             }
         }.frame(height: 32)
     }
@@ -187,7 +203,7 @@ private struct HistoryStrip: View {
                     ScrollView(.horizontal) {
                         LazyHStack(spacing: 16) {
                             ForEach(Array(model.items.enumerated()), id: \.element.id) { index, item in
-                                ClipCard(item: item, index: index, selected: model.selectedIDs.contains(item.id), dragging: draggedIDs.contains(item.id), editing: renamingID == item.id, height: cardHeight, categoryID: categoryID, categories: categories, target: target, model: model).equatable().id(item.id)
+                                ClipCard(item: item, index: index, selected: model.selectedIDs.contains(item.id), dragging: draggedIDs.contains(item.id), editing: renamingID == item.id, hidden: hideContents, height: cardHeight, categoryID: categoryID, categories: categories, target: target, model: model).equatable().id(item.id)
                             }
                             if model.hasMore {
                                 Button(action: model.loadMore) {
@@ -198,6 +214,7 @@ private struct HistoryStrip: View {
                                 }.buttonStyle(.plain)
                             }
                         }.padding(.horizontal, 24).padding(.vertical, 10)
+                            .background(OverlayScrollerStyle())
                     }.scrollIndicators(.visible)
                         .scrollPosition($scrollPosition)
                         .onScrollGeometryChange(for: HistoryScrollMetrics.self) { geometry in
@@ -237,7 +254,7 @@ private struct HistoryEmptyState: View {
         VStack(spacing: 12) {
             Image(systemName: emptyQuery ? "square.on.square" : "magnifyingglass").font(.system(size: 38, weight: .ultraLight)).foregroundStyle(.secondary)
             Text(loading ? "正在读取历史…" : emptyQuery ? categoryID == nil ? "下一次复制，就从这里开始" : "这个分类还没有记录" : "没有匹配的历史").font(.system(size: 18, weight: .semibold))
-            Text(emptyQuery ? categoryID == nil ? "文字、链接、图片、富文本和文件引用，只保存在这台 Mac。" : "选择“剪切板”，把记录拖到这个分类标签。" : "中文短词、代码符号和链接片段，均按字面查找。").font(.system(size: 12)).foregroundStyle(.secondary)
+            Text(emptyQuery ? categoryID == nil ? "文字、链接、图片、富文本和文件引用，只保存在这台 Mac。" : "选择“剪贴板”，把记录拖到这个分类标签。" : "中文短词、代码符号和链接片段，均按字面查找。").font(.system(size: 12)).foregroundStyle(.secondary)
         }
     }
 }
@@ -300,13 +317,28 @@ private struct HistorySelectionActions: View {
                     Button { model.perform(.plainText, action: .copy) } label: { Text("纯文本复制") }
                         .disabled(value.selectedMetadata?.hasTextRepresentations != true).buttonStyle(.plain).foregroundStyle(.secondary).help("纯文本复制")
                 }
-                // 明示面板记住的应用，避免把向后台窗口发送测试输入误认为已激活该应用。
-                Button { model.perform(action: .directPaste) } label: { Label("直接粘贴", systemImage: "arrow.turn.down.left") }.buttonStyle(.plain)
-                    .help("粘贴到：\(MacApplicationClient.targetName(model.target))；请确认目标输入位置")
-                    .accessibilityLabel("直接粘贴到：\(MacApplicationClient.targetName(model.target))")
-                Button { model.perform(action: .copy) } label: { HStack(spacing: compact ? 4 : 12) { Text("复制").fontWeight(.semibold); Text("⌘C").font(.system(size: compact ? 9 : 10)).opacity(0.7) }.padding(.horizontal, compact ? 7 : 17).padding(.vertical, 7) }
-                    .buttonStyle(.plain).foregroundStyle(.white).background(Color(red: 0.23, green: 0.43, blue: 0.94), in: Capsule()).keyboardShortcut("c", modifiers: .command)
+                // Enter执行的动作作为主按钮并标↩，另一个为次按钮，图标与按键行为一致。
+                if model.settings.defaultAction == .directPaste { copyButton(primary: false); pasteButton(primary: true) }
+                else { pasteButton(primary: false); copyButton(primary: true) }
             }.disabled(value.selectedID == nil)
+    }
+    private func primaryLabel(_ title: String, _ hint: String) -> some View {
+        HStack(spacing: compact ? 4 : 12) { Text(title).fontWeight(.semibold); Text(hint).font(.system(size: compact ? 9 : 10)).opacity(0.7) }
+            .padding(.horizontal, compact ? 7 : 17).padding(.vertical, 7)
+            .foregroundStyle(.white).background(Color(red: 0.23, green: 0.43, blue: 0.94), in: Capsule())
+    }
+    // 明示面板记住的应用，避免把向后台窗口发送测试输入误认为已激活该应用。
+    @ViewBuilder private func pasteButton(primary: Bool) -> some View {
+        Button { model.perform(action: .directPaste) } label: {
+            if primary { primaryLabel("粘贴", "↩") } else { Label("直接粘贴", systemImage: "arrow.right.doc.on.clipboard") }
+        }.buttonStyle(.plain)
+            .help("粘贴到：\(MacApplicationClient.targetName(model.target))；请确认目标输入位置")
+            .accessibilityLabel("直接粘贴到：\(MacApplicationClient.targetName(model.target))")
+    }
+    @ViewBuilder private func copyButton(primary: Bool) -> some View {
+        Button { model.perform(action: .copy) } label: {
+            if primary { primaryLabel("复制", "↩") } else { Label("复制 ⌘C", systemImage: "doc.on.doc") }
+        }.buttonStyle(.plain).keyboardShortcut("c", modifiers: .command)
     }
 }
 private struct CategoryEditor: View {
@@ -341,6 +373,7 @@ private struct ClipCard: View, Equatable {
     let selected: Bool
     let dragging: Bool
     let editing: Bool
+    let hidden: Bool
     @State private var headerRect: CGRect = .zero
     @State private var nameDraft = ""
     @FocusState private var nameFocused: Bool
@@ -355,7 +388,7 @@ private struct ClipCard: View, Equatable {
     @State private var isOnscreen = false
     @State private var detectedLanguage: String?
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.item == rhs.item && lhs.index == rhs.index && lhs.selected == rhs.selected && lhs.dragging == rhs.dragging && lhs.editing == rhs.editing && lhs.height == rhs.height
+        lhs.item == rhs.item && lhs.index == rhs.index && lhs.selected == rhs.selected && lhs.dragging == rhs.dragging && lhs.editing == rhs.editing && lhs.hidden == rhs.hidden && lhs.height == rhs.height
             && lhs.categoryID == rhs.categoryID && lhs.categories == rhs.categories && lhs.target == rhs.target
     }
     private var code: Bool { item.kind == .text && detectedLanguage != nil }
@@ -375,7 +408,8 @@ private struct ClipCard: View, Equatable {
     private var headerHeight: Double { tiny ? 28 : height < 150 ? 32 : 40 }
     private var footerHeight: Double { tiny ? 18 : 22 }
     private var iconSize: Double { tiny ? 18 : 26 }
-    private var cardRadius: Double { min(22, height * 0.12) }
+    // 圆角为原来的一半，卡片更规整，by AI.Coding。
+    private var cardRadius: Double { min(11, height * 0.06) }
     /// 展示身份与依据分开，前台推断不伪装成应用主动声明。
     private var sourceDescription: String {
         switch item.source.basis {
@@ -436,7 +470,7 @@ private struct ClipCard: View, Equatable {
             .clipShape(RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: cardRadius, style: .continuous).strokeBorder(selected ? Color(red: 0, green: 0.48, blue: 1) : Color.primary.opacity(0.07), lineWidth: selected ? 3 : 0.7))
             .shadow(color: .black.opacity(0.09), radius: 3, y: 2)
-            .contentShape(RoundedRectangle(cornerRadius: 22))
+            .contentShape(RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
             .coordinateSpace(name: item.id)
     }
     private var interactiveCard: some View {
@@ -456,7 +490,8 @@ private struct ClipCard: View, Equatable {
             .opacity(dragging ? 0.55 : 1)
             .animation(reduceMotion ? nil : .spring(response: 0.22, dampingFraction: 0.82), value: dragging)
             .help(item.kind == .file ? "双击复制到Finder当前目录或原应用" : "单击选择，双击粘贴到：\(MacApplicationClient.targetName(model.target))")
-            .accessibilityLabel("\(item.title ?? HistoryView.kindName(item.kind))，\(item.source.name)，\(item.preview)").accessibilityAddTraits(selected ? [.isButton, .isSelected] : [.isButton])
+            // 隐藏内容时辅助功能也不朗读正文，与界面模糊保持同一隐私承诺，by AI.Coding。
+            .accessibilityLabel(hidden ? "\(item.title ?? HistoryView.kindName(item.kind))，\(item.source.name)，内容已隐藏" : "\(item.title ?? HistoryView.kindName(item.kind))，\(item.source.name)，\(item.preview)").accessibilityAddTraits(selected ? [.isButton, .isSelected] : [.isButton])
             .accessibilityAction { model.select(item.id) }
             .accessibilityAction(named: Text("复制并粘贴")) { model.doubleClick(item.id) }
             .accessibilityAction(named: Text("重命名")) { model.beginRename(item.id) }
@@ -496,16 +531,16 @@ private struct ClipCard: View, Equatable {
                 // 只为实际出现的文字卡片统计全文，计数缓存不随选中状态重算。
                 if [.text, .url, .richText].contains(item.kind) {
                     let count = try? await model.store.textCharacterCount(id: item.id, at: SystemClock().now())
-                    guard !Task.isCancelled, model.items.contains(where: { $0.id == item.id }),
+                    guard !Task.isCancelled, model.contains(item.id),
                           (try? await model.store.metadata(id: item.id, at: SystemClock().now())) != nil else { return }
-                    guard !Task.isCancelled, model.items.contains(where: { $0.id == item.id }) else { return }
+                    guard !Task.isCancelled, model.contains(item.id) else { return }
                     characterCount = count
                 }
                 guard item.kind == .image || item.kind == .mixed else { return }
                 let result = await model.derived.thumbnail(id: item.id)
-                guard !Task.isCancelled, model.items.contains(where: { $0.id == item.id }) else { return }
+                guard !Task.isCancelled, model.contains(item.id) else { return }
                 do { _ = try await model.store.metadata(id: item.id, at: SystemClock().now()) } catch { return }
-                guard !Task.isCancelled, model.items.contains(where: { $0.id == item.id }) else { return }
+                guard !Task.isCancelled, model.contains(item.id) else { return }
                 if case .image(let data) = result {
                     thumbnail = NSImage(data: data)
                     #if DEBUG

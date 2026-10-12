@@ -12,7 +12,6 @@ struct ClipRenameTests {
         let store = try HistoryStore(location: root), now = SystemClock().now()
         let id = insertedID(try await store.ingest(fixture("failure-name"), at: now))
         try await store.renameClip(id: id, title: "Original")
-        await store.waitForPageCacheWarmupForTesting()
         let database = root.appendingPathComponent("History/history.sqlite"), before = try Data(contentsOf: database)
         let failing = try HistoryStore(location: root, faults: ThrowAt(point: point))
         await #expect(throws: StoreError.diskFull) { try await failing.renameClip(id: id, title: "Replacement") }
@@ -33,7 +32,6 @@ struct ClipRenameTests {
             let id = insertedID(try await store.ingest(.init(payload: payload), at: now + Int64(byte)))
             ids.append(id); try await store.renameClip(id: id, title: "Image \(byte)")
         }
-        await store.waitForPageCacheWarmupForTesting()
         var lowered = try await store.settings(); lowered.quotaBytes = 350 * 1024
         let file = root.appendingPathComponent("History/history.sqlite")
         let db = try SQLiteConnection(file); try db.configure(); try Schema.writeSettings(db, lowered); try db.close()
@@ -44,9 +42,10 @@ struct ClipRenameTests {
         _ = try await constrained.ingest(fixture("capture-trims-oldest"), at: now + 10)
         let surviving = Set(try await constrained.search(.init()).items.map(\.id))
         #expect(!surviving.contains(ids[0]))
-        let titles = try await constrained.settings().clipTitles
-        #expect(Set(titles.keys).isSubset(of: surviving))
-        for id in surviving.intersection(ids) { #expect(titles[id] != nil) }
+        // 名称是记录列：淘汰随行删除，存活记录保留名称。
+        for id in surviving.intersection(ids) { #expect(try await constrained.metadata(id: id, at: now + 10).summary.title != nil) }
+        let check = try SQLiteConnection(file, readonly: true)
+        #expect(try check.scalarInt("SELECT COUNT(*) FROM clips WHERE title IS NOT NULL") == Int64(surviving.intersection(ids).count)); try check.close()
     }
     /// 所有格式共用名称，重开和分类/收藏视图不改变内容或排序，by AI.Coding。
     @Test func namesPersistForEveryKindWithoutChangingIdentity() async throws {
@@ -95,7 +94,7 @@ struct ClipRenameTests {
         stale.hideContents = true; _ = try await store.updateCaptureSettings(stale)
         #expect(try await store.metadata(id: a, at: now).summary.title == "Café")
         let deletion = try await store.preview(.delete([a])); _ = try await store.apply(deletion.token)
-        #expect(try await store.settings().clipTitles[a] == nil)
+        await #expect(throws: StoreError.notFound) { _ = try await store.metadata(id: a, at: now) }
         try await store.renameClip(id: b, title: "Other")
         try await store.undoDelete()
         #expect(try await store.settings().hideContents)
@@ -108,9 +107,32 @@ struct ClipRenameTests {
             await #expect(throws: StoreError.invalidSettings) { try await store.renameClip(id: b, title: "first" + separator + "second") }
         }
         #expect(try await store.metadata(id: b, at: now).summary.title == "Other")
-        await store.waitForPageCacheWarmupForTesting()
         let db = try SQLiteConnection(root.appendingPathComponent("History/history.sqlite"), readonly: true)
         #expect(try db.scalarText("PRAGMA integrity_check") == "ok")
         #expect(try db.scalarInt("PRAGMA user_version") == Schema.version); try db.close()
+    }
+    /// 自定义名称参与字面检索，中文与大小写规范化与正文一致，by AI.Coding。
+    @Test func titlesAreSearchable() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try HistoryStore(location: root), now = SystemClock().now()
+        let image = insertedID(try await store.ingest(.init(payload: .init([.init([.init(SupportedType.png, Data([9, 9]))])])), at: now))
+        _ = try await store.ingest(fixture("unrelated body"), at: now + 1)
+        try await store.renameClip(id: image, title: "Quarterly 报表 Logo")
+        #expect(try await store.search(.init("报表")).items.map(\.id) == [image])
+        #expect(try await store.search(.init("quarterly")).items.map(\.id) == [image])
+        try await store.renameClip(id: image, title: "")
+        #expect(try await store.search(.init("报表")).items.isEmpty)
+    }
+    /// 只接受当前schema；旧版本库拒绝打开且文件不被修改，by AI.Coding。
+    @Test func olderSchemaIsRefusedWithoutMutation() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        _ = try HistoryStore(location: root)
+        let file = root.appendingPathComponent("History/history.sqlite")
+        let db = try SQLiteConnection(file); try db.exec("PRAGMA user_version=3"); try db.close()
+        let bytes = try Data(contentsOf: file)
+        #expect(throws: StoreError.incompatibleSchema) { _ = try HistoryStore(location: root) }
+        #expect(try Data(contentsOf: file) == bytes)
     }
 }

@@ -1,7 +1,7 @@
-// 唯一历史模型；仅创建当前结构，不执行旧库升级或兼容转换，by AI.Coding。
+// 唯一历史模型；仅创建当前结构，其他版本拒绝打开，不做旧库升级，by AI.Coding。
 import Foundation
 enum Schema {
-    static let version: Int64 = 3
+    static let version: Int64 = 4
     /// 初次建库完整执行；未知版本拒绝而非盲目覆盖。
     static func create(_ db: SQLiteConnection, settings: SettingsSnapshot) throws {
         try db.exec("""
@@ -11,7 +11,7 @@ enum Schema {
           copyCount INTEGER NOT NULL CHECK(copyCount>=1),kind TEXT NOT NULL,
           isFavorite INTEGER NOT NULL CHECK(isFavorite IN(0,1)),
           sourceBundleID TEXT,sourceName TEXT NOT NULL,sourceBasis TEXT NOT NULL,
-          previewText TEXT NOT NULL);
+          previewText TEXT NOT NULL,title TEXT,normalizedTitle TEXT);
         CREATE TABLE items(clipID TEXT NOT NULL REFERENCES clips(id) ON DELETE CASCADE,
           itemIndex INTEGER NOT NULL CHECK(itemIndex>=0), declaredTypes TEXT NOT NULL,
           PRIMARY KEY(clipID,itemIndex));
@@ -30,11 +30,11 @@ enum Schema {
           schemaVersion INTEGER NOT NULL,document TEXT NOT NULL);
         CREATE TABLE store_meta(singletonID INTEGER PRIMARY KEY CHECK(singletonID=1),
           schemaVersion INTEGER NOT NULL,storeRevision INTEGER NOT NULL,lastOperationID TEXT NOT NULL);
-        INSERT INTO store_meta VALUES(1,3,0,'');
+        INSERT INTO store_meta VALUES(1,4,0,'');
         CREATE INDEX recent ON clips(lastCopiedAtMs DESC,id);
         CREATE INDEX favorites ON clips(isFavorite,lastCopiedAtMs,firstCopiedAtMs,id);
         CREATE INDEX blob_references ON representations(blobDigest);
-        PRAGMA user_version=3;
+        PRAGMA user_version=4;
         """)
         try createCategories(db)
         try writeSettings(db, settings)
@@ -52,9 +52,9 @@ enum Schema {
     /// 配置是单例事实；JSON 仅编码结构化字段，不存第二份设置副本。
     static func writeSettings(_ db: SQLiteConnection, _ settings: SettingsSnapshot) throws {
         let document = String(decoding: try JSONEncoder().encode(settings), as: UTF8.self)
-        try db.run("INSERT OR REPLACE INTO settings VALUES(1,3,?)", [.text(document)])
+        try db.run("INSERT OR REPLACE INTO settings VALUES(1,?,?)", [.integer(version), .text(document)])
     }
-    /// 当前模型完整解码；不补旧字段，不接受其他版本。
+    /// 当前模型完整解码；不接受其他版本。
     static func readSettings(_ db: SQLiteConnection) throws -> SettingsSnapshot {
         guard let row = try db.rows("SELECT * FROM settings WHERE singletonID=1").first,
               row.int("schemaVersion") == version else { throw StoreError.incompatibleSchema }
