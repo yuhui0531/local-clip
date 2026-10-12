@@ -63,7 +63,11 @@ import LocalClipCore
         let popover = ProcessInfo.processInfo.environment["LOCALCLIP_VISUAL_POPOVER"]
         if popover == "detail" { while model.items.isEmpty { try await Task.sleep(for: .milliseconds(20)) }; model.select(model.items.first(where: { HistoryView.kindName($0.kind) == ProcessInfo.processInfo.environment["LOCALCLIP_VISUAL_KIND"] })?.id ?? model.items.first?.id); model.showingDetail = true; model.detailVisibilityChanged() }
         var settingsHeight: CGFloat?
-        let view: AnyView = popover == "filter" ? AnyView(FilterEditor(model: model).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top).background(Color(nsColor: .windowBackgroundColor)))
+        let guide = AccessibilityGuideState()
+        switch ProcessInfo.processInfo.environment["LOCALCLIP_VISUAL_GUIDE"] { case "drag": guide.step = .drag; guide.waitedLong = true; case "done": guide.step = .done; default: break }
+        let view: AnyView = ProcessInfo.processInfo.environment["LOCALCLIP_VISUAL_GUIDE"] != nil
+            ? AnyView(AccessibilityGuideView(state: guide, openSettings: {}, close: {}).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top).background(Color(nsColor: .windowBackgroundColor)))
+            : popover == "filter" ? AnyView(FilterEditor(model: model).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top).background(Color(nsColor: .windowBackgroundColor)))
             : popover == "detail" ? AnyView(ClipInspector(model: model).frame(width: 520).frame(maxHeight: .infinity, alignment: .top).background(Color(nsColor: .windowBackgroundColor)))
             : ProcessInfo.processInfo.environment["LOCALCLIP_VISUAL_SETTINGS"] == "1"
             ? AnyView(SettingsView(model: model, login: LoginItemService(), section: SettingsSection(rawValue: ProcessInfo.processInfo.environment["LOCALCLIP_VISUAL_SECTION"] ?? "") ?? .general, fitWindow: { settingsHeight = $0 }))

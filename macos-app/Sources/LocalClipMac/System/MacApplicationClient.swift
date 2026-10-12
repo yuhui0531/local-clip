@@ -68,10 +68,9 @@ import LocalClipCore
         value.localizedCaseInsensitiveContains("terminal") || value.contains("终端")
     }
     public var permitted: Bool { AXIsProcessTrusted() }
-    /// 用户点击粘贴时只请求系统显示授权提示，不修改系统权限数据库。
+    /// 用户点击粘贴但未授权时打开授权向导，不修改系统权限数据库，by AI.Coding。
     public func requestPastePermission() {
-        let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
-        _ = AXIsProcessTrustedWithOptions(options)
+        AccessibilityGuide.shared.show(skipIntro: false)
         logger.notice("stage=permission_required")
     }
     /// 显示已记住的目标，便于用户确认恢复对象；过期身份不借用同 PID 的新进程名，by AI.Coding。

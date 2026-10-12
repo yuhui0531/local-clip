@@ -119,6 +119,12 @@ import LocalClipCore
                     applyAppearanceSettings(); updateMenu()
                     // 再次打开应用触发接替时，新进程完成启动后继续展示用户请求的历史。
                     if CommandLine.arguments.contains("--show-history") { showHistory() }
+                    // 首次启动引导开启辅助功能；隔离验收进程不弹出。
+                    #if DEBUG
+                    if GUIAcceptanceProbe.configuration == nil { AccessibilityGuide.shared.showOnFirstLaunch() }
+                    #else
+                    AccessibilityGuide.shared.showOnFirstLaunch()
+                    #endif
                     #if DEBUG
                     GUIAcceptanceProbe.attach(model: model, board: access, show: { [weak self] in self?.showHistory() }, hide: { [weak self] in self?.dismissHistory() })
                     #endif

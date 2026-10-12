@@ -93,7 +93,7 @@ public struct SettingsView: View {
                         LabeledContent("辅助功能权限") {
                             Label(permitted ? "已授予" : "未授予", systemImage: permitted ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
                                 .foregroundStyle(permitted ? Color.green : Color.orange)
-                            if !permitted { Button("打开权限设置…", action: MacApplicationClient.openAccessibilitySettings) }
+                            if !permitted { Button("开启…") { AccessibilityGuide.shared.show(skipIntro: true) } }
                         }
                     } header: { Text("粘贴") } footer: {
                         Text("⌘C 复制所选，⇧Return 直接粘贴纯文本；搜索框 Return 或 Tab 先进入结果。直接粘贴需要辅助功能权限，仅恢复目标应用，不能保证原输入框或光标位置；没有权限仍可复制后手动粘贴。").settingsFootnote()
