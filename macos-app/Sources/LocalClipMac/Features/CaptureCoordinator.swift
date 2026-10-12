@@ -17,6 +17,8 @@ import LocalClipCore
     private var queueBytes: Int64 = 0
     private var timedPauseActive = false
     private var pausePending = false
+    // 新实例可恢复上次暂停；本次用户暂停一旦到达，启动不能再次覆盖，by AI.Coding。
+    private var startupResumeAllowed = true
     private var captureEpoch = UUID()
     public var onState: ((String) -> Void)?
     public var onCommit: (() -> Void)?
@@ -25,11 +27,22 @@ import LocalClipCore
     public init(board: any PasteboardClient, store: any HistoryRepository, clock: any ClipClock = SystemClock()) {
         self.board = board; self.store = store; self.clock = clock; baseline = board.changeCount
     }
-    /// 恢复和到期清理结束后才从当前计数建立启动基线。
-    public func start() async throws {
-        _ = try await store.recover(); policy = try await store.settings(); _ = try await store.expire(at: clock.now())
+    /// 恢复后按应用启动意图恢复手动开关，定时暂停与启动基线仍独立保留，by AI.Coding。
+    public func start(resumeCapture: Bool = false) async throws {
+        _ = try await store.recover()
+        let stored = try await store.settings()
+        if stored.revision >= policy.revision { policy = stored }
+        // 已启用时不额外提交；只恢复手动暂停，不改隐私、期限或定时暂停，by AI.Coding。
+        if resumeCapture && startupResumeAllowed && !pausePending && !policy.captureEnabled {
+            var enabled = policy; enabled.captureEnabled = true
+            let committed = try await store.updateCaptureSettings(enabled)
+            // 等待提交时可能已有更新的暂停策略，不能发布旧版本，by AI.Coding。
+            if committed.revision >= policy.revision { policy = committed }
+        }
+        _ = try await store.expire(at: clock.now())
         capacityBlocked = try await !store.canCapture()
-        baseline = board.changeCount; setState(!policy.captureEnabled ? "用户暂停" : capacityBlocked ? "容量已满" : "正常")
+        baseline = board.changeCount; timedPauseActive = (policy.pauseUntil ?? 0) > clock.now()
+        setState(!policy.captureEnabled ? "用户暂停" : timedPauseActive ? "定时暂停" : capacityBlocked ? "容量已满" : "正常")
         polling?.cancel()
         polling = Task { [weak self] in
             while !Task.isCancelled {
@@ -41,11 +54,12 @@ import LocalClipCore
     }
     /// 停止轮询不主动替换系统剪贴板。
     public func stop() { polling?.cancel(); polling = nil; draining?.cancel(); draining = nil; rebaseline() }
-    /// 配置更新保留已采集队列；只有暂停状态转变需要丢弃和重建基线。
+    /// 配置更新保留已采集队列；只有暂停状态转变需要丢弃和重建基线，by AI.Coding。
     public func updatePolicy(_ policy: SettingsSnapshot) {
         let now = clock.now()
         let wasPaused = pausePending || !self.policy.captureEnabled || (self.policy.pauseUntil ?? 0) > now
         let isPaused = !policy.captureEnabled || (policy.pauseUntil ?? 0) > now
+        if !policy.captureEnabled { startupResumeAllowed = false }
         self.policy = policy; pausePending = false
         if wasPaused != isPaused || isPaused { rebaseline() }
         timedPauseActive = (policy.pauseUntil ?? 0) > now
@@ -55,8 +69,8 @@ import LocalClipCore
     public func rebaseline() {
         captureEpoch = UUID(); baseline = board.changeCount; queue.removeAll(); queueBytes = 0
     }
-    /// 用户请求暂停即阻止在途快照，持久化完成前不假装配置已经保存。
-    public func requestPause() { pausePending = true; rebaseline(); setState("正在暂停") }
+    /// 用户请求暂停即阻止在途快照，持久化完成前不假装配置已经保存，by AI.Coding。
+    public func requestPause() { startupResumeAllowed = false; pausePending = true; rebaseline(); setState("正在暂停") }
     /// 写入阶段同步在 MainActor 内完成，计数与指纹是精确收据。
     public func recordOwnWrite(_ receipt: WriteReceipt) { ownReceipt = receipt }
     /// 容量恢复不覆盖主动暂停；不会重采旧剪贴板。

@@ -1,6 +1,6 @@
-# LocalClip 0.3.9（构建31）
+# LocalClip 0.3.11（构建33）
 
-Current delivery: R-01–R-11 source fixes, regression tests and offscreen renders are documented in [review fixes and evidence](docs/review-fixes-r01-r12.md). The user-authorized R-03 repeated-query overhead limit is 60 ms; fresh Release probes measure 17.335001 ms. Initial-cycle startup latency and one retained R-01 miss remain documented concerns. Actual drag/drop, paste receipt, Zed opt-in, VS Code terminal detection, IME, multiple displays and GUI budgets remain user-verified.
+Current delivery: one toolbar row with All, Favourites, type filters and custom categories; the redundant Clipboard History tab is removed. Application startup automatically monitors new clipboard changes after recovery. Current-session Pause, scheduled pauses and privacy/capacity gates remain effective. The reviewer-found startup race is covered by suspended-startup regressions and corrected; previous Quit/focus changes are preserved. Full Debug/Release suites have zero failures. Repeated-query hosted overhead is 23.16 ms (limit 60 ms); initial-cycle overhead is 92.25 ms and remains a concern. Source, tests, raw timings, packaging checks and user-owned live checks are documented in [review fixes and evidence](docs/review-fixes-r01-r12.md).
 
 The app is built from the current reviewed source, with no source exclusions. Packaging replaces the executable with a new inode; it does not install, launch or restart the running application. Use `dist/LocalClip.app` and `dist/LocalClip-source.tar.gz`; version, signature, architecture, hashes and archive checks are recorded in the review report. No commit, push or publication was performed.
 
@@ -34,7 +34,7 @@ Previous review fixes: preserve loaded history and detail during captures, keep 
 rtk proxy bash macos-app/scripts/build-app.sh release
 ```
 
-在项目根目录执行上述命令。只构建并打包，不启动、安装或发布应用。首次采集暂停，由您启用。macOS15+、Apple Silicon；本地ad hoc签名。
+在项目根目录执行上述命令。只构建并打包，不启动、安装或发布应用。每次启动在存储恢复后自动监听新的剪贴板变化；手动暂停只作用于本次运行，定时暂停按期限保留。macOS15+、Apple Silicon；本地ad hoc签名。
 
 ---
 
@@ -56,7 +56,7 @@ rtk proxy env LOCALCLIP_BUILD_PATH=/Users/ronny/VscodeProjects/rea/macos-app/.bu
 rtk proxy open macos-app/dist/LocalClip.app
 ```
 
-产物：`dist/LocalClip.app`，ad hoc 本地签名；未做 Developer ID 签名、公证、安装或发布。菜单栏图标进入历史/设置；再次打开应用由新实例接替并展示历史；默认快捷键 Option–Command–V。首次使用先展示本地采集及隐私说明，确认开始记录后才启动采集。支持 UTF-8 文本、非文件 URL、RTF、HTML、PNG、TIFF、JPEG、真实文件 URL 原始表示及最多32项顺序，单次支持表示合计最多50MiB；图像超过40MP不生成预览，原始格式仍可恢复。
+产物：`dist/LocalClip.app`，ad hoc 本地签名；未做 Developer ID 签名、公证、安装或发布。菜单栏图标进入历史/设置；再次打开应用由新实例接替并展示历史；默认快捷键 Option–Command–V。启动在存储恢复后自动监听，不再要求手动点击“开始记录”；不导入启动前或暂停期间的剪贴板内容，仍先过滤敏感/临时标记并遵守来源排除和容量限制。支持 UTF-8 文本、非文件 URL、RTF、HTML、PNG、TIFF、JPEG、真实文件 URL 原始表示及最多32项顺序，单次支持表示合计最多50MiB；图像超过40MP不生成预览，原始格式仍可恢复。
 
 面板与当前显示器同宽、贴屏幕底边，禁止拖动/缩放；单击选择，双击原格式复制后自动粘贴到打开面板前的应用焦点，无需回车。右下角“复制”按钮仅恢复剪贴板。
 

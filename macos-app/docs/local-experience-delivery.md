@@ -13,7 +13,7 @@ cd /Users/ronny/VscodeProjects/rea
 rtk proxy bash macos-app/scripts/build-app.sh release
 ```
 
-首次使用全新`~/Library/Application Support/LocalClip-LocalEdition`目录。采集初始暂停，由您在首次提示或设置开启。无需保留或导入旧剪贴板历史；本轮不读取旧目录或Paste数据。应用不采集启动、暂停、定时暂停或排除区间内已经发生的内容。
+首次使用全新`~/Library/Application Support/LocalClip-LocalEdition`目录。每次启动在存储恢复后自动监听新的剪贴板变化；手动暂停只作用于本次运行，定时暂停按期限保留。无需保留或导入旧剪贴板历史；本轮不读取旧目录或Paste数据。应用不采集启动、暂停、定时暂停或排除区间内已经发生的内容。
 
 本地ad hoc签名，未公证、未公开分发。请直接用Finder打开`.app`；最终应用可按之前授权打开供您检查。辅助功能权限请授权实际使用的这一份应用，更新签名后系统可能需要重新授权。Finder操作可能另需“自动化 → Finder”批准；登录启动由系统与您批准，不能以构建成功证明注册成功。
 

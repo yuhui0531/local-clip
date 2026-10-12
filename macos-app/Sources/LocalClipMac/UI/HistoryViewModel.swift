@@ -110,6 +110,7 @@ import LocalClipCore
     private var categoryDrag: (token: String, ids: [ClipID], expiresAt: Instant)?
     public var closePanel: (() -> Void)?
     public var openSettings: (() -> Void)?
+    public var quitApplication: (() -> Void)?
     public var registerShortcut: ((Shortcut) -> Bool)?
     public var showPasteFeedback: ((String) -> Void)?
     public var panelInteractionChanged: (() -> Void)?
@@ -117,7 +118,7 @@ import LocalClipCore
         self.store = store; self.capture = capture; self.paste = paste; self.derived = derived; self.clock = clock
     }
     /// 列表先刷新；来源和空间仅在相关入口读取，事实仍来自存储，by AI.Coding。
-    public func start() async throws {
+    public func start(resumeCapture: Bool = false) async throws {
         settings = try await store.settings()
         configureHistoryViewport(width: historyViewport, cardWidth: HistoryView.cardSide(height: settings.panelHeight, filtered: sourceFilter != nil || dateFilterEnabled))
         categories = try await store.categories()
@@ -127,7 +128,7 @@ import LocalClipCore
             self.sourcesNeeded = true
         }
         // 持久变更流已负责刷新，避免同一次采集同时触发两轮查询和布局。
-        try await capture.start(); status = capture.state
+        try await capture.start(resumeCapture: resumeCapture); settings = capture.policy; status = capture.state
         let stream = await store.events()
         subscription = Task { [weak self] in
             for await event in stream {
@@ -155,7 +156,13 @@ import LocalClipCore
                 catch { self.message = "存储状态读取失败" }
             }
         }
-        started = true; refresh()
+        started = true
+        // 启动期间的设置只在新策略和事件订阅就绪后保存，避免与自动恢复争用版本，by AI.Coding。
+        if !pendingSettingsEdits.isEmpty {
+            let edits = pendingSettingsEdits; pendingSettingsEdits.removeAll()
+            updateSettings { value in for edit in edits { edit(&value) } }
+        }
+        refresh()
         if showingFilters { requestSourceSuggestions() }
         // 旧版缺索引只在后台有界修复；空间不足仍从原格式检索，不删除历史。
         indexRepair = Task { [weak self] in
@@ -687,8 +694,19 @@ import LocalClipCore
         let ids = selectedIDs.contains(clipID) ? orderedSelection : [clipID]
         change(.category(ids, categoryID, included))
     }
-    /// 设置持久化成功后才更新开关与采集策略。
+    /// 暂停/恢复保存绝对用户意图，启动后的配置变化不能把按钮动作反转，by AI.Coding。
+    public func setCaptureEnabled(_ enabled: Bool) {
+        if !enabled { capture.requestPause() }
+        updateSettings { $0.captureEnabled = enabled }
+    }
+    /// 设置持久化成功后才更新开关与采集策略，启动期间先排队，by AI.Coding。
     public func updateSettings(_ edit: @escaping (inout SettingsSnapshot) -> Void) {
+        // 启动尚未完成时不持有旧revision写库；无关编辑不会被当作暂停意图，by AI.Coding。
+        if !started {
+            var next = settings; edit(&next)
+            if settings.captureEnabled && !next.captureEnabled { capture.requestPause() }
+            pendingSettingsEdits.append(edit); return
+        }
         // 保存期间累计编辑，下一次合并到最新事实，最终滑块值不会被丢弃。
         guard !savingSettings else { pendingSettingsEdits.append(edit); return }
         var next = settings; edit(&next)

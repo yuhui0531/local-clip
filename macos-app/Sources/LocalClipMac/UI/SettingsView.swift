@@ -19,7 +19,9 @@ public struct SettingsView: View {
                 Text("LocalClip 设置").font(.title2.bold())
                 GroupBox("采集与操作") {
                     VStack(alignment: .leading, spacing: 12) {
-                        Toggle("记录新的剪贴板变化", isOn: Binding(get: { model.settings.captureEnabled }, set: { value in model.updateSettings { $0.captureEnabled = value } }))
+                        // 开关传递绝对用户意图，不能由启动时的新配置反转，by AI.Coding。
+                        Toggle("记录新的剪贴板变化", isOn: Binding(get: { model.settings.captureEnabled }, set: { value in model.setCaptureEnabled(value) }))
+                        Text("启动后自动监听新复制内容；手动暂停只作用于本次运行，定时暂停按期限保留。").font(.caption).foregroundStyle(.secondary)
                         Picker("Enter 默认操作", selection: Binding(get: { model.settings.defaultAction }, set: { value in model.updateSettings { $0.defaultAction = value } })) {
                             Text("复制（默认）").tag(PasteAction.copy); Text("直接粘贴").tag(PasteAction.directPaste)
                         }

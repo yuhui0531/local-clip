@@ -10,11 +10,11 @@ public struct HistoryView: View {
     // 跟随SwiftUI实际外观，避免NSColor按宿主外观解析造成浅色工具栏白字。
     private var toolbarColor: Color { Color(white: colorScheme == .dark ? 0.82 : 0.28) }
     public init(model: HistoryViewModel) { self.model = model }
-    /// 首屏查询与实际卡片布局共用边长，窗口/筛选高度变化不会多读固定50条，by AI.Coding。
+    /// 单行工具栏释放的高度用于卡片，首屏查询仍共用实际边长，by AI.Coding。
     static func cardSide(height: CGFloat, filtered: Bool) -> CGFloat {
         let dense = height < 300
-        let available = max(1, height - 8 - (dense ? 40 : 48) - 40 - (filtered ? 22 : 0) - (dense ? 36 : 44) - 1 - 20)
-        return min(340, available)
+        let available = max(1, height - 8 - (dense ? 40 : 48) - (filtered ? 22 : 0) - (dense ? 36 : 44) - 1 - 20)
+        return available
     }
     /// 直接描画两种小工具图标，避免模板系统图标在材质面板中丢失指定颜色。
     private func toolbarGlyph(filter: Bool) -> some View {
@@ -45,9 +45,9 @@ public struct HistoryView: View {
             let toolbarHeight: CGFloat = dense ? 40 : 48
             let footerHeight: CGFloat = dense ? 36 : 44
             let filterHeight: CGFloat = model.sourceFilter != nil || model.dateFilterEnabled ? 22 : 0
-            let availableCardHeight = max(1, viewport.size.height - 8 - toolbarHeight - 40 - filterHeight - footerHeight - 1 - 20)
             // 正方形宽高一起收缩，完整边界始终留在实际视口内。
             let cardHeight = Self.cardSide(height: viewport.size.height, filtered: filterHeight > 0)
+            let availableCardHeight = cardHeight
             VStack(spacing: 0) {
                 Capsule().fill(.secondary.opacity(0.3)).frame(width: 36, height: 3).frame(maxWidth: .infinity).frame(height: 8).contentShape(Rectangle())
                     .help("上下拖动调整高度")
@@ -61,38 +61,16 @@ public struct HistoryView: View {
                             Image(systemName: "square.on.square.fill").font(.system(size: 15, weight: .semibold)).foregroundStyle(.white) }
                         if !compact { Text("LocalClip").font(.system(size: 16, weight: .bold, design: .rounded)) }
                     }
-                    HStack(spacing: 5) { scope(compact ? "历史" : "剪贴板历史", "clock.arrow.circlepath", false); scope("收藏", "star", true) }
-                    Spacer(minLength: 10)
-                    HistorySearchInput(model: model, input: model.queryState, focus: model.focusRequest).frame(maxWidth: 310).frame(height: 30)
+                    // 全部/收藏固定可见，类型与分类紧随其后，避免重复历史入口，by AI.Coding。
+                    HStack(spacing: 5) { filter("全部", nil); favoritesTab }.fixedSize()
+                    categoryNavigation
+                    HistorySearchInput(model: model, input: model.queryState, focus: model.focusRequest).frame(width: compact ? 160 : 240, height: 30)
                     Button { model.showingFilters.toggle() } label: { toolbarGlyph(filter: true) }.buttonStyle(.plain).accessibilityLabel("筛选").popover(isPresented: $model.showingFilters) { FilterEditor(model: model) }
-                    Button { model.updateSettings { $0.captureEnabled.toggle() } } label: { toolbarGlyph(filter: false) }.buttonStyle(.plain).accessibilityLabel(model.settings.captureEnabled ? "暂停采集" : "恢复采集").help(model.settings.captureEnabled ? "暂停采集" : "恢复采集")
-                    Menu { Button(model.settings.hideContents ? "显示内容" : "隐藏内容") { model.updateSettings { $0.hideContents.toggle() } }; Button("筛选…") { model.showingFilters.toggle() }; Button("撤销删除 · ⌘Z") { model.undoDeletion() }; Button("设置…") { model.openSettings?() }; Button("清空普通历史", role: .destructive) { model.change(.clearOrdinary) } }
+                    Button { model.setCaptureEnabled(!model.settings.captureEnabled) } label: { toolbarGlyph(filter: false) }.buttonStyle(.plain).accessibilityLabel(model.settings.captureEnabled ? "暂停采集" : "恢复采集").help(model.settings.captureEnabled ? "暂停采集" : "恢复采集")
+                    Menu { Button(model.settings.hideContents ? "显示内容" : "隐藏内容") { model.updateSettings { $0.hideContents.toggle() } }; Button("筛选…") { model.showingFilters.toggle() }; Button("撤销删除 · ⌘Z") { model.undoDeletion() }; Button("设置…") { model.openSettings?() }; Button("清空普通历史", role: .destructive) { model.change(.clearOrdinary) }; Divider(); Button("退出 LocalClip") { model.quitApplication?() }.keyboardShortcut("q", modifiers: .command) }
                         label: { Image(systemName: "ellipsis.circle").font(.system(size: 20, weight: .light)) }.menuStyle(.borderlessButton).fixedSize()
                     Button { model.closePanel?() } label: { Image(systemName: "xmark").font(.system(size: 11, weight: .semibold)).frame(width: 24, height: 24).background(.primary.opacity(0.06), in: Circle()) }.buttonStyle(.plain).help("关闭 · Escape")
                 }.padding(.horizontal, 24).frame(height: toolbarHeight)
-                // 分类不足一屏时整组居中，溢出时整组滚动；＋始终紧随最后一个分类。
-                GeometryReader { geometry in
-                    ScrollViewReader { proxy in
-                        ScrollView(.horizontal) {
-                            HStack(spacing: 7) {
-                                filter("全部", nil)
-                                ForEach(ClipKind.allCases, id: \.self) { filter(Self.kindName($0), $0) }
-                                if !model.categories.isEmpty { Divider().frame(height: 16).padding(.horizontal, 5) }
-                                ForEach(model.categories) { categoryTab($0).id($0.id) }
-                                Button { model.editCategory() } label: {
-                                    Image(systemName: "plus").font(.system(size: 20, weight: .regular)).frame(width: 34, height: 32)
-                                }.buttonStyle(.plain).help("新建分类").accessibilityLabel("新建分类")
-                                    .popover(isPresented: $model.showingCategoryEditor, arrowEdge: .top) { CategoryEditor(model: model) }
-                            // 固定标签本身的宽度，剩余空间只由外层居中框架分配。
-                            }.fixedSize(horizontal: true, vertical: false)
-                                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { categoryContentWidth = $0 }
-                                .frame(minWidth: geometry.size.width, minHeight: 32, alignment: .center)
-                        }.scrollIndicators(.hidden)
-                            .onChange(of: model.categoryID) { _, id in
-                                if let id, categoryContentWidth > geometry.size.width { proxy.scrollTo(id, anchor: .center) }
-                            }
-                    }
-                }.frame(height: 32).padding(.horizontal, 24).padding(.bottom, 8)
                 if filterHeight > 0 { FilterStrip(model: model) }
                 HistoryStrip(model: model, list: model.listState, cardHeight: cardHeight,
                     availableCardHeight: availableCardHeight, categoryID: model.categoryID, categories: model.categories,
@@ -128,12 +106,36 @@ public struct HistoryView: View {
                 .onChange(of: model.showingCategoryEditor) { _, _ in model.panelInteractionChanged?() }
         }.frame(maxWidth: .infinity, maxHeight: .infinity)
     }
-    /// 历史/收藏入口退出分类筛选，分类具有独立入口。
-    private func scope(_ title: String, _ symbol: String, _ favorite: Bool) -> some View {
-        Button { model.categoryID = nil; model.categoryFilters = []; model.kind = nil; model.favorites = favorite } label: { Label(title, systemImage: symbol).font(.system(size: 12, weight: .semibold)).padding(.horizontal, 13).padding(.vertical, 8)
-            .foregroundStyle(model.activeCategories.isEmpty && model.favorites == favorite ? Color.primary : Color.secondary).background(model.activeCategories.isEmpty && model.favorites == favorite ? Color.primary.opacity(0.08) : Color.clear, in: Capsule()) }.buttonStyle(.plain)
+    /// 类型与分类共享工具栏剩余宽度；溢出只滚动这段，主入口与搜索保持可见，by AI.Coding。
+    private var categoryNavigation: some View {
+        GeometryReader { geometry in
+            ScrollViewReader { proxy in
+                ScrollView(.horizontal) {
+                    HStack(spacing: 7) {
+                        ForEach(ClipKind.allCases, id: \.self) { filter(Self.kindName($0), $0) }
+                        if !model.categories.isEmpty { Divider().frame(height: 16).padding(.horizontal, 5) }
+                        ForEach(model.categories) { categoryTab($0).id($0.id) }
+                        Button { model.editCategory() } label: {
+                            Image(systemName: "plus").font(.system(size: 20, weight: .regular)).frame(width: 34, height: 32)
+                        }.buttonStyle(.plain).help("新建分类").accessibilityLabel("新建分类")
+                            .popover(isPresented: $model.showingCategoryEditor, arrowEdge: .top) { CategoryEditor(model: model) }
+                    // 标签从收藏右侧依次排列，剩余空间不能把分类推到第二行，by AI.Coding。
+                    }.fixedSize(horizontal: true, vertical: false)
+                        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { categoryContentWidth = $0 }
+                        .frame(minWidth: geometry.size.width, minHeight: 32, alignment: .leading)
+                }.scrollIndicators(.hidden)
+                    .onChange(of: model.categoryID) { _, id in
+                        if let id, categoryContentWidth > geometry.size.width { proxy.scrollTo(id, anchor: .center) }
+                    }
+            }
+        }.frame(height: 32)
     }
-    /// 类型入口退出自定义分类；全部按钮不会在分类页面伪装成已选中。
+    /// 收藏独立于类型与分类；全部是唯一的完整历史入口，by AI.Coding。
+    private var favoritesTab: some View {
+        Button { model.categoryID = nil; model.categoryFilters = []; model.kind = nil; model.favorites = true } label: { Label("收藏", systemImage: "star").font(.system(size: 13, weight: model.favorites ? .semibold : .regular)).padding(.horizontal, 12).padding(.vertical, 6)
+            .foregroundStyle(model.favorites ? Color.primary : Color.secondary).background(model.favorites ? Color.primary.opacity(0.08) : Color.clear, in: Capsule()) }.buttonStyle(.plain)
+    }
+    /// 类型入口退出自定义分类；全部按钮不会在分类页面伪装成已选中，by AI.Coding。
     private func filter(_ title: String, _ kind: ClipKind?) -> some View {
         let selected = model.kind == kind && model.activeCategories.isEmpty && !model.favorites
         return Button { model.selectKind(kind) } label: {
@@ -233,7 +235,7 @@ private struct HistoryEmptyState: View {
         VStack(spacing: 12) {
             Image(systemName: emptyQuery ? "square.on.square" : "magnifyingglass").font(.system(size: 38, weight: .ultraLight)).foregroundStyle(.secondary)
             Text(loading ? "正在读取历史…" : emptyQuery ? categoryID == nil ? "下一次复制，就从这里开始" : "这个分类还没有记录" : "没有匹配的历史").font(.system(size: 18, weight: .semibold))
-            Text(emptyQuery ? categoryID == nil ? "文字、链接、图片、富文本和文件引用，只保存在这台 Mac。" : "回到剪贴板历史，把记录拖到这个分类标签。" : "中文短词、代码符号和链接片段，均按字面查找。").font(.system(size: 12)).foregroundStyle(.secondary)
+            Text(emptyQuery ? categoryID == nil ? "文字、链接、图片、富文本和文件引用，只保存在这台 Mac。" : "选择“全部”，把记录拖到这个分类标签。" : "中文短词、代码符号和链接片段，均按字面查找。").font(.system(size: 12)).foregroundStyle(.secondary)
         }
     }
 }
