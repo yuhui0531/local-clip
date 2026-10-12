@@ -143,22 +143,25 @@ private final class CountingBodyProvider: NSObject, NSPasteboardItemDataProvider
         let client = MacPasteboardClient(access: NativePasteboardAccess(native))
         let store = try HistoryStore(location: root.appendingPathComponent("store"))
         let policy = try await store.settings()
-        let source = try #require(Bundle.module.url(forResource: "PasteboardSoakWriter", withExtension: "m", subdirectory: "Fixtures"))
+        let source = try #require(Bundle.module.resourceURL?.appendingPathComponent("PasteboardSoakWriter.m"))
+        print("R11 writer fixture SHA256=\(ContentFingerprint.hash(try Data(contentsOf: source)))")
         let executable = root.appendingPathComponent("pasteboard-soak-writer")
         let compiler = Process()
         compiler.executableURL = URL(fileURLWithPath: "/usr/bin/clang")
-        compiler.arguments = ["-fmodules", "-fmodules-cache-path=\(root.appendingPathComponent("clang-cache").path)",
-                              "-framework", "Carbon", source.path, "-o", executable.path]
+        compiler.arguments = ["-fmodules", "-fobjc-arc", "-fmodules-cache-path=\(root.appendingPathComponent("clang-cache").path)",
+                              "-framework", "AppKit", source.path, "-o", executable.path]
         try compiler.run(); compiler.waitUntilExit()
         #expect(compiler.terminationStatus == 0)
 
         let writer = Process(), output = Pipe(), errors = Pipe()
         writer.executableURL = executable
-        writer.arguments = [boardName, "10000"]
+        let receiptLog = root.appendingPathComponent("writer-receipts.txt")
+        writer.arguments = [boardName, "10000", receiptLog.path]
         writer.standardOutput = output; writer.standardError = errors
         try writer.run()
         var baseline = native.changeCount
         var savedInputs = Set<Int>(), savedClipIDs = Set<ClipID>(), captureSkipEvents = 0
+        var skippedCounts = Set<Int>()
         func accept(_ snapshot: ClipboardSnapshot) async throws {
             guard let representation = snapshot.payload.items.first?.representations.first(where: { $0.type == SupportedType.string }),
                   let value = String(data: representation.data, encoding: .utf8), value.hasPrefix("LOCALCLIP-SOAK-"),
@@ -178,7 +181,7 @@ private final class CountingBodyProvider: NSObject, NSPasteboardItemDataProvider
             case .noChange:
                 try await Task.sleep(for: .milliseconds(1))
             case .skipped(_, let count):
-                baseline = count; captureSkipEvents += 1
+                baseline = count; captureSkipEvents += 1; skippedCounts.insert(count)
             case .snapshot(let snapshot):
                 baseline = snapshot.changeCount
                 try await accept(snapshot)
@@ -191,16 +194,28 @@ private final class CountingBodyProvider: NSObject, NSPasteboardItemDataProvider
         if writer.terminationStatus != 0 { Issue.record("writer failed: \(writerError)") }
         #expect(writer.terminationStatus == 0)
         #expect(writerOutput == "10000")
+        guard writer.terminationStatus == 0, writerOutput == "10000" else { return }
         switch await client.captureAsync(after: baseline, policy: policy) {
         case .snapshot(let snapshot): try await accept(snapshot)
-        case .skipped: captureSkipEvents += 1
+        case .skipped(_, let count): captureSkipEvents += 1; skippedCounts.insert(count)
         case .noChange: break
         }
         let writerInputs = Set(0..<10_000)
         let neverCapturedInputs = writerInputs.subtracting(savedInputs)
-        print("R11 named-pasteboard soak: writes=10000 uniqueInputsCaptured=\(savedInputs.count) captureSkipEvents=\(captureSkipEvents) writesNeverCaptured=\(neverCapturedInputs.count)")
+        let receipts = try String(contentsOf: receiptLog, encoding: .utf8).split(separator: "\n").compactMap { line -> (Int, Int)? in
+            let fields = line.split(separator: " ").compactMap { Int($0) }
+            return fields.count == 2 ? (fields[0], fields[1]) : nil
+        }
+        #expect(receipts.count == 10_000)
+        #expect(Set(receipts.map(\.0)) == writerInputs)
+        #expect(Set(receipts.map(\.1)).count == 10_000)
+        // 输入按最终捕获结果收据分成互斥集合；重试中可能检查过其余输入，by AI.Coding。
+        let explicitlySkippedInputs = Set(receipts.filter { skippedCounts.contains($0.1) }.map(\.0)).subtracting(savedInputs)
+        let unobservedInputs = neverCapturedInputs.subtracting(explicitlySkippedInputs)
+        print("R11 named-pasteboard soak: writes=10000 uniqueInputsCaptured=\(savedInputs.count) explicitlySkippedInputs=\(explicitlySkippedInputs.count) unobservedInputs=\(unobservedInputs.count) captureSkipEvents=\(captureSkipEvents) writesNeverCaptured=\(neverCapturedInputs.count)")
         #expect(savedInputs.isSubset(of: writerInputs))
         #expect(savedInputs.count + neverCapturedInputs.count == writerInputs.count)
+        #expect(savedInputs.count + explicitlySkippedInputs.count + unobservedInputs.count == writerInputs.count)
         #expect(savedClipIDs.count == savedInputs.count)
         #expect(try await store.search(.init("LOCALCLIP-SOAK-")).items.count == min(savedInputs.count, 50))
     }

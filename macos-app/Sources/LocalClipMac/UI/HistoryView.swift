@@ -507,7 +507,7 @@ private struct ClipCard: View, Equatable {
             VStack(alignment: .leading, spacing: 10) { Image(systemName: "link").font(.system(size: 22, weight: .light)).foregroundStyle(tint); Text(URL(string: item.preview)?.host ?? "链接").font(.system(size: 15, weight: .semibold, design: .rounded)).lineLimit(1); Text(item.context).font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary).lineLimit(4); Spacer(minLength: 0) }.padding(14)
         } else {
             // 卡片正文自动高亮代码，普通内容保持原有排版，by AI.Coding。
-            SyntaxText(text: item.context, size: tiny ? 10 : height < 200 ? 10 : height < 210 ? 13 : 15, onLanguage: { detectedLanguage = $0 })
+            SyntaxText(text: item.context, size: tiny ? 10 : height < 200 ? 9.5 : height < 210 ? 13 : 15, spacing: tiny ? 0 : 3, onLanguage: { detectedLanguage = $0 })
                 .lineSpacing(tiny ? 0 : 3).frame(maxWidth: .infinity, alignment: .topLeading)
                 .padding(.horizontal, tiny || height < 200 ? 6 : 14).padding(.top, tiny ? 3 : 10).padding(.bottom, tiny ? 0 : 4)
         }

@@ -1,4 +1,11 @@
-# LocalClip 0.3.8（构建30）
+# LocalClip 0.3.9（构建31）
+
+Current delivery: R-01–R-11 source fixes, regression tests and offscreen renders are documented in [review fixes and evidence](docs/review-fixes-r01-r12.md). The user-authorized R-03 repeated-query overhead limit is 60 ms; fresh Release probes measure 17.335001 ms. Initial-cycle startup latency and one retained R-01 miss remain documented concerns. Actual drag/drop, paste receipt, Zed opt-in, VS Code terminal detection, IME, multiple displays and GUI budgets remain user-verified.
+
+The app is built from the current reviewed source, with no source exclusions. Packaging replaces the executable with a new inode; it does not install, launch or restart the running application. Use `dist/LocalClip.app` and `dist/LocalClip-source.tar.gz`; version, signature, architecture, hashes and archive checks are recorded in the review report. No commit, push or publication was performed.
+
+## Previous 0.3.8（构建30）delivery
+
 
 Current follow-up: in a single category's browsing list, newly added or re-dropped items appear at the left; multi-selection keeps its source order. A valid external recopy also promotes the existing item in each of its categories. Unaffected members retain their order, and manual ordering remains available. Search relevance and combined-category copy-time ordering remain intact. Implementation and regression evidence: [newest-first ordering](../changes/active/localclip-review-fixes/debug-log-2026-10-11-newest-first-order.md). Quit the old app and open `dist/LocalClip-0.3.8-build30.app` to use build 30; this turn did not launch or install it.
 

@@ -68,7 +68,7 @@ import Testing
         }
         let footer = model.listState.footerState.$snapshot.dropFirst().sink { snapshot in
             if let firstResult, snapshot.itemCount == 1, snapshot.selectedID == firstResult.selectedID,
-               snapshot.selectedCount == 1, snapshot.loading == false {
+               snapshot.selectedCount == 1, snapshot.loading == false, snapshot.selectedMetadata == nil {
                 footerResultPublications += 1
             }
         }

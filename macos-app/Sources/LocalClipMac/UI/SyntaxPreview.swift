@@ -23,6 +23,7 @@ import SwiftUI
 struct SyntaxText: View {
     let text: String
     let size: CGFloat
+    var spacing: CGFloat = 3
     var onLanguage: (String?) -> Void = { _ in }
     @Environment(\.colorScheme) private var scheme
     @State private var highlighted: SyntaxHighlight?
@@ -31,13 +32,7 @@ struct SyntaxText: View {
         Group {
             if source == text, let highlighted {
                 // 窄卡片按字符软换行，并以源行缩进作为续行悬挂缩进，by AI.Coding。
-                let lines: [AttributedString] = SyntaxLineCache.lines(text, highlight: highlighted, size: size, dark: scheme == .dark)
-                VStack(alignment: .leading, spacing: 3) {
-                    ForEach(Array(0..<lines.count), id: \.self) { (index: Int) in
-                        Text(lines[index]).lineLimit(nil).fixedSize(horizontal: false, vertical: true)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                }
+                SyntaxCardPreview(content: SyntaxLineCache.content(text, highlight: highlighted, size: size, dark: scheme == .dark, spacing: spacing))
             }
             else { Text(text).font(.system(size: size)) }
         }.task(id: text) {
@@ -50,10 +45,10 @@ struct SyntaxText: View {
 }
 
 /// 同一正文、语法范围、配色和字号复用一次构造的行切片，避免逐行重建全文，by AI.Coding。
-@MainActor private enum SyntaxLineCache {
+@MainActor enum SyntaxLineCache {
     private final class Lines: NSObject {
-        let values: [AttributedString]
-        init(_ values: [AttributedString]) { self.values = values }
+        let content: NSAttributedString
+        init(_ content: NSAttributedString) { self.content = content }
     }
     private static let cache: NSCache<NSString, Lines> = {
         let value = NSCache<NSString, Lines>()
@@ -62,39 +57,61 @@ struct SyntaxText: View {
         return value
     }()
 
-    static func lines(_ text: String, highlight: SyntaxHighlight, size: CGFloat, dark: Bool) -> [AttributedString] {
+    static func content(_ text: String, highlight: SyntaxHighlight, size: CGFloat, dark: Bool, spacing: CGFloat) -> NSAttributedString {
         let spanKey = highlight.spans.map { "\($0.range.location):\($0.range.length):\($0.style)" }.joined(separator: ";")
-        let key = NSString(string: "\(text)\u{1f}\(highlight.language)\u{1f}\(spanKey)\u{1f}\(dark)\u{1f}\(size.bitPattern)")
-        if let cached = cache.object(forKey: key) { return cached.values }
+        let key = NSString(string: "\(text)\u{1f}\(highlight.language)\u{1f}\(spanKey)\u{1f}\(dark)\u{1f}\(size.bitPattern)\u{1f}\(spacing.bitPattern)")
+        if let cached = cache.object(forKey: key) { return cached.content }
 
         let source = SyntaxStyle.attributed(text, highlight: highlight, size: size, dark: dark)
+        let font = NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
+        let spaceWidth = (" " as NSString).size(withAttributes: [.font: font]).width
+        let tabWidth = spaceWidth * 4
         let string = text as NSString
-        var output: [AttributedString] = []
+        let output = NSMutableAttributedString(string: "")
         var offset = 0
         while offset < string.length {
             var start = 0, end = 0, contentsEnd = 0
             string.getLineStart(&start, end: &end, contentsEnd: &contentsEnd,
                                 for: NSRange(location: offset, length: 0))
-            let range = NSRange(location: start, length: contentsEnd - start)
-            let line = string.substring(with: range)
+            let range = NSRange(location: start, length: end - start)
+            let line = string.substring(with: NSRange(location: start, length: contentsEnd - start))
             let attributed = NSMutableAttributedString(attributedString: source.attributedSubstring(from: range))
             if attributed.length > 0 {
                 let indent = line.prefix { $0 == " " || $0 == "\t" }.reduce(CGFloat.zero) {
-                    $0 + ($1 == "\t" ? size * 2.4 : size * 0.6)
+                    $1 == "\t" ? (floor($0 / tabWidth) + 1) * tabWidth : $0 + spaceWidth
                 }
                 let paragraph = NSMutableParagraphStyle()
+                paragraph.tabStops = []
+                paragraph.defaultTabInterval = tabWidth
                 paragraph.firstLineHeadIndent = 0
                 paragraph.headIndent = indent
                 paragraph.lineBreakMode = .byCharWrapping
+                paragraph.lineSpacing = spacing
+                paragraph.paragraphSpacing = 0
                 attributed.addAttribute(.paragraphStyle, value: paragraph, range: NSRange(location: 0, length: attributed.length))
             }
-            output.append(AttributedString(attributed))
+            output.append(attributed)
             guard end > offset else { break }
             offset = end
         }
-        if text.isEmpty || text.hasSuffix("\n") { output.append(AttributedString("")) }
         cache.setObject(Lines(output), forKey: key, cost: max(1, text.utf16.count * 2))
         return output
+    }
+}
+/// AppKit绘制保留段落缩进与字符换行；透明命中仍交给卡片拖动桥，by AI.Coding。
+struct SyntaxCardPreview: NSViewRepresentable {
+    let content: NSAttributedString
+    func makeNSView(context: Context) -> Preview { Preview() }
+    func updateNSView(_ view: Preview, context: Context) {
+        if !view.content.isEqual(to: content) { view.content = content; view.needsDisplay = true }
+    }
+    final class Preview: NSView {
+        var content = NSAttributedString(string: "")
+        override var isFlipped: Bool { true }
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+        override func draw(_ dirtyRect: NSRect) {
+            content.draw(with: bounds, options: [.usesLineFragmentOrigin, .usesFontLeading])
+        }
     }
 }
 struct SyntaxDetailPreview: View {
