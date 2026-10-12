@@ -46,7 +46,18 @@ public actor HistoryStore: HistoryRepository {
         if FileManager.default.fileExists(atPath: strategy.databaseURL.path) {
             // 读写打开让SQLite回滚崩溃遗留的热日志；只读取版本，高版本库不被修改。
             let db = try SQLiteConnection(strategy.databaseURL)
-            let version = try db.scalarInt("PRAGMA user_version")
+            var version = try db.scalarInt("PRAGMA user_version")
+            // 唯一受支持的旧版本：先在存储目录外写一致性备份，再原地无损升级；其他版本仍拒绝，by AI.Coding。
+            if version == 3 {
+                do {
+                    let backups = location.appendingPathComponent("Backups", isDirectory: true)
+                    try FileManager.default.createDirectory(at: backups, withIntermediateDirectories: true)
+                    let backup = backups.appendingPathComponent("history-v3-\(clock.now()).sqlite")
+                    if !FileManager.default.fileExists(atPath: backup.path) { try db.run("VACUUM INTO ?", [.text(backup.path)]) }
+                    try Schema.upgradeFromV3(db)
+                } catch { try? db.close(); throw StoreError.incompatibleSchema }
+                version = try db.scalarInt("PRAGMA user_version")
+            }
             guard version == Schema.version else { try db.close(); throw StoreError.incompatibleSchema }
             guard try db.scalarText("PRAGMA quick_check") == "ok", try db.rows("PRAGMA foreign_key_check").isEmpty else { throw StoreError.corruptPayload }
             try db.close()
@@ -121,6 +132,25 @@ public actor HistoryStore: HistoryRepository {
     private func trackBlobRemovals(_ db: SQLiteConnection) throws {
         try db.exec("CREATE TEMP TABLE removed_blob_refs(digest TEXT PRIMARY KEY); CREATE TEMP TRIGGER track_removed_blob_refs AFTER DELETE ON main.representations BEGIN INSERT OR IGNORE INTO removed_blob_refs VALUES(old.blobDigest); END;")
     }
+    /// 已有图片记录去掉与PNG同图的TIFF副本并重算内容身份；身份冲突的记录保持原样，BLOB由统一回收删除，by AI.Coding。
+    @discardableResult public func compactRedundantImages() throws -> Int {
+        let png = SQLValue.text(SupportedType.png), tiff = SQLValue.text(SupportedType.tiff)
+        let ids = try strategy.read { db in
+            try db.rows("SELECT DISTINCT t.clipID FROM representations t JOIN representations p ON p.clipID=t.clipID AND p.itemIndex=t.itemIndex AND p.type=? WHERE t.type=?", [png, tiff]).map { $0.text("clipID") }
+        }
+        guard !ids.isEmpty else { return 0 }
+        var changed = 0
+        try mutate(quota: try settings().quotaBytes, allowOverQuota: true) { db in
+            for id in ids {
+                let hash = try readPayload(db, id: id).withoutRedundantTIFF.fingerprint
+                guard try db.rows("SELECT 1 FROM clips WHERE contentHash=? AND id<>?", [.text(hash), .text(id)]).isEmpty else { continue }
+                try db.run("DELETE FROM representations WHERE clipID=?1 AND type=?2 AND itemIndex IN (SELECT itemIndex FROM representations WHERE clipID=?1 AND type=?3)", [.text(id), tiff, png])
+                try db.run("UPDATE clips SET contentHash=? WHERE id=?", [.text(hash), .text(id)])
+                changed += 1
+            }
+        }
+        return changed
+    }
     /// 共享BLOB只有最后引用消失才删除，不扫描未变更记录；名称随记录行级联删除。
     private func garbageCollect(_ db: SQLiteConnection) throws {
         try db.exec("DELETE FROM blobs WHERE digest IS NULL; DELETE FROM blobs WHERE digest IN (SELECT digest FROM removed_blob_refs) AND NOT EXISTS(SELECT 1 FROM representations WHERE blobDigest=blobs.digest); DELETE FROM removed_blob_refs")
@@ -182,7 +212,8 @@ public actor HistoryStore: HistoryRepository {
         let settings = try settings()
         if let rejection = settings.rejection(source: snapshot.source, types: snapshot.payload.items.map(\.declaredTypes)) { return .skipped(rejection) }
         guard snapshot.policyRevision == settings.revision else { throw StoreError.policyChanged }
-        let payload = snapshot.payload
+        // 身份与容量都按去掉冗余TIFF后的内容计算，新旧记录口径一致。
+        let payload = snapshot.payload.withoutRedundantTIFF
         guard !payload.items.isEmpty, payload.items.count <= 32, payload.byteCount <= 50 * MiB else { return .skipped(.tooLarge) }
         for item in payload.items {
             let types = item.representations.map(\.type)

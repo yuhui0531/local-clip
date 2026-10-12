@@ -42,19 +42,31 @@ import LocalClipCore
         for (name, color) in [("自定义", "34C759"), ("提示词", "8E8E93"), ("物理知识", "FFCC00")] {
             _ = try await store.createCategory(name: name, colorHex: color)
         }
+        if ProcessInfo.processInfo.environment["LOCALCLIP_VISUAL_STATE"] == "categories" {
+            for index in 1...18 { _ = try await store.createCategory(name: "测试分类 \(index)", colorHex: "007AFF") }
+        }
         let board = MacPasteboardClient(access: NativePasteboardAccess(NSPasteboard(name: .init("local.localclip.visual." + UUID().uuidString))))
         let capture = CaptureCoordinator(board: board, store: store)
         let paste = PasteCoordinator(board: board, applications: MacApplicationClient(), store: store, capture: capture)
         let model = HistoryViewModel(store: store, capture: capture, paste: paste, derived: DerivedContentService(store: store))
         try await model.start(); defer { if !keepOpen { capture.stop() } }
         model.actualPanelHeight = height
+        // 所有视觉状态仅作用于合成临时库，用于检查空状态、隐藏和溢出，by AI.Coding。
+        switch ProcessInfo.processInfo.environment["LOCALCLIP_VISUAL_STATE"] {
+        case "empty": model.query = "no-matching-synthetic-record"; model.searchChanged()
+        case "favorites": model.favorites = true; model.kind = .file; model.searchChanged()
+        case "hidden": model.updateSettings { $0.hideContents = true }
+        case "paused": model.updateSettings { $0.pauseUntil = SystemClock().now() + 60_000 }
+        default: break
+        }
         // 弹出框离屏无法截取，单独渲染筛选与详情内容供视觉检查，by AI.Coding。
         let popover = ProcessInfo.processInfo.environment["LOCALCLIP_VISUAL_POPOVER"]
         if popover == "detail" { while model.items.isEmpty { try await Task.sleep(for: .milliseconds(20)) }; model.select(model.items.first(where: { HistoryView.kindName($0.kind) == ProcessInfo.processInfo.environment["LOCALCLIP_VISUAL_KIND"] })?.id ?? model.items.first?.id); model.showingDetail = true; model.detailVisibilityChanged() }
+        var settingsHeight: CGFloat?
         let view: AnyView = popover == "filter" ? AnyView(FilterEditor(model: model).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top).background(Color(nsColor: .windowBackgroundColor)))
             : popover == "detail" ? AnyView(ClipInspector(model: model).frame(width: 520).frame(maxHeight: .infinity, alignment: .top).background(Color(nsColor: .windowBackgroundColor)))
             : ProcessInfo.processInfo.environment["LOCALCLIP_VISUAL_SETTINGS"] == "1"
-            ? AnyView(SettingsView(model: model, login: LoginItemService()))
+            ? AnyView(SettingsView(model: model, login: LoginItemService(), section: SettingsSection(rawValue: ProcessInfo.processInfo.environment["LOCALCLIP_VISUAL_SECTION"] ?? "") ?? .general, fitWindow: { settingsHeight = $0 }))
             : codeDetail
             ? AnyView(VStack(alignment: .leading, spacing: 12) { Text("代码详情 · JSON").font(.headline); SyntaxDetailPreview(content: NSAttributedString(string: codeFixtures[0])) }.padding(24).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).background(Color(nsColor: .windowBackgroundColor)))
             : AnyView(HistoryView(model: model))
@@ -81,6 +93,8 @@ import LocalClipCore
         }
         // 给实际查询、SwiftUI布局和ImageIO可见任务时间完成。
         try await Task.sleep(for: .milliseconds(700))
+        // 设置窗口按内容定高，验证图同样使用贴合尺寸，暴露留白或截断。
+        if let settingsHeight { window.setContentSize(.init(width: width, height: settingsHeight)); host.frame.size = .init(width: width, height: settingsHeight); try await Task.sleep(for: .milliseconds(200)) }
         window.displayIfNeeded(); host.layoutSubtreeIfNeeded()
         guard let representation = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { throw StoreError.ioFailure }
         host.cacheDisplay(in: host.bounds, to: representation)

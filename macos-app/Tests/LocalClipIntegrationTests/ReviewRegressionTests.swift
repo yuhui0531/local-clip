@@ -190,6 +190,39 @@ import LocalClipCore
         try await until { model.settings.panelHeight == 480 && model.settings.captureSounds }
         #expect(try await store.settings().panelHeight == 480); #expect(try await store.settings().captureSounds)
     }
+    /// 恢复按钮清除定时暂停并持久化；不能只是把记录开关改成开启，by AI.Coding。
+    @Test func resumeRecordingClearsTimedPause() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try HistoryStore(location: root), model = model(store, RawBoard())
+        try await model.start(); defer { model.capture.stop() }
+        model.updateSettings { $0.pauseUntil = SystemClock().now() + 60_000 }
+        try await until { model.settings.pauseUntil != nil }
+        model.resumeRecording()
+        try await until { model.settings.captureEnabled && model.settings.pauseUntil == nil }
+        let saved = try await store.settings()
+        #expect(saved.captureEnabled && saved.pauseUntil == nil)
+        model.query = "keep my search"; model.favorites = true; model.kind = .image
+        model.sourceFilter = "com.example"; model.dateFilterEnabled = true
+        model.categoryID = "category"; model.categoryFilters = ["category"]
+        model.clearHistoryFilters()
+        #expect(model.query == "keep my search")
+        #expect(!model.favorites && model.kind == nil && model.activeCategories.isEmpty)
+        #expect(model.sourceFilter == nil && !model.dateFilterEnabled)
+    }
+    /// 中文候选中的 Esc 交给输入法，普通 Esc 仍关闭面板，by AI.Coding。
+    @Test func searchEscapeRespectsMarkedText() {
+        var closes = 0
+        let field = SearchField(text: .constant(""), focus: UUID(), onChange: {}, onNavigate: { _ in }, onEnter: {}, onEscape: { closes += 1 })
+        let coordinator = field.makeCoordinator(), editor = NSTextView(), control = NSSearchField()
+        editor.setMarkedText("拼", selectedRange: NSRange(location: 1, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+        #expect(editor.hasMarkedText())
+        #expect(!coordinator.control(control, textView: editor, doCommandBy: #selector(NSResponder.cancelOperation(_:))))
+        #expect(closes == 0)
+        editor.unmarkText()
+        #expect(coordinator.control(control, textView: editor, doCommandBy: #selector(NSResponder.cancelOperation(_:))))
+        #expect(closes == 1)
+    }
     /// 空输入也不删除历史，IME和原生文本编辑仍由field editor处理。
     @Test func backspaceInEmptySearchNeverDeletesRecord() {
         var deletes = 0

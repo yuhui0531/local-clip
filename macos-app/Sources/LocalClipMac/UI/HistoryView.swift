@@ -38,7 +38,7 @@ public struct HistoryView: View {
                     HStack(spacing: 9) {
                         ZStack { RoundedRectangle(cornerRadius: 8).fill(Color(red: 0.92, green: 0.32, blue: 0.38)).frame(width: 30, height: 30)
                             Image(systemName: "square.on.square.fill").font(.system(size: 15, weight: .semibold)).foregroundStyle(.white) }
-                        if !compact { Text("LocalClip").font(.system(size: 16, weight: .bold, design: .rounded)) }
+                        if !compact { Text("LocalClip").font(.system(size: 16, weight: .bold, design: .default)) }
                     }
                     // 全部/收藏固定可见，类型与分类紧随其后，避免重复历史入口，by AI.Coding。
                     // 范围与类型之间用和分类前相同的分隔线，间距与标签一致，by AI.Coding。
@@ -53,8 +53,8 @@ public struct HistoryView: View {
                         ToolbarIconButton(symbol: filtering ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle", tint: filtering ? .accentColor : nil, help: "筛选") { model.showingFilters.toggle() }
                             .popover(isPresented: $model.showingFilters) { FilterEditor(model: model) }
                         // 暂停时图标转为醒目的恢复入口，状态与动作一眼可辨，by AI.Coding。
-                        let recording = model.settings.captureEnabled
-                        ToolbarIconButton(symbol: recording ? "pause.circle" : "play.circle.fill", tint: recording ? nil : .orange, help: recording ? "暂停记录" : "恢复记录") { model.setCaptureEnabled(!recording) }
+                        let recording = model.settings.captureEnabled && model.status != "定时暂停"
+                        ToolbarIconButton(symbol: recording ? "pause.circle" : "play.circle.fill", tint: recording ? nil : .orange, help: recording ? "暂停记录" : "恢复记录") { if recording { model.setCaptureEnabled(false) } else { model.resumeRecording() } }
                         Menu {
                             Button(model.settings.hideContents ? "显示内容" : "隐藏内容") { model.updateSettings { $0.hideContents.toggle() } }
                             Button("筛选…") { model.showingFilters.toggle() }
@@ -74,13 +74,13 @@ public struct HistoryView: View {
                     target: model.target, draggedIDs: model.draggedIDs, hideContents: model.settings.hideContents, focusRequest: model.focusRequest, renamingID: model.renamingID)
                 Divider().opacity(0.5)
                 HStack(spacing: 12) {
-                    Circle().fill(!model.settings.captureEnabled ? Color.orange : model.capture.capacityBlocked ? Color.red : Color.green).frame(width: 6, height: 6)
+                    Circle().fill(model.status == "正常" ? Color.green : model.capture.capacityBlocked ? Color.red : Color.orange).frame(width: 6, height: 6)
                     Text(model.message.isEmpty ? Self.statusLabel(model.status) : model.message).font(.system(size: 11, weight: .medium)).lineLimit(1)
                         .foregroundStyle(model.message.isEmpty ? Color.secondary : Color.primary)
                         .help(model.ignoreDescription)
                     // 暂停时就地提供恢复入口，不必去找工具栏或菜单，by AI.Coding。
-                    if !model.settings.captureEnabled && model.message.isEmpty {
-                        Button("恢复记录") { model.setCaptureEnabled(true) }.buttonStyle(.link).font(.system(size: 11))
+                    if (!model.settings.captureEnabled || model.status == "定时暂停") && model.message.isEmpty {
+                        Button("恢复记录") { model.resumeRecording() }.buttonStyle(.link).font(.system(size: 11))
                     }
                     HistoryListStatistics(footer: model.listState.footerState)
                     Spacer()
@@ -172,12 +172,12 @@ public struct HistoryView: View {
     private var favoritesTab: some View {
         Button { model.categoryID = nil; model.categoryFilters = []; model.kind = nil; model.favorites = true } label: {
             Label("收藏", systemImage: model.favorites ? "star.fill" : "star")
-        }.buttonStyle(ToolbarTabStyle(selected: model.favorites))
+        }.buttonStyle(ToolbarTabStyle(selected: model.favorites)).accessibilityAddTraits(model.favorites ? .isSelected : [])
     }
     /// 类型入口退出自定义分类；全部按钮不会在分类页面伪装成已选中，by AI.Coding。
     private func filter(_ title: String, _ kind: ClipKind?) -> some View {
         let selected = model.kind == kind && model.activeCategories.isEmpty && !model.favorites
-        return Button(title) { model.selectKind(kind) }.buttonStyle(ToolbarTabStyle(selected: selected))
+        return Button(title) { model.selectKind(kind) }.buttonStyle(ToolbarTabStyle(selected: selected)).accessibilityAddTraits(selected ? .isSelected : [])
     }
     /// 标签直接注册原生拖放目标，接收卡片拖动并保留点击与右键管理。
     private func categoryTab(_ category: ClipCategory) -> some View {
@@ -218,14 +218,14 @@ private struct HistoryStrip: View {
     var body: some View {
         ZStack {
             if model.items.isEmpty {
-                HistoryEmptyState(input: model.queryState, categoryID: categoryID, loading: list.snapshot.loading)
+                HistoryEmptyState(model: model, input: model.queryState, loading: list.snapshot.loading)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollViewReader { proxy in
                     ScrollView(.horizontal) {
                         LazyHStack(spacing: 16) {
                             ForEach(Array(model.items.enumerated()), id: \.element.id) { index, item in
-                                ClipCard(item: item, index: index, selected: model.selectedIDs.contains(item.id), dragging: draggedIDs.contains(item.id), editing: renamingID == item.id, hidden: hideContents, height: cardHeight, categoryID: categoryID, categories: categories, target: target, model: model).equatable().id(item.id)
+                                ClipCard(item: item, index: index, selected: model.selectedIDs.contains(item.id), dragging: draggedIDs.contains(item.id), editing: renamingID == item.id, hidden: hideContents, quickModifiers: model.settings.quickModifiers, height: cardHeight, categoryID: categoryID, categories: categories, target: target, model: model).equatable().id(item.id)
                             }
                             if model.hasMore {
                                 Button(action: model.loadMore) {
@@ -253,7 +253,18 @@ private struct HistoryStrip: View {
                         }
                 }
             }
-        }.frame(maxWidth: .infinity).frame(height: availableCardHeight + 20).clipped().blur(radius: hideContents ? 16 : 0).allowsHitTesting(!hideContents)
+        }.frame(maxWidth: .infinity).frame(height: availableCardHeight + 20).clipped()
+        // 隐藏状态用明确占位替代整层模糊，避免正文轮廓泄露及持续模糊合成，by AI.Coding。
+        .opacity(hideContents ? 0 : 1).allowsHitTesting(!hideContents).accessibilityHidden(hideContents)
+        .overlay {
+            if hideContents {
+                VStack(spacing: 10) {
+                    Image(systemName: "eye.slash").font(.system(size: 28, weight: .light)).foregroundStyle(.secondary)
+                    Text("历史内容已隐藏").font(.headline)
+                    Button("显示内容") { model.updateSettings { $0.hideContents = false } }.buttonStyle(.bordered)
+                }.frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
         .background {
             #if DEBUG
             if GUIAcceptanceProbe.configuration != nil {
@@ -268,16 +279,33 @@ private struct HistoryStrip: View {
 }
 /// 搜索词只让空结果提示订阅，避免每个输入字符重建整条卡片列表，by AI.Coding。
 private struct HistoryEmptyState: View {
+    @ObservedObject var model: HistoryViewModel
     @ObservedObject var input: HistoryQueryState
-    let categoryID: String?
     let loading: Bool
     var body: some View {
-        let emptyQuery = input.literal.isEmpty
-        VStack(spacing: 12) {
-            Image(systemName: emptyQuery ? "square.on.square" : "magnifyingglass").font(.system(size: 38, weight: .ultraLight)).foregroundStyle(.secondary)
-            Text(loading ? "正在读取历史…" : emptyQuery ? categoryID == nil ? "下一次复制，就从这里开始" : "这个分类还没有记录" : "没有匹配的历史").font(.system(size: 18, weight: .semibold))
-            Text(emptyQuery ? categoryID == nil ? "文字、链接、图片、富文本和文件引用，只保存在这台 Mac。" : "选择“剪贴板”，把记录拖到这个分类标签。" : "中文短词、代码符号和链接片段，均按字面查找。").font(.system(size: 12)).foregroundStyle(.secondary)
-        }
+        let searched = !input.literal.isEmpty
+        let filtered = model.sourceFilter != nil || model.dateFilterEnabled || model.kind != nil || model.activeCategories.count > 1
+        VStack(spacing: 10) {
+            if loading { ProgressView().controlSize(.small) }
+            else { Image(systemName: searched || filtered ? "magnifyingglass" : model.favorites ? "star" : "square.on.square")
+                .font(.system(size: 28, weight: .light)).foregroundStyle(.secondary) }
+            Text(loading ? "正在读取历史…" : searched || filtered ? "没有匹配的记录" : model.favorites ? "收藏常用内容，随时取用" : !model.activeCategories.isEmpty ? "这个分类还没有记录" : "下一次复制，就从这里开始")
+                .font(.system(size: 16, weight: .semibold))
+            if !loading {
+                Text(searched || filtered ? "试试其他关键词，或清除筛选条件。" : model.favorites ? "选中记录后点按星标，或右键选择“收藏”。" : !model.activeCategories.isEmpty ? "将记录拖到分类标签，即可加入这个分类。" : "复制文字、链接、图片或文件后，会自动显示在这里。")
+                    .font(.system(size: 12)).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                HStack(spacing: 12) {
+                    if searched { Button("清除搜索") { input.literal = ""; model.searchChanged() } }
+                    if filtered { Button("清除筛选") { model.clearHistoryFilters() } }
+                    if !searched && !filtered && (model.favorites || !model.activeCategories.isEmpty) {
+                        Button("查看剪贴板") { model.selectKind(nil) }
+                    }
+                    if !model.settings.captureEnabled || model.status == "定时暂停" {
+                        Button("恢复记录") { model.resumeRecording() }
+                    }
+                }.buttonStyle(.bordered).controlSize(.small)
+            }
+        }.padding(.horizontal, 24)
     }
 }
 // 底栏只有统计和选择动作订阅列表，状态文本及其他界面不订阅，by AI.Coding。
@@ -329,9 +357,9 @@ private struct HistorySelectionActions: View {
                         Divider(); Button("新建分类…") { model.editCategory() }
                     } label: { Label("分类", systemImage: "folder") }
                         .menuStyle(.borderlessButton).fixedSize().disabled(selected == nil || value.selectedMetadata?.summary.id != selected?.id)
-                    Button { if let selected { model.change(.favorites(model.orderedSelection, !selected.isFavorite)) } } label: { Image(systemName: selected?.isFavorite == true ? "star.fill" : "star").foregroundStyle(selected?.isFavorite == true ? Color.orange : Color.secondary).frame(width: 18) }.buttonStyle(.plain).help("收藏/取消收藏")
+                    Button { if let selected { model.change(.favorites(model.orderedSelection, !selected.isFavorite)) } } label: { Image(systemName: selected?.isFavorite == true ? "star.fill" : "star").foregroundStyle(selected?.isFavorite == true ? Color.orange : Color.secondary).frame(width: 18) }.buttonStyle(.plain).help("收藏/取消收藏").accessibilityLabel(selected?.isFavorite == true ? "取消收藏" : "收藏")
                 }
-                Button { model.showingDetail.toggle() } label: { if compact { Image(systemName: "arrow.up.left.and.arrow.down.right") } else { Label("详情", systemImage: "arrow.up.left.and.arrow.down.right") } }.buttonStyle(.plain)
+                Button { model.showingDetail.toggle() } label: { if compact { Image(systemName: "info.circle") } else { Label("详情", systemImage: "info.circle") } }.buttonStyle(.plain)
                     .accessibilityLabel("详情").help("详情")
                     .popover(isPresented: $model.showingDetail, arrowEdge: .top) { ClipInspector(model: model).frame(width: 520) }
                 Divider().frame(height: 20)
@@ -347,7 +375,7 @@ private struct HistorySelectionActions: View {
     private func primaryLabel(_ title: String, _ hint: String) -> some View {
         HStack(spacing: compact ? 4 : 12) { Text(title).fontWeight(.semibold); Text(hint).font(.system(size: compact ? 9 : 10)).opacity(0.7) }
             .padding(.horizontal, compact ? 7 : 17).padding(.vertical, 7)
-            .foregroundStyle(.white).background(Color(red: 0.23, green: 0.43, blue: 0.94), in: Capsule())
+            .foregroundStyle(.white).background(Color.accentColor, in: RoundedRectangle(cornerRadius: 7))
     }
     // 明示面板记住的应用，避免把向后台窗口发送测试输入误认为已激活该应用。
     @ViewBuilder private func pasteButton(primary: Bool) -> some View {
@@ -397,6 +425,7 @@ private struct ClipCard: View, Equatable {
     let dragging: Bool
     let editing: Bool
     let hidden: Bool
+    let quickModifiers: UInt32
     @State private var headerRect: CGRect = .zero
     @State private var nameDraft = ""
     @FocusState private var nameFocused: Bool
@@ -412,7 +441,7 @@ private struct ClipCard: View, Equatable {
     @State private var detectedLanguage: String?
     @State private var hovering = false
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.item == rhs.item && lhs.index == rhs.index && lhs.selected == rhs.selected && lhs.dragging == rhs.dragging && lhs.editing == rhs.editing && lhs.hidden == rhs.hidden && lhs.height == rhs.height
+        lhs.item == rhs.item && lhs.index == rhs.index && lhs.selected == rhs.selected && lhs.dragging == rhs.dragging && lhs.editing == rhs.editing && lhs.hidden == rhs.hidden && lhs.quickModifiers == rhs.quickModifiers && lhs.height == rhs.height
             && lhs.categoryID == rhs.categoryID && lhs.categories == rhs.categories && lhs.target == rhs.target
     }
     private var code: Bool { item.kind == .text && detectedLanguage != nil }
@@ -448,7 +477,7 @@ private struct ClipCard: View, Equatable {
         Group {
             if editing {
                 TextField("名称", text: $nameDraft).textFieldStyle(.plain).focused($nameFocused)
-                    .background(.white.opacity(0.16), in: RoundedRectangle(cornerRadius: 3))
+                    .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 3))
                     .onSubmit { model.saveRename(id: item.id, title: nameDraft) }
                     .onExitCommand { model.cancelRename() }
             } else { Text(item.title ?? HistoryView.kindName(item.kind)) }
@@ -463,19 +492,20 @@ private struct ClipCard: View, Equatable {
                     cardTitle
                     if height >= 150 {
                         CopyAge(copiedAt: item.lastCopiedAt)
-                            .font(.system(size: 9, weight: .medium)).opacity(0.84).lineLimit(1)
+                            .font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
 
                     }
                 }
                 Spacer(minLength: 2)
-                if item.isFavorite && !tiny { Image(systemName: "star.fill").font(.system(size: 11)) }
-                ZStack {
-                    RoundedRectangle(cornerRadius: 7, style: .continuous).fill(.white)
-                    if let appIcon { Image(nsImage: appIcon).resizable().scaledToFit().padding(2) }
-                    else { Image(systemName: symbol).font(.system(size: tiny ? 11 : 15, weight: .medium)).foregroundStyle(tint) }
+                if item.isFavorite && !tiny { Image(systemName: "star.fill").font(.system(size: 11)).foregroundStyle(.orange).accessibilityLabel("已收藏") }
+                // 应用图标自带外形，直接显示不再垫白底；系统图标四周留有透明边距，略放大与标题对齐，by AI.Coding。
+                Group {
+                    if let appIcon { Image(nsImage: appIcon).resizable().interpolation(.high).scaledToFit().scaleEffect(1.12) }
+                    else { Image(systemName: symbol).font(.system(size: tiny ? 11 : 15, weight: .medium)).foregroundStyle(tint)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity).background(tint.opacity(0.14), in: RoundedRectangle(cornerRadius: 7, style: .continuous)) }
                 }.frame(width: iconSize, height: iconSize).help(sourceDescription)
-            }.foregroundStyle(.white).padding(.leading, tiny ? 8 : 14).padding(.trailing, tiny ? 6 : 10)
-                .frame(height: headerHeight).background(tint)
+            }.foregroundStyle(.primary).padding(.leading, tiny ? 8 : 14).padding(.trailing, tiny ? 6 : 10)
+                .frame(height: headerHeight).background(tint.opacity(0.13))
                 // 整个彩色标题栏双击均重命名，时间/图标/留白不能误发粘贴，by AI.Coding。
                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(item.id)) } action: { headerRect = $0 }
             // 正文独占剩余区域；长文件名和多行文字只能在正文内截断，不挤掉标题和底栏。
@@ -488,15 +518,24 @@ private struct ClipCard: View, Equatable {
                         if !tiny { LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom).frame(height: 16) }
                     }
                 }
-            Text(characterCount.map { "\($0) 个字符" } ?? (item.kind == .file ? "文件引用" : "复制\(item.copyCount)次"))
-                .font(.system(size: 10)).foregroundStyle(.secondary).frame(maxWidth: .infinity)
+            HStack(spacing: 4) {
+                Text(characterCount.map { "\($0) 个字符" } ?? (item.kind == .file ? "文件引用" : "复制\(item.copyCount)次")).lineLimit(1)
+                Spacer(minLength: 2)
+                if index < 9 && !tiny {
+                    Text(HotKeyService.label(Shortcut(keyCode: [18,19,20,21,23,22,26,28,25][index], modifiers: quickModifiers)))
+                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                        .padding(.horizontal, 4).padding(.vertical, 1)
+                        .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 3))
+                        .help("快捷粘贴第\(index + 1)条记录")
+                }
+            }.font(.system(size: 10)).foregroundStyle(.secondary).padding(.horizontal, tiny ? 8 : 12)
                 .frame(height: footerHeight)
         }.frame(width: height, height: height).background(Color(nsColor: .textBackgroundColor))
             .clipShape(RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: cardRadius, style: .continuous).strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.7))
             // 选中用卡片外侧的强调色环，与任何类型标题色都可区分；悬停仅轻微抬升，by AI.Coding。
             .overlay {
-                if selected { RoundedRectangle(cornerRadius: cardRadius + 4, style: .continuous).strokeBorder(Color.accentColor, lineWidth: 2.5).padding(-4.5) }
+                if selected { RoundedRectangle(cornerRadius: cardRadius + 4, style: .continuous).strokeBorder(Color.accentColor, lineWidth: 2).padding(-4) }
             }
             .shadow(color: .black.opacity(hovering && !selected ? 0.16 : 0.09), radius: hovering && !selected ? 7 : 3, y: hovering && !selected ? 4 : 2)
             .onHover { hovering = $0 }
@@ -522,6 +561,8 @@ private struct ClipCard: View, Equatable {
             .animation(reduceMotion ? nil : .spring(response: 0.22, dampingFraction: 0.82), value: dragging)
             .help(item.kind == .file ? "双击复制到Finder当前目录或原应用" : "单击选择，双击粘贴到：\(MacApplicationClient.targetName(model.target))")
             // 隐藏内容时辅助功能也不朗读正文，与界面模糊保持同一隐私承诺，by AI.Coding。
+            // 每张卡片只暴露一个可操作元素；重命名时保留原生输入框，by AI.Coding。
+            .accessibilityElement(children: editing ? .contain : .ignore)
             .accessibilityLabel(hidden ? "\(item.title ?? HistoryView.kindName(item.kind))，\(item.source.name)，内容已隐藏" : "\(item.title ?? HistoryView.kindName(item.kind))，\(item.source.name)，\(item.preview)").accessibilityAddTraits(selected ? [.isButton, .isSelected] : [.isButton])
             .accessibilityAction { model.select(item.id) }
             .accessibilityAction(named: Text("复制并粘贴")) { model.doubleClick(item.id) }
@@ -608,9 +649,9 @@ private struct ClipCard: View, Equatable {
             VStack(alignment: .leading, spacing: 10) { Image(systemName: "link").font(.system(size: 22, weight: .light)).foregroundStyle(tint); Text(URL(string: item.preview)?.host ?? "链接").font(.system(size: 15, weight: .semibold, design: .rounded)).lineLimit(1); Text(item.context).font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary).lineLimit(4); Spacer(minLength: 0) }.padding(14)
         } else {
             // 卡片正文自动高亮代码，普通内容保持原有排版，by AI.Coding。
-            SyntaxText(text: item.context, size: tiny ? 10 : height < 200 ? 9.5 : height < 210 ? 13 : 15, spacing: tiny ? 0 : 3, onLanguage: { detectedLanguage = $0 })
+            SyntaxText(text: item.context, size: tiny ? 10 : height < 200 ? 12 : height < 260 ? 13 : 15, spacing: tiny ? 0 : 3, onLanguage: { detectedLanguage = $0 })
                 .lineSpacing(tiny ? 0 : 3).frame(maxWidth: .infinity, alignment: .topLeading)
-                .padding(.horizontal, tiny || height < 200 ? 6 : 14).padding(.top, tiny ? 3 : 10).padding(.bottom, tiny ? 0 : 4)
+                .padding(.horizontal, tiny ? 6 : height < 200 ? 10 : 14).padding(.top, tiny ? 3 : 10).padding(.bottom, tiny ? 0 : 4)
         }
     }
 
@@ -703,7 +744,7 @@ struct ClipInspector: View {
         if model.settings.defaultFormat == format {
             Button { model.perform(format, action: .copy) } label: {
                 Text(title).font(.system(size: 13, weight: .semibold)).foregroundStyle(.white).padding(.horizontal, 14).frame(height: 28)
-                    .background(Color(red: 0.23, green: 0.43, blue: 0.94), in: Capsule()).contentShape(Capsule())
+                    .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 7)).contentShape(Capsule())
             }.buttonStyle(.plain).disabled(!enabled).opacity(enabled ? 1 : 0.45)
         } else { Button(title) { model.perform(format, action: .copy) }.buttonStyle(ToolbarTabStyle(selected: true)).disabled(!enabled) }
     }
@@ -749,9 +790,10 @@ struct FilterEditor: View {
                         ForEach(model.categories) { category in Toggle(category.name, isOn: Binding(get: { model.activeCategories.contains(category.id) }, set: { included in var values = model.activeCategories; if included { values.insert(category.id) } else { values.remove(category.id) }; model.selectCategories(values) })) }
                     }
                 }
-            }.formStyle(.grouped).scrollDisabled(true).fixedSize(horizontal: false, vertical: true)
-            HStack { Button("清除筛选") { model.sourceFilter = nil; model.dateFilterEnabled = false; model.categoryFilters = []; model.categoryID = nil; model.kind = nil }; Spacer(); Button("完成") { model.showingFilters = false; model.focusResults?() } }
-                .padding(.horizontal, 20).padding(.bottom, 16)
+            }.formStyle(.grouped).frame(height: min(440, 230 + CGFloat(model.categories.count) * 32))
+            Divider()
+            HStack { Button("清除筛选") { model.clearHistoryFilters() }; Spacer(); Button("完成") { model.showingFilters = false; model.focusResults?() } }
+                .padding(.horizontal, 20).padding(.vertical, 12)
         }.frame(width: 360)
     }
 }
@@ -765,6 +807,7 @@ struct ToolbarTabStyle: ButtonStyle {
         let selected: Bool
         @State private var hovering = false
         @Environment(\.isEnabled) private var isEnabled
+        @Environment(\.accessibilityReduceMotion) private var reduceMotion
         var body: some View {
             configuration.label
                 .font(.system(size: 13, weight: selected ? .semibold : .regular))
@@ -774,7 +817,7 @@ struct ToolbarTabStyle: ButtonStyle {
                 .contentShape(Capsule())
                 .onHover { hovering = $0 }
                 .opacity(isEnabled ? 1 : 0.45)
-                .animation(.easeOut(duration: 0.12), value: hovering)
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: hovering)
         }
     }
 }
@@ -787,6 +830,7 @@ struct ToolbarIconButton: View {
     var label: String? = nil
     let action: () -> Void
     @State private var hovering = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body: some View {
         Button(action: action) {
             Image(systemName: symbol).font(.system(size: 17)).symbolRenderingMode(.monochrome)
@@ -796,6 +840,6 @@ struct ToolbarIconButton: View {
                 .contentShape(Circle())
         }.buttonStyle(.plain).help(help).accessibilityLabel(label ?? help.components(separatedBy: " · ")[0])
             .onHover { hovering = $0 }
-            .animation(.easeOut(duration: 0.12), value: hovering)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: hovering)
     }
 }

@@ -75,6 +75,19 @@ import LocalClipCore
             while !Task.isCancelled {
                 let window = NSApp.windows.first { $0.title == "LocalClip" }
                 write(["visible":window?.isVisible ?? false,"key":window?.isKeyWindow ?? false,"loading":model.loading,"query":model.query,"selectedID":model.selectedID ?? "", "selectedIDs":model.selectedIDs.sorted(), "draggedIDs":model.draggedIDs.sorted(),"dragActive":model.dragActive,"items":model.items.prefix(50).map { ["id":$0.id,"preview":$0.preview] },"frame":NSStringFromRect(window?.frame ?? .zero),"message":model.message], "state.json")
+                // 明确的隔离验收命令，仅向私有命名剪贴板写合成文本，by AI.Coding。
+                if let output, FileManager.default.fileExists(atPath: output.appendingPathComponent("run-seed" ).path) {
+                    try? FileManager.default.removeItem(at: output.appendingPathComponent("run-seed"))
+                    for index in 1...12 {
+                        board.board.clearContents()
+                        _ = board.board.setString("UX fixture \(index) · 设计应当清晰、自然、易用。", forType: .string)
+                        let deadline = ContinuousClock.now + .seconds(3)
+                        while !model.items.contains(where: { $0.preview.hasPrefix("UX fixture \(index) ·") }), ContinuousClock.now < deadline {
+                            try? await Task.sleep(for: .milliseconds(30))
+                        }
+                    }
+                    write(["seededCount":model.items.count], "seed-result.json")
+                }
                 if let output, FileManager.default.fileExists(atPath: output.appendingPathComponent("run-show").path) {
                     try? FileManager.default.removeItem(at: output.appendingPathComponent("run-show"))
                     NSApp.activate(ignoringOtherApps: true); show()

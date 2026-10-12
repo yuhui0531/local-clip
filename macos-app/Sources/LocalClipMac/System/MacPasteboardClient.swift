@@ -32,7 +32,8 @@ public enum PasteboardBody: Sendable {
         var items: [PasteboardItemValue] = []; var size: Int64 = 0
         for (index, list) in types.enumerated() {
             if list.contains("com.apple.pasteboard.promised-file-url"), !list.contains(SupportedType.fileURL) { return .failure(.unsupported) }
-            let supported = list.filter { SupportedType.all.contains($0) }.sorted()
+            // 同项有PNG时不读取TIFF：既省去大块未压缩数据的读取，也不触发本应用写入的按需TIFF转换，by AI.Coding。
+            let supported = list.filter { SupportedType.all.contains($0) && !($0 == SupportedType.tiff && list.contains(SupportedType.png)) }.sorted()
             guard !supported.isEmpty else { return .failure(.unsupported) }
             var values: [Representation] = []
             for type in supported {
@@ -91,11 +92,24 @@ extension PasteboardAccess {
             for representation in item.representations {
                 object.setData(representation.data, forType: .init(representation.type))
             }
+            // 只存了PNG的图片仍声明TIFF，只有目标应用实际索取时才转换，旧应用照常可粘贴。
+            if let png = item.representations.first(where: { $0.type == SupportedType.png })?.data,
+               !item.representations.contains(where: { $0.type == SupportedType.tiff }) {
+                object.setDataProvider(TIFFFromPNGProvider(png: png), forTypes: [.tiff])
+            }
             object.setString(fingerprint, forType: .init(Self.ownType))
             return object
         }
         board.clearContents()
         return board.writeObjects(objects)
+    }
+}
+/// 剪贴板项持有提供者直到被替换；只在被索取时由PNG生成TIFF，by AI.Coding。
+final class TIFFFromPNGProvider: NSObject, NSPasteboardItemDataProvider, Sendable {
+    let png: Data
+    init(png: Data) { self.png = png }
+    nonisolated func pasteboard(_ pasteboard: NSPasteboard?, item: NSPasteboardItem, provideDataForType type: NSPasteboard.PasteboardType) {
+        if let tiff = NSBitmapImageRep(data: png)?.tiffRepresentation { item.setData(tiff, forType: .tiff) }
     }
 }
 @MainActor public final class MacPasteboardClient: PasteboardClient {

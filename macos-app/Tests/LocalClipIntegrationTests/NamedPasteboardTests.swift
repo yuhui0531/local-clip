@@ -34,7 +34,10 @@ import LocalClipCore
         let paste=PasteCoordinator(board:client,applications:MacApplicationClient(),store:store,capture:capture)
         #expect(await paste.perform(.init(ids:[id],action:.copy)) == .copied)
         let received=board.pasteboardItems!; #expect(received.count == 2)
-        for (index,reps) in [representations,images].enumerated() { for rep in reps { #expect(received[index].data(forType:.init(rep.type)) == rep.data) } }
+        for (index,reps) in [representations,images].enumerated() { for rep in reps where rep.type != SupportedType.tiff { #expect(received[index].data(forType:.init(rep.type)) == rep.data) } }
+        // TIFF不入库，恢复时由PNG按需生成：像素尺寸一致即为同一张图，by AI.Coding。
+        let tiff=received[1].data(forType:.tiff).flatMap { NSBitmapImageRep(data:$0) }
+        #expect(tiff?.pixelsWide == 640 && tiff?.pixelsHigh == 480)
         capture.tick(); #expect(try await store.detail(id:id,at:SystemClock().now()).summary.copyCount == 1)
         board.clearContents(); #expect(board.setString("USER-AFTER-RESTORE",forType:.string)); capture.tick()
         let deadline=ContinuousClock.now + .seconds(3)

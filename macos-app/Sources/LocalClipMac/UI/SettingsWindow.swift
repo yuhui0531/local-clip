@@ -3,6 +3,16 @@ import AppKit
 
 @MainActor final class SettingsWindow: NSWindow, NSWindowDelegate {
     private var dismissal: Task<Void, Never>?
+    private var fitted = false
+
+    /// 窗口贴合当前分组内容，保持标题栏位置不动；首次直接定尺寸，之后切换分组时动画过渡，by AI.Coding。
+    func fitContent(height: CGFloat) {
+        guard height > 0, abs(contentLayoutRect.height - height) > 0.5 || !fitted else { return }
+        var target = frameRect(forContentRect: NSRect(x: 0, y: 0, width: contentLayoutRect.width, height: height))
+        target.origin = NSPoint(x: frame.minX, y: frame.maxY - target.height)
+        setFrame(target, display: true, animate: fitted && isVisible)
+        fitted = true
+    }
 
     /// Esc沿响应链到达窗口时关闭设置；附属确认框优先消费取消命令。
     override func cancelOperation(_ sender: Any?) {

@@ -391,10 +391,12 @@ import LocalClipCore
     @objc public func showSettings() {
         guard let model else { return }
         if settingsWindow == nil {
-            let window = SettingsWindow(contentRect: NSRect(x: 0, y: 0, width: 680, height: 730), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+            // 与系统设置类窗口一致：尺寸随分组内容变化，不提供手动缩放，by AI.Coding。
+            let window = SettingsWindow(contentRect: NSRect(x: 0, y: 0, width: 620, height: 500), styleMask: [.titled, .closable], backing: .buffered, defer: false)
             window.delegate = window
             window.title = "LocalClip 设置"; window.isReleasedWhenClosed = false
-            window.contentView = NSHostingView(rootView: SettingsView(model: model, login: login)); window.center(); settingsWindow = window
+            let host = NSHostingView(rootView: SettingsView(model: model, login: login)); host.sizingOptions = []
+            window.contentView = host; window.center(); settingsWindow = window
         }
         model.settingsVisibilityChanged(true)
         NSApp.activate(ignoringOtherApps: true); settingsWindow?.makeKeyAndOrderFront(nil)
@@ -501,6 +503,9 @@ import LocalClipCore
                 if event.keyCode == 53 { model.cancelRename(); return nil }
                 return event
             }
+            // 输入法取消候选优先于面板关闭，和原生搜索框保持相同规则，by AI.Coding。
+            let editor = panel.firstResponder as? NSTextView
+            if editor?.hasMarkedText() == true { return event }
             if event.keyCode == 53 {
                 if model.showingCategoryEditor { model.showingCategoryEditor = false }
                 else if model.showingFilters { model.showingFilters = false }
@@ -508,12 +513,10 @@ import LocalClipCore
                 return nil
             }
             if model.showingCategoryEditor || model.showingFilters { return event }
-            let editor = panel.firstResponder as? NSTextView
-            if editor?.hasMarkedText() == true { return event }
             let flags = event.modifierFlags.intersection([.command,.option,.control,.shift])
             let editing = editor?.isEditable == true
             if flags == [.command], event.keyCode == 3 {
-                if editing { model.showingFilters = true } else { model.focusRequest = UUID() }; return nil
+                model.focusRequest = UUID(); return nil
             }
             if event.keyCode == 48 { model.focusResults?(); return nil }
             if flags == [.shift], [UInt16(36),76].contains(event.keyCode) { model.perform(.plainText, action: .directPaste); return nil }
