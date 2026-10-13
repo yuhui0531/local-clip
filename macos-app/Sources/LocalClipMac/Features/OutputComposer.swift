@@ -3,8 +3,15 @@ import AppKit
 import LocalClipCore
 public enum OutputComposer {
     /// 文字按记录与项目顺序组合；混合内容保留每项，不能丢弃非文本内容。
-    public static func combine(_ records: [ClipboardPayload], format: OutputFormat) throws -> ClipboardPayload {
+    public static func combine(_ records: [ClipboardPayload], format: OutputFormat, join: JoinStyle = .newline) throws -> ClipboardPayload {
         guard !records.isEmpty else { throw StoreError.notFound }
+        // 换行以外的合并方式只输出纯文本，每条记录为一个元素；任一记录无纯文本即拒绝，不静默丢项，by AI.Coding。
+        if join != .newline {
+            let values = records.map(\.plainText)
+            guard values.allSatisfy({ $0 != nil }) else { throw StoreError.corruptPayload }
+            let text = join.join(values.compactMap { $0 })
+            return .init([.init([Representation(SupportedType.string, Data(text.utf8))], plainText: text)])
+        }
         let items = records.flatMap(\.items)
         guard format != .plainText || items.allSatisfy({ $0.plainText != nil }) else { throw StoreError.corruptPayload }
         if format == .original, records.count == 1 { return records[0] }

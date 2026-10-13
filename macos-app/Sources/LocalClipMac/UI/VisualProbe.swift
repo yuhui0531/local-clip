@@ -39,6 +39,14 @@ import LocalClipCore
         if ProcessInfo.processInfo.environment["LOCALCLIP_VISUAL_CODES"] == "1" || codeDetail {
             inputs = codeFixtures.map { (.init([.init([.init(SupportedType.string, Data($0.utf8))])]), .init(bundleID: "com.microsoft.VSCode", name: "Visual Studio Code")) }
         }
+        // F17识别徽标：时间戳、JWT、颜色、UUID、Base64与代码语言标题，仅合成数据，by AI.Coding。
+        // 取值为序号时把该fixture排到首位，供LOCALCLIP_VISUAL_POPOVER=detail渲染对应详情。
+        if let first = ProcessInfo.processInfo.environment["LOCALCLIP_VISUAL_DETECTIONS"].flatMap(Int.init) {
+            inputs = ["1760313600", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI0MiIsImV4cCI6MTcwMDAwMDAwMH0.c2lnbmF0dXJl", "#34C759",
+                      "f47ac10b-58cc-4372-a567-0e02b2c3d479", "aGVsbG8gd29ybGQgZnJvbSBMb2NhbENsaXA=", codeFixtures[0]]
+                .map { (.init([.init([.init(SupportedType.string, Data($0.utf8))])]), .init(bundleID: "com.microsoft.VSCode", name: "Visual Studio Code")) }
+            inputs = Array(inputs[(first % inputs.count)...] + inputs[..<(first % inputs.count)])
+        }
         for (index, value) in inputs.reversed().enumerated() {
             let result = try await store.ingest(.init(payload: value.0, source: value.1), at: now + Int64(index))
             guard case .inserted = result else { throw StoreError.ioFailure }

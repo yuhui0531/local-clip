@@ -46,8 +46,8 @@ struct SmartPastePlan {
             let settings = try await store.settings()
             // 转换不与代码文件智能粘贴叠加；先按纯文本合并再转换，在关闭面板前完成，失败时面板保持打开，by AI.Coding。
             if request.transform != nil, records.contains(where: \.hasFileReferences) { return .failed("文件记录无法转换") }
-            let smartFiles = request.transform == nil && settings.smartCodeFilePaste && !records.isEmpty && records.allSatisfy { $0.fileURLs != nil }
-            let combined = try await Task.detached { try OutputComposer.combine(records, format: request.transform != nil ? .plainText : smartFiles ? .original : request.format) }.value
+            let smartFiles = request.transform == nil && request.join == .newline && settings.smartCodeFilePaste && !records.isEmpty && records.allSatisfy { $0.fileURLs != nil }
+            let combined = try await Task.detached { try OutputComposer.combine(records, format: request.transform != nil ? .plainText : smartFiles ? .original : request.format, join: request.join) }.value
             let raw: ClipboardPayload
             if let transform = request.transform {
                 let language = transform == .markdownCodeBlock ? await SyntaxHighlighter.shared.language(of: combined.plainText ?? "") : nil
@@ -187,9 +187,15 @@ struct SmartPastePlan {
             }
             return .commandSent
         } catch let error as TransformError { return .failed(error.message) }
-        catch StoreError.corruptPayload { return .failed(request.transform == nil ? "所选内容包含无文本项目，不能纯文本输出；请使用原格式" : "所选内容包含无文本项目，无法转换") }
+        catch StoreError.corruptPayload { return .failed(request.transform != nil ? "所选内容包含无文本项目，无法转换" : request.join != .newline ? "所选内容包含无文本项目，无法合并" : "所选内容包含无文本项目，不能纯文本输出；请使用原格式") }
         catch StoreError.notFound { return .failed("内容已删除或到期，请重新选择") }
         catch { return .failed("复制失败，请重试") }
+    }
+    /// 写入派生纯文本（如图中文字）：只复制不粘贴，自写收据过滤，不进历史，by AI.Coding。
+    public func copyText(_ text: String) -> PasteResult {
+        let payload = ClipboardPayload([.init([.init(SupportedType.string, Data(text.utf8))], plainText: text)])
+        let receipt = board.write(payload, fingerprint: payload.fingerprint); capture.recordOwnWrite(receipt)
+        return receipt.successful ? .copied : .failed("复制失败，请重试")
     }
     /// Finder文件复制通过实际文件操作报告结果，不把Command-V发送当成复制完成。
     private func copyFiles(_ sources: [URL], request: PasteRequest, receipt: WriteReceipt) async -> PasteResult {

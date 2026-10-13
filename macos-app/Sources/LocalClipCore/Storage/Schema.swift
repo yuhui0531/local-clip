@@ -30,11 +30,11 @@ enum Schema {
           schemaVersion INTEGER NOT NULL,document TEXT NOT NULL);
         CREATE TABLE store_meta(singletonID INTEGER PRIMARY KEY CHECK(singletonID=1),
           schemaVersion INTEGER NOT NULL,storeRevision INTEGER NOT NULL,lastOperationID TEXT NOT NULL);
-        INSERT INTO store_meta VALUES(1,4,0,'');
+        INSERT INTO store_meta VALUES(1,\(version),0,'');
         CREATE INDEX recent ON clips(lastCopiedAtMs DESC,id);
         CREATE INDEX favorites ON clips(isFavorite,lastCopiedAtMs,firstCopiedAtMs,id);
         CREATE INDEX blob_references ON representations(blobDigest);
-        PRAGMA user_version=4;
+        PRAGMA user_version=\(version);
         """)
         try createCategories(db)
         try writeSettings(db, settings)
@@ -53,25 +53,6 @@ enum Schema {
     static func writeSettings(_ db: SQLiteConnection, _ settings: SettingsSnapshot) throws {
         let document = String(decoding: try JSONEncoder().encode(settings), as: UTF8.self)
         try db.run("INSERT OR REPLACE INTO settings VALUES(1,?,?)", [.integer(version), .text(document)])
-    }
-    /// v3→v4是纯增量：clips新增两个可空列，卡片名称从设置文档移入列中；单一事务，失败整体回滚，by AI.Coding。
-    static func upgradeFromV3(_ db: SQLiteConnection) throws {
-        guard let row = try db.rows("SELECT * FROM settings WHERE singletonID=1").first, row.int("schemaVersion") == 3 else { throw StoreError.incompatibleSchema }
-        let document = Data(row.text("document").utf8)
-        let settings = try JSONDecoder().decode(SettingsSnapshot.self, from: document)
-        let titles = ((try? JSONSerialization.jsonObject(with: document)) as? [String: Any])?["clipTitlesValue"] as? [String: String] ?? [:]
-        try db.exec("BEGIN IMMEDIATE")
-        do {
-            try db.exec("ALTER TABLE clips ADD COLUMN title TEXT; ALTER TABLE clips ADD COLUMN normalizedTitle TEXT;")
-            for (id, value) in titles {
-                let name = value.trimmingCharacters(in: .whitespacesAndNewlines).precomposedStringWithCanonicalMapping
-                guard !name.isEmpty, name.utf8.count <= 1024, !name.contains(where: { $0.isNewline }) else { continue }
-                try db.run("UPDATE clips SET title=?,normalizedTitle=? WHERE id=?", [.text(name), .text(SearchNormalizer.normalize(name)), .text(id)])
-            }
-            // 重新编码时丢弃旧的clipTitlesValue，设置不保留第二份名称。
-            try writeSettings(db, settings)
-            try db.exec("UPDATE store_meta SET schemaVersion=4; PRAGMA user_version=4; COMMIT")
-        } catch { try? db.exec("ROLLBACK"); throw error }
     }
     /// 当前模型完整解码；不接受其他版本。
     static func readSettings(_ db: SQLiteConnection) throws -> SettingsSnapshot {

@@ -9,6 +9,8 @@ public enum TextTransform: String, CaseIterable, Sendable {
     case formatJSON, minifyJSON
     case quoteString, unquoteString, base64Encode, base64Decode, urlEncode, urlDecode
     case camelCase, snakeCase, kebabCase, uppercase, lowercase, sortLines, uniqueLines
+    /// F17识别专属：JWT载荷、时间戳⇄ISO 8601、颜色hex⇄rgb()，同样走转换后粘贴管线。
+    case jwtPayload, timestampToISO, isoToTimestamp, colorToRGB, colorToHex
     /// 超过4MiB不转换，避免在粘贴前长时间占用后台与内存。
     public static let byteLimit = 4 * 1_048_576
     public var title: String {
@@ -33,6 +35,11 @@ public enum TextTransform: String, CaseIterable, Sendable {
         case .lowercase: "全小写"
         case .sortLines: "行排序"
         case .uniqueLines: "行去重"
+        case .jwtPayload: "JWT 载荷 JSON"
+        case .timestampToISO: "时间戳转 ISO 8601"
+        case .isoToTimestamp: "ISO 8601 转时间戳"
+        case .colorToRGB: "颜色转 rgb()"
+        case .colorToHex: "颜色转 hex"
         }
     }
     /// 菜单分组：代码、JSON、编码、文本，组间加分隔线。
@@ -41,6 +48,7 @@ public enum TextTransform: String, CaseIterable, Sendable {
         case .markdownCodeBlock, .dedent, .trimWhitespace, .stripPrompt, .stripLineNumbers: 0
         case .formatJSON, .minifyJSON: 1
         case .quoteString, .unquoteString, .base64Encode, .base64Decode, .urlEncode, .urlDecode: 2
+        case .jwtPayload, .timestampToISO, .isoToTimestamp, .colorToRGB, .colorToHex: 4
         default: 3
         }
     }
@@ -56,6 +64,7 @@ public enum TextTransform: String, CaseIterable, Sendable {
         case .base64Decode: return (try? Self.base64Decode(text)) != nil
         case .urlDecode: return (try? Self.urlDecode(text)) != nil
         case .sortLines, .uniqueLines: return Self.body(text).lines.count >= 2
+        case .jwtPayload, .timestampToISO, .isoToTimestamp, .colorToRGB, .colorToHex: return (try? apply(text)) != nil
         default: return true
         }
     }
@@ -98,6 +107,26 @@ public enum TextTransform: String, CaseIterable, Sendable {
             var seen = Set<String>()
             let lines = self == .sortLines ? body.lines.sorted { $0.localizedStandardCompare($1) == .orderedAscending } : body.lines.filter { seen.insert($0).inserted }
             return lines.joined(separator: body.newline) + (body.trailing ? body.newline : "")
+        case .jwtPayload:
+            guard let parts = ContentInspector.jwtParts(text.trimmingCharacters(in: .whitespacesAndNewlines), complete: true),
+                  let payload = ContentInspector.base64urlData(parts[1]) else { throw TransformError("不是完整的 JWT") }
+            return Self.reflowJSON(String(decoding: payload, as: UTF8.self), pretty: true)
+        case .timestampToISO:
+            let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let date = ContentInspector.timestamp(value) else { throw TransformError("不是 10 位秒或 13 位毫秒时间戳") }
+            let formatter = ISO8601DateFormatter(); formatter.timeZone = .current
+            if value.count == 13 { formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds] }
+            return formatter.string(from: date)
+        case .isoToTimestamp:
+            let value = text.trimmingCharacters(in: .whitespacesAndNewlines), formatter = ISO8601DateFormatter()
+            if let date = formatter.date(from: value) { return String(Int64(date.timeIntervalSince1970)) }
+            // 带毫秒的时间转为13位毫秒时间戳，与"时间戳转 ISO 8601"互逆。
+            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            guard let date = formatter.date(from: value) else { throw TransformError("不是 ISO 8601 时间") }
+            return String(Int64((date.timeIntervalSince1970 * 1000).rounded()))
+        case .colorToRGB, .colorToHex:
+            guard let color = ContentInspector.color(text) else { throw TransformError("不是可识别的颜色值") }
+            return self == .colorToRGB ? color.rgb : color.hex
         }
     }
     private var notApplicable: TransformError { TransformError("当前内容不适用“\(title)”") }
@@ -296,6 +325,35 @@ public enum TextTransform: String, CaseIterable, Sendable {
         case .camelCase: return indent + parts[0] + parts.dropFirst().map { $0.prefix(1).uppercased() + $0.dropFirst() }.joined()
         case .snakeCase: return indent + parts.joined(separator: "_")
         default: return indent + parts.joined(separator: "-")
+        }
+    }
+}
+/// 多选合并方式：除换行外只输出纯文本，每条记录是一个元素，按选择顺序合并，by AI.Coding。
+public enum JoinStyle: String, CaseIterable, Sendable {
+    case newline, blankLine, comma, space, sqlList, jsonArray, markdownList
+    public var title: String {
+        switch self {
+        case .newline: "换行"
+        case .blankLine: "空行分隔"
+        case .comma: "逗号（a, b）"
+        case .space: "空格（a b）"
+        case .sqlList: "SQL 列表（'a', 'b'）"
+        case .jsonArray: "JSON 数组（[\"a\", \"b\"]）"
+        case .markdownList: "Markdown 列表（- a）"
+        }
+    }
+    /// 换行沿用原有合并结果（含RTF/HTML），由OutputComposer原分支处理；这里只负责纯文本方式。
+    public func join(_ values: [String]) -> String {
+        let trimmed = values.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        switch self {
+        case .newline: return values.joined(separator: "\n")
+        case .blankLine: return values.joined(separator: "\n\n")
+        case .comma: return trimmed.joined(separator: ", ")
+        case .space: return trimmed.joined(separator: " ")
+        case .sqlList: return trimmed.map { "'" + $0.replacingOccurrences(of: "'", with: "''") + "'" }.joined(separator: ", ")
+        case .jsonArray: return "[" + trimmed.map(TextTransform.quote).joined(separator: ", ") + "]"
+        // 项内换行缩进两格，仍属同一列表项；CRLF等换行统一为LF。
+        case .markdownList: return trimmed.map { "- " + TextTransform.lines($0).map(\.content).joined(separator: "\n  ") }.joined(separator: "\n")
         }
     }
 }

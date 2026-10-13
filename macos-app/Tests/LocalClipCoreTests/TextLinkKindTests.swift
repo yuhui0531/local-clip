@@ -18,22 +18,4 @@ struct TextLinkKindTests {
             #expect(fixture(text).payload.kind == .text, "\(text)")
         }
     }
-    @Test func legacyTextURLReclassifiedOnOpen() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
-        let now = SystemClock().now()
-        var store: HistoryStore? = try HistoryStore(location: root)
-        let link = insertedID(try await store!.ingest(fixture("https://github.com/x"), at: now))
-        let bare = insertedID(try await store!.ingest(fixture("www.example.com"), at: now))
-        let text = insertedID(try await store!.ingest(fixture("http 不是网址"), at: now))
-        let version = insertedID(try await store!.ingest(fixture("v0.3.22"), at: now))
-        store = nil
-        let db = try SQLiteConnection(root.appendingPathComponent("History/history.sqlite")); try db.configure()
-        try db.exec("UPDATE clips SET kind='text'"); try db.close()
-        let reopened = try HistoryStore(location: root)
-        #expect(try await reopened.detail(id: link, at: now).summary.kind == .url)
-        #expect(try await reopened.detail(id: bare, at: now).summary.kind == .url)
-        #expect(try await reopened.detail(id: text, at: now).summary.kind == .text)
-        #expect(try await reopened.detail(id: version, at: now).summary.kind == .text)
-    }
 }

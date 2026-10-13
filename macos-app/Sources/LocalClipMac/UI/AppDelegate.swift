@@ -112,6 +112,10 @@ import LocalClipCore
             model.showPasteFeedback = { [weak self] message, failed in self?.showPasteFeedback(message, failed: failed) }
             paste.closePanel = model.closePanel
             hotkeys.onInvoke = { [weak self] in self?.toggleHistory() }
+            model.registerQueueShortcut = { [weak self] in self?.hotkeys.registerQueue($0) ?? false }
+            model.unregisterQueueShortcut = { [weak self] in self?.hotkeys.unregisterQueue() }
+            model.pasteQueueChanged = { [weak self] in self?.updateMenu() }
+            hotkeys.onQueueInvoke = { [weak self] in self?.pasteQueueNext() }
             modelStartup = Task {
                 do {
                     // 手动暂停只作用于上一轮运行，定时暂停和隐私规则由采集器保留，by AI.Coding。
@@ -195,6 +199,10 @@ import LocalClipCore
         menu.addItem(.sectionHeader(title: statusMenuTitle))
         let show = menu.addItem(withTitle: "打开历史", action: #selector(showHistory), keyEquivalent: ""); show.target = self
         show.image = NSImage(systemSymbolName: "square.on.square", accessibilityDescription: nil)
+        if let model, model.pasteQueueActive {
+            let queue = menu.addItem(withTitle: "结束粘贴队列（\(model.pasteQueuePosition)/\(model.pasteQueue.count)）", action: #selector(stopPasteQueue), keyEquivalent: ""); queue.target = self
+            queue.image = NSImage(systemSymbolName: "list.number", accessibilityDescription: nil)
+        }
         let pause = menu.addItem(withTitle: "", action: #selector(toggleCapture), keyEquivalent: ""); pause.target = self
         updateCaptureItem(pause)
         let settings = menu.addItem(withTitle: "设置…", action: #selector(showSettings), keyEquivalent: ","); settings.target = self
@@ -230,6 +238,16 @@ import LocalClipCore
         item.title = paused ? "恢复记录" : "暂停记录"
         item.image = NSImage(systemSymbolName: paused ? "play.circle" : "pause.circle", accessibilityDescription: nil)
     }
+    /// 队列快捷键在其他应用中按下：以当前前台应用为目标，先记住其焦点再粘贴；面板在前台时不粘贴到自身，by AI.Coding。
+    private func pasteQueueNext() {
+        guard let model else { return }
+        let target = applications.target()
+        if let target { lastExternal = target; applications.rememberFocus(for: target) }
+        model.pasteQueueNext(target: target) {
+            !CGEventSource.flagsState(.hidSystemState).intersection([.maskCommand, .maskControl, .maskAlternate, .maskShift]).isEmpty
+        }
+    }
+    @objc private func stopPasteQueue() { model?.stopPasteQueue() }
     /// 同一快捷键按实际可见状态切换；关闭不刷新历史或重记粘贴目标。
     private func toggleHistory() {
         if panel?.isVisible == true { dismissHistory() }

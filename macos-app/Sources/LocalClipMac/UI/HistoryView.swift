@@ -1,6 +1,7 @@
 // Paste 类横向底部卡片面板，真实数据驱动的原生界面，by AI.Coding。
 import AppKit
 import SwiftUI
+import VisionKit
 import LocalClipCore
 public struct HistoryView: View {
     @ObservedObject var model: HistoryViewModel
@@ -23,7 +24,7 @@ public struct HistoryView: View {
             let dense = viewport.size.height < 300
             let toolbarHeight: CGFloat = dense ? 40 : 48
             let footerHeight: CGFloat = dense ? 36 : 44
-            let filterHeight: CGFloat = model.sourceFilter != nil || model.dateFilterEnabled ? 22 : 0
+            let filterHeight: CGFloat = model.sourceFilter != nil || model.dateFilterEnabled || !model.queryConditions.isEmpty || !model.queryProblems.isEmpty || model.pasteQueueActive ? 22 : 0
             // 正方形宽高一起收缩，完整边界始终留在实际视口内。
             let cardHeight = Self.cardSide(height: viewport.size.height, filtered: filterHeight > 0)
             VStack(spacing: 0) {
@@ -300,7 +301,7 @@ private struct HistoryEmptyState: View {
     let loading: Bool
     var body: some View {
         let searched = !input.literal.isEmpty
-        let filtered = model.sourceFilter != nil || model.dateFilterEnabled || model.kind != nil || model.activeCategories.count > 1
+        let filtered = model.sourceFilter != nil || model.dateFilterEnabled || model.kind != nil || model.activeCategories.count > 1 || !model.queryConditions.isEmpty
         VStack(spacing: 10) {
             if loading { ProgressView().controlSize(.small) }
             else { Image(systemName: searched || filtered ? "magnifyingglass" : model.favorites ? "star" : "square.on.square")
@@ -491,6 +492,7 @@ private struct ClipCard: View, Equatable {
     private var displayedCharacterCount: Int? { characterCount ?? model.characterCounts.object(forKey: item.id as NSString)?.intValue }
     @State private var isOnscreen = false
     @State private var detectedLanguage: String?
+    @State private var detection: ContentInspector.Detection?
     @State private var hovering = false
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.item == rhs.item && lhs.index == rhs.index && lhs.selected == rhs.selected && lhs.dragging == rhs.dragging && lhs.editing == rhs.editing && lhs.hidden == rhs.hidden && lhs.quickModifiers == rhs.quickModifiers && lhs.height == rhs.height
@@ -502,7 +504,7 @@ private struct ClipCard: View, Equatable {
         let title = "\(item.title ?? HistoryView.kindName(item.kind))，\(item.source.name)"
         if hidden { return title + "，内容已隐藏" }
         if item.kind == .image || item.kind == .mixed { return title + "，" + item.preview + "，" + displayedThumbnail.label }
-        return title + "，" + item.preview
+        return title + (detection.map { "，\($0.kindName) \($0.badge)" } ?? "") + "，" + item.preview
     }
     private var tint: Color { switch item.kind {
         // 文本与链接色相拉开，且都不同于选中强调色，选中环不会与标题栏混在一起，by AI.Coding。
@@ -539,8 +541,13 @@ private struct ClipCard: View, Equatable {
                     .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 3))
                     .onSubmit { model.saveRename(id: item.id, title: nameDraft) }
                     .onExitCommand { model.cancelRename() }
-            } else { Text(item.title ?? HistoryView.kindName(item.kind)) }
+            } else { Text(item.title ?? languageTitle ?? HistoryView.kindName(item.kind)) }
         }.font(.system(size: tiny ? 10 : height < 150 ? 12 : 14, weight: .semibold)).lineLimit(1)
+    }
+    /// 识别出代码语言时以语言名替换"文本/富文本"；隐藏内容时不透露，by AI.Coding。
+    private var languageTitle: String? {
+        guard !hidden, item.kind == .text || item.kind == .richText else { return nil }
+        return detectedLanguage.flatMap { ContentInspector.languageNames[$0] }
     }
     /// 初始化编辑内容，不把种类默认标题误存成自定义名称，by AI.Coding。
     private func startNameEditing() { nameDraft = item.title ?? ""; nameFocused = true }
@@ -556,6 +563,7 @@ private struct ClipCard: View, Equatable {
                     }
                 }
                 Spacer(minLength: 2)
+                if let detection, !hidden, !tiny { DetectionBadge(detection: detection) }
                 if item.isFavorite && !tiny { Image(systemName: "star.fill").font(.system(size: 11)).foregroundStyle(.orange).accessibilityLabel("已收藏") }
                 // 应用图标自带外形，直接显示不再垫白底；系统图标四周留有透明边距，略放大与标题对齐，by AI.Coding。
                 Group {
@@ -609,6 +617,10 @@ private struct ClipCard: View, Equatable {
             .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: hovering)
             .contentShape(RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
             .coordinateSpace(name: item.id)
+            // 只识别≤180字符预览；预览达到上限视为被截断，只认JWT头部，by AI.Coding。
+            .task(id: item.preview) {
+                detection = item.kind == .text || item.kind == .richText ? ContentInspector.inspect(item.preview, truncated: item.preview.count >= 180) : nil
+            }
     }
     private var interactiveCard: some View {
         cardBody
@@ -645,6 +657,18 @@ private struct ClipCard: View, Equatable {
                 Button("原格式复制") { if !model.selectedIDs.contains(item.id) { model.select(item.id) }; model.perform(.original, action: .copy) }
                 Button("转换后粘贴… · ⌘T") { if !model.selectedIDs.contains(item.id) { model.select(item.id) }; model.showTransformMenu() }
                     .disabled(item.kind == .image || item.kind == .file)
+                if item.kind == .image { Button("复制图中文字") { model.copyImageText(id: item.id) }.disabled(hidden) }
+                // 多选时才出现；换行沿用原有合并（含原格式），其余只输出纯文本；含图片时整组置灰，by AI.Coding。
+                if model.selectedIDs.count > 1 && model.selectedIDs.contains(item.id) {
+                    let blocked = model.items.contains { model.selectedIDs.contains($0.id) && ($0.kind == .image || $0.kind == .mixed) }
+                    Menu("合并粘贴") {
+                        ForEach(JoinStyle.allCases, id: \.self) { style in
+                            Button(style.title) { style == .newline ? model.perform() : model.perform(.plainText, join: style) }
+                        }
+                    }.disabled(blocked).help(blocked ? "所选内容包含无文本项目" : "按所选方式合并后粘贴")
+                    Button("加入粘贴队列") { model.startPasteQueue(model.orderedSelection) }
+                        .help("每按一次 \(HotKeyService.label(model.settings.queueShortcut)) 依次粘贴下一项")
+                }
                 Button(item.isFavorite ? "取消收藏" : "收藏") { model.change(.favorites(model.selectedIDs.contains(item.id) ? model.orderedSelection : [item.id], !item.isFavorite)) }
                 Menu("加入分类") {
                     ForEach(model.categories) { category in Button(category.name) { model.setCategory(item.id, categoryID: category.id, included: true) } }
@@ -802,6 +826,7 @@ private struct CopyAge: View {
 // 详情按“标题 / 预览 / 信息 / 操作”排列，高度随内容，按钮与面板主次样式一致，by AI.Coding。
 struct ClipInspector: View {
     @ObservedObject var model: HistoryViewModel
+    @State private var inspection: ContentInspector.Inspection?
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             if let detail = model.detail {
@@ -811,6 +836,7 @@ struct ClipInspector: View {
                         .font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
                 preview(detail)
+                if let inspection, !model.settings.hideContents { InspectionSection(model: model, detail: detail, inspection: inspection) }
                 if !model.previewMessage.isEmpty { Text(model.previewMessage).font(.caption).foregroundStyle(.secondary) }
                 Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 5) {
                     row("大小", "\(detail.payload.items.count) 项 · \(HistoryViewModel.bytes(detail.payload.byteCount))")
@@ -827,8 +853,13 @@ struct ClipInspector: View {
                     Button(role: .destructive) { model.change(.delete([detail.summary.id])) } label: { Label("删除", systemImage: "trash").font(.system(size: 12)) }
                         .buttonStyle(.plain).foregroundStyle(.red)
                     Spacer()
-                    Button { model.showTransformMenu(ids: [detail.summary.id]) } label: { Label("转换", systemImage: "wand.and.stars") }
-                        .buttonStyle(ToolbarTabStyle(selected: true)).disabled(detail.payload.plainText == nil).help("转换后粘贴 · ⌘T")
+                    if detail.summary.kind == .image {
+                        Button { model.copyImageText(id: detail.summary.id, fromDetail: true) } label: { Label("复制图中文字", systemImage: "text.viewfinder") }
+                            .buttonStyle(ToolbarTabStyle(selected: true)).disabled(model.settings.hideContents || model.image == nil).help("识别图片中的文字并复制")
+                    } else {
+                        Button { model.showTransformMenu(ids: [detail.summary.id]) } label: { Label("转换", systemImage: "wand.and.stars") }
+                            .buttonStyle(ToolbarTabStyle(selected: true)).disabled(detail.payload.plainText == nil).help("转换后粘贴 · ⌘T")
+                    }
                     // 默认输出格式为主按钮，放在最右侧，与面板 Return 的默认结果一致，by AI.Coding。
                     if model.settings.defaultFormat == .plainText { copyButton("原格式复制", .original, enabled: true); copyButton("纯文本复制", .plainText, enabled: detail.payload.plainText != nil) }
                     else { copyButton("纯文本复制", .plainText, enabled: detail.payload.plainText != nil); copyButton("原格式复制", .original, enabled: true) }
@@ -836,6 +867,13 @@ struct ClipInspector: View {
             } else if model.detailLoading { ProgressView("正在读取完整内容…").frame(maxWidth: .infinity).frame(height: 220) }
             else { ContentUnavailableView("内容已变化", systemImage: "doc.text.magnifyingglass", description: Text("请选择仍存在的历史条目。")).frame(height: 220) }
         }.padding(20)
+            // 识别挂在始终存在的容器上：完整正文在后台识别，切换记录或版本时重新计算，by AI.Coding。
+            .task(id: "\(model.detail?.summary.id ?? "")-\(model.detail?.revision ?? 0)") {
+                inspection = nil
+                guard let detail = model.detail, let text = detail.payload.plainText, !detail.payload.hasFileReferences else { return }
+                let language = await SyntaxHighlighter.shared.language(of: text)
+                inspection = await Task.detached { ContentInspector.inspectFull(text, language: language) }.value
+            }
             .presentationBackground(Color(nsColor: .windowBackgroundColor))
     }
     /// 预览放入浅底圆角容器；文件显示图标、名称与所在文件夹，不把路径当代码高亮，by AI.Coding。
@@ -844,7 +882,11 @@ struct ClipInspector: View {
         let text = urls.isEmpty && detail.summary.kind != .image ? model.richPreview.flatMap { $0.length > 0 ? $0 : nil } : nil
         if model.image != nil || !urls.isEmpty || text != nil {
             VStack(alignment: .leading, spacing: 10) {
-                if let image = model.image { Image(nsImage: image).resizable().scaledToFit().frame(maxWidth: .infinity, maxHeight: text == nil ? 220 : 150).clipShape(RoundedRectangle(cornerRadius: 6)) }
+                if let image = model.image {
+                    LiveTextImage(image: image, interactive: !model.settings.hideContents)
+                        .aspectRatio(image.size.width > 0 && image.size.height > 0 ? image.size : CGSize(width: 1, height: 1), contentMode: .fit)
+                        .frame(maxWidth: .infinity, maxHeight: text == nil ? 220 : 150).clipShape(RoundedRectangle(cornerRadius: 6))
+                }
                 ForEach(Array(urls.prefix(4).enumerated()), id: \.offset) { _, url in
                     HStack(spacing: 10) {
                         Image(nsImage: NSWorkspace.shared.icon(forFile: url.path)).resizable().frame(width: 32, height: 32)
@@ -886,6 +928,21 @@ private struct FilterStrip: View {
                 HStack(spacing: 6) {
                     if let source = model.sourceFilter { chip(source.isEmpty ? "未知来源" : model.sourceSuggestions.first(where: { $0.bundleID == source })?.name ?? source) { model.sourceFilter = nil } }
                     if model.dateFilterEnabled { chip("日期区间") { model.dateFilterEnabled = false } }
+                    // 队列进行中显示进度与结束入口，其他功能照常使用，by AI.Coding。
+                    if let status = model.pasteQueueStatus {
+                        HStack(spacing: 5) {
+                            Image(systemName: "list.number").font(.system(size: 9))
+                            Text(status).lineLimit(1)
+                            Button("结束") { model.stopPasteQueue() }.buttonStyle(.link)
+                        }.font(.system(size: 10)).padding(.horizontal, 8).padding(.vertical, 3).background(Color.accentColor.opacity(0.12), in: Capsule())
+                    }
+                    // 搜索框前缀条件只读展示；删除搜索词中的前缀即可取消，by AI.Coding。
+                    if !model.queryConditions.isEmpty {
+                        Text("已筛选：" + model.queryConditions.joined(separator: " · ")).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                    ForEach(model.queryProblems, id: \.self) { problem in
+                        Label(problem, systemImage: "exclamationmark.circle").font(.system(size: 10)).foregroundStyle(.orange).lineLimit(1)
+                    }
                 }
             }.scrollIndicators(.hidden)
         }.padding(.horizontal,24).frame(height: 22)
@@ -969,5 +1026,104 @@ struct ToolbarIconButton: View {
         }.buttonStyle(.plain).help(help).accessibilityLabel(label ?? help.components(separatedBy: " · ")[0])
             .onHover { hovering = $0 }
             .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: hovering)
+    }
+}
+/// 卡片识别徽标：沿用快捷键标签的小胶囊样式，颜色附色块，by AI.Coding。
+private struct DetectionBadge: View {
+    let detection: ContentInspector.Detection
+    var body: some View {
+        HStack(spacing: 3) {
+            if case .color(let value) = detection {
+                Circle().fill(Color(.sRGB, red: Double(value.red) / 255, green: Double(value.green) / 255, blue: Double(value.blue) / 255, opacity: value.alpha))
+                    .overlay(Circle().strokeBorder(Color.primary.opacity(0.25), lineWidth: 0.5)).frame(width: 9, height: 9)
+            }
+            Text(detection.badge).font(.system(size: 10, weight: .medium, design: .monospaced)).lineLimit(1)
+        }.padding(.horizontal, 4).padding(.vertical, 1).fixedSize()
+            .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 3))
+            .help(detection.kindName + "：" + detection.badge)
+    }
+}
+/// 详情"识别结果"：类型、明细与可直接执行的转换；操作走转换后粘贴管线，by AI.Coding。
+private struct InspectionSection: View {
+    @ObservedObject var model: HistoryViewModel
+    let detail: ClipDetail
+    let inspection: ContentInspector.Inspection
+    var body: some View {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 6) {
+                        Text("识别为 " + inspection.kind).font(.caption.weight(.semibold))
+                        if let note = inspection.note { Text(note).font(.caption2).foregroundStyle(.orange) }
+                        Spacer(minLength: 4)
+                        if let color = inspection.color {
+                            RoundedRectangle(cornerRadius: 4).fill(Color(.sRGB, red: Double(color.red) / 255, green: Double(color.green) / 255, blue: Double(color.blue) / 255, opacity: color.alpha))
+                                .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(Color.primary.opacity(0.2))).frame(width: 44, height: 22).accessibilityHidden(true)
+                        }
+                    }
+                    Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 5) {
+                        ForEach(Array(inspection.rows.enumerated()), id: \.offset) { _, row in
+                            // 多行JSON占满两列、标题在上，避免无基线内容把标签挤到下方。
+                            if row.block {
+                                GridRow {
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text(row.label).foregroundStyle(.secondary)
+                                        Text(row.value).font(.system(size: 11, design: .monospaced)).lineLimit(14).textSelection(.enabled)
+                                    }.gridCellColumns(2)
+                                }
+                            } else {
+                                GridRow {
+                                    Text(row.label).foregroundStyle(.secondary).gridColumnAlignment(.trailing)
+                                    Text(row.value).lineLimit(2).truncationMode(.middle).textSelection(.enabled)
+                                }
+                            }
+                        }
+                    }.font(.caption)
+                    if !inspection.actions.isEmpty {
+                        HStack(spacing: 6) {
+                            ForEach(inspection.actions, id: \.title) { action in
+                                Button(action.title) { model.perform(.plainText, transform: action.transform, ids: [detail.summary.id]) }.buttonStyle(ToolbarTabStyle(selected: true))
+                            }
+                        }
+                    }
+                }.padding(10).frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 10))
+    }
+}
+/// 详情图片支持实况文本：框选文字、⌘C复制与系统数据检测；只在详情显示时分析，移除视图即取消，by AI.Coding。
+struct LiveTextImage: NSViewRepresentable {
+    let image: NSImage
+    let interactive: Bool
+    final class Coordinator { var overlay: ImageAnalysisOverlayView?; var task: Task<Void, Never>?; var analyzed: NSImage? }
+    func makeCoordinator() -> Coordinator { Coordinator() }
+    func makeNSView(context: Context) -> NSImageView {
+        let view = NSImageView()
+        view.imageScaling = .scaleProportionallyUpOrDown
+        // 尺寸交给SwiftUI按比例布局，不让原图固有尺寸撑大详情。
+        for orientation in [NSLayoutConstraint.Orientation.horizontal, .vertical] {
+            view.setContentCompressionResistancePriority(.defaultLow, for: orientation); view.setContentHuggingPriority(.defaultLow, for: orientation)
+        }
+        if ImageAnalyzer.isSupported {
+            let overlay = ImageAnalysisOverlayView()
+            overlay.trackingImageView = view; overlay.preferredInteractionTypes = .automatic
+            overlay.autoresizingMask = [.width, .height]; overlay.frame = view.bounds
+            view.addSubview(overlay); context.coordinator.overlay = overlay
+        }
+        update(view, context.coordinator)
+        return view
+    }
+    func updateNSView(_ view: NSImageView, context: Context) { update(view, context.coordinator) }
+    static func dismantleNSView(_ view: NSImageView, coordinator: Coordinator) { coordinator.task?.cancel() }
+    private func update(_ view: NSImageView, _ coordinator: Coordinator) {
+        if view.image !== image { view.image = image }
+        guard let overlay = coordinator.overlay else { return }
+        overlay.isHidden = !interactive
+        guard interactive, coordinator.analyzed !== image else { return }
+        coordinator.task?.cancel(); coordinator.analyzed = image; overlay.analysis = nil
+        let image = self.image
+        coordinator.task = Task { @MainActor in
+            var configuration = ImageAnalyzer.Configuration([.text, .machineReadableCode])
+            configuration.locales = ["zh-Hans", "zh-Hant", "en-US"]
+            guard let analysis = try? await ImageAnalyzer().analyze(image, orientation: .up, configuration: configuration), !Task.isCancelled else { return }
+            overlay.analysis = analysis
+        }
     }
 }

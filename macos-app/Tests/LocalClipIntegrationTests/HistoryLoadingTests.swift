@@ -18,6 +18,31 @@ import LocalClipCore
         let at = SystemClock().now()
         for index in 0..<count { _ = try await store.ingest(.init(payload: .init([.init([.init(SupportedType.string, Data("page-item-\(index)".utf8))])])), at: at + Int64(index)) }
     }
+    /// F20 AC1：搜索框前缀与筛选面板选同样条件得到相同结果，状态行列出已生效条件，by AI.Coding。
+    @Test func searchPrefixesMatchPanelFilters() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try HistoryStore(location: root), at = SystemClock().now()
+        let xcode = SourceAttribution(bundleID: "com.apple.dt.Xcode", name: "Xcode"), safari = SourceAttribution(bundleID: "com.apple.Safari", name: "Safari")
+        let image = try ImageFixtures.image(width: 4, height: 4)
+        for (index, (payload, source)) in [(ClipboardPayload([.init([.init(SupportedType.png, image)])]), xcode),
+                                           (.init([.init([.init(SupportedType.string, Data("xcode text".utf8))])]), xcode),
+                                           (.init([.init([.init(SupportedType.png, try ImageFixtures.image(width: 5, height: 5))])]), safari)].enumerated() {
+            _ = try await store.ingest(.init(payload: payload, source: source), at: at + Int64(index))
+        }
+        let model = makeModel(store); try await model.start(); model.capture.stop()
+        try await until { !model.historyBusy && model.items.count == 3 }
+        model.query = "app:xcode type:image"; model.searchChanged(debounce: false)
+        try await until { !model.historyBusy && model.items.count == 1 }
+        let viaPrefix = model.items.map(\.id)
+        #expect(model.queryConditions == ["来源 Xcode", "类型 图片"] && model.queryProblems.isEmpty)
+        model.query = ""; model.sourceFilter = xcode.bundleID; model.kind = .image; model.searchChanged(debounce: false)
+        try await until { !model.historyBusy && model.items.count == 1 }
+        #expect(model.items.map(\.id) == viaPrefix && model.queryConditions.isEmpty)
+        model.sourceFilter = nil; model.kind = nil; model.query = "app:nothing"; model.searchChanged(debounce: false)
+        try await until { !model.historyBusy && model.queryProblems == ["未找到来源 nothing"] }
+        #expect(model.items.count == 3)
+    }
     /// 首屏、合并预读、键盘越页和乱序筛选验证真实模型/SQLite，不依赖GUI输入工具，by AI.Coding。
     @Test func viewportPagingAndQueryCancellation() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

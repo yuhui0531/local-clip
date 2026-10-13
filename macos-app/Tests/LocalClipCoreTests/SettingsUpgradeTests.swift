@@ -1,4 +1,4 @@
-// 使用独立的旧版JSON契约验证全部设置在升级、重开和后续保存时保留；只操作临时库，by AI.Coding。
+// 使用独立的旧版JSON契约验证全部设置在打开、重开和后续保存时保留；只操作临时库，by AI.Coding。
 import Foundation
 import Testing
 @testable import LocalClipCore
@@ -17,7 +17,7 @@ struct SettingsUpgradeTests {
          "excludedBundleIDs": ["local.fixture.private", "local.fixture.secret"],
          "autoCheckUpdatesValue": enabled,
          "smartPasteEditorBundleIDsValue": ["local.fixture.editor", "local.fixture.editor2"],
-         "shortcut": ["keyCode": 8, "modifiers": 6400], "revision": 23]
+         "shortcut": ["keyCode": 8, "modifiers": 6400], "queueShortcutValue": ["keyCode": 11, "modifiers": 6144], "revision": 23]
     }
 
     /// 期望通过公开设置接口独立构造；整份快照比较包含可选字段的显式false与缺失差异。
@@ -34,26 +34,22 @@ struct SettingsUpgradeTests {
         value.excludedBundleIDs = ["local.fixture.private", "local.fixture.secret"]
         value.autoCheckUpdates = enabled
         value.smartPasteEditorBundleIDs = ["local.fixture.editor", "local.fixture.editor2"]
-        value.shortcut = .init(keyCode: 8, modifiers: 6400); value.revision = 23
+        value.shortcut = .init(keyCode: 8, modifiers: 6400); value.queueShortcut = .init(keyCode: 11, modifiers: 6144); value.revision = 23
         return value
     }
 
-    /// 建立最小合法数据库后注入固定历史文档；v3结构转换只发生在UUID临时目录。
-    private func seed(_ root: URL, version: Int, document: [String: Any]) throws -> String {
+    /// 建立最小合法数据库后注入固定设置文档，只在UUID临时目录操作。
+    private func seed(_ root: URL, document: [String: Any]) throws {
         _ = try HistoryStore(location: root)
         let db = try SQLiteConnection(root.appendingPathComponent("History/history.sqlite"))
         defer { try? db.close() }
         let json = String(decoding: try JSONSerialization.data(withJSONObject: document, options: .sortedKeys), as: UTF8.self)
-        if version == 3 {
-            try db.exec("ALTER TABLE clips DROP COLUMN title; ALTER TABLE clips DROP COLUMN normalizedTitle; UPDATE store_meta SET schemaVersion=3; PRAGMA user_version=3;")
-        }
-        try db.run("UPDATE settings SET schemaVersion=?,document=?", [.integer(Int64(version)), .text(json)])
-        return json
+        try db.run("UPDATE settings SET schemaVersion=?,document=?", [.integer(Schema.version), .text(json)])
     }
 
-    /// 同时覆盖v3迁移及不变schema的版本更新；每个布尔设置均验证开与关，防止默认值覆盖。
-    @Test(arguments: [3, 4], [true, false])
-    func allSettingsSurviveUpgradeAndLaterSave(version: Int, enabled: Bool) async throws {
+    /// 应用版本更新而schema不变时，每个布尔设置均验证开与关，防止默认值覆盖。
+    @Test(arguments: [true, false])
+    func allSettingsSurviveUpdateAndLaterSave(enabled: Bool) async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let original = document(enabled: enabled)
@@ -61,20 +57,9 @@ struct SettingsUpgradeTests {
         try saved.validate()
         // 新增存储属性时必须同步补充fixture，避免“全部设置”的覆盖范围静默过期。
         #expect(Set(Mirror(reflecting: saved).children.compactMap(\.label)) == Set(original.keys))
-        let oldJSON = try seed(root, version: version, document: original)
+        try seed(root, document: original)
         let store = try HistoryStore(location: root, initialSettings: SettingsSnapshot())
         #expect(try await store.settings() == saved)
-
-        if version == 3 {
-            let backups = try FileManager.default.contentsOfDirectory(at: root.appendingPathComponent("Backups"), includingPropertiesForKeys: nil)
-            try #require(backups.count == 1)
-            let backup = try SQLiteConnection(backups[0], readonly: true)
-            defer { try? backup.close() }
-            #expect(try backup.scalarInt("PRAGMA user_version") == 3)
-            #expect(try backup.scalarText("SELECT document FROM settings") == oldJSON)
-        } else {
-            #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent("Backups").path))
-        }
 
         // 新版本默认值不应覆盖旧值；普通偏好保存也不能丢掉其它字段。
         let reopened = try HistoryStore(location: root)
@@ -86,16 +71,15 @@ struct SettingsUpgradeTests {
     }
 
     /// 真实旧文档可缺少后加的可选设置；默认值只补缺失项，不得重置其它用户偏好。
-    @Test(arguments: [3, 4])
-    func missingOptionalLegacyFieldsKeepOtherPreferences(version: Int) async throws {
+    @Test func missingOptionalLegacyFieldsKeepOtherPreferences() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         var old = document(enabled: true)
         for key in ["appearanceValue", "compactLayoutValue", "pauseUntil", "codeFilePasteEnabled",
-                    "moveUsedToFrontValue", "autoCheckUpdatesValue", "smartPasteEditorBundleIDsValue"] {
+                    "moveUsedToFrontValue", "autoCheckUpdatesValue", "smartPasteEditorBundleIDsValue", "queueShortcutValue"] {
             old.removeValue(forKey: key)
         }
-        _ = try seed(root, version: version, document: old)
+        try seed(root, document: old)
         let store = try HistoryStore(location: root)
         var value = try await store.settings()
         #expect(value.appearance == .system && !value.compactLayout && value.pauseUntil == nil)

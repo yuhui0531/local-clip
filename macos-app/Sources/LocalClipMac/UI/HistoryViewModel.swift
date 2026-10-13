@@ -155,6 +155,10 @@ import LocalClipCore
     public var openSettings: (() -> Void)?
     public var quitApplication: (() -> Void)?
     public var registerShortcut: ((Shortcut) -> Bool)?
+    /// 粘贴队列快捷键只在队列进行中注册；由宿主接到系统全局快捷键，by AI.Coding。
+    public var registerQueueShortcut: ((Shortcut) -> Bool)?
+    public var unregisterQueueShortcut: (() -> Void)?
+    public var pasteQueueChanged: (() -> Void)?
     /// 第二个参数表示失败；回退（内容已复制）与失败使用不同图标，by AI.Coding。
     public var showPasteFeedback: ((String, Bool) -> Void)?
     public var panelInteractionChanged: (() -> Void)?
@@ -321,9 +325,21 @@ import LocalClipCore
     }
     /// 捕获/删除/到期刷新不额外防抖。
     public func refresh() { search(debounce: false, preserveWindow: true) }
-    private var currentSearchSignature: String {
-        SearchRequest(query, favorites: favorites, kind: kind, categoryIDs: activeCategories, sourceBundleID: sourceFilter, from: dateBounds?.0, until: dateBounds?.1).signature
+    private var currentSearchSignature: String { searchRequest(sources: querySources).signature }
+    /// 搜索框前缀条件与筛选面板合成一份请求；同一维度前缀优先，前缀不写回面板，清空搜索框即失效，by AI.Coding。
+    private func searchRequest(sources: [SourceAttribution], cursor: SearchCursor? = nil, queryID: UUID = UUID(), pageSize: Int = 50) -> SearchRequest {
+        let parsed = SearchQueryParser.parse(query, sources: sources, categories: categories, now: clock.now())
+        let bounds = dateBounds
+        return SearchRequest(parsed.literal, favorites: favorites || parsed.favorites, kind: parsed.kind ?? kind, cursor: cursor, queryID: queryID, pageSize: pageSize,
+                             categoryIDs: parsed.categoryIDs.isEmpty ? activeCategories : parsed.categoryIDs, sourceBundleID: parsed.sourceBundleID ?? sourceFilter,
+                             from: parsed.from ?? (parsed.until == nil ? bounds?.0 : nil), until: parsed.until ?? (parsed.from == nil ? bounds?.1 : nil))
     }
+    /// app:前缀需要来源列表；面板未加载时按需读取一次，后续翻页沿用同一份，by AI.Coding。
+    private var querySources: [SourceAttribution] { sourceSuggestions.isEmpty ? prefixSources : sourceSuggestions }
+    private var prefixSources: [SourceAttribution] = []
+    /// 状态行显示的前缀条件与无法应用的原因；只在变化时发布，输入其他字符不重建列表，by AI.Coding。
+    @Published public private(set) var queryConditions: [String] = []
+    @Published public private(set) var queryProblems: [String] = []
     /// 每个查询所有者独立计时；旧加载任务不能向新查询发布，by AI.Coding。
     private func beginQueryLoading(_ generation: UUID) {
         queryPending = true; delayedLoading?.cancel()
@@ -359,7 +375,11 @@ import LocalClipCore
                 try Task.checkCancellation()
                 guard id == queryID else { return }
                 // 廉价元数据裁剪完成后才固定请求，避免已删分类发布旧空结果，by AI.Coding。
-                let request = SearchRequest(query, favorites: favorites, kind: kind, queryID: id, pageSize: preserveWindow ? min(50, max(viewportPageSize, windowSize)) : viewportPageSize, categoryIDs: activeCategories, sourceBundleID: sourceFilter, from: dateBounds?.0, until: dateBounds?.1)
+                if querySources.isEmpty, query.range(of: "(^|\\s)app:", options: [.regularExpression, .caseInsensitive]) != nil { prefixSources = (try? await store.sources()) ?? [] }
+                guard id == queryID else { return }
+                let request = searchRequest(sources: querySources, queryID: id, pageSize: preserveWindow ? min(50, max(viewportPageSize, windowSize)) : viewportPageSize)
+                let parsed = SearchQueryParser.parse(query, sources: querySources, categories: categories, now: clock.now())
+                assignIfChanged(\.queryConditions, parsed.labels); assignIfChanged(\.queryProblems, parsed.problems)
                 activeSearchSignature = request.signature
                 let started = ContinuousClock.now
                 let matching = preserveWindow ? try await store.matchingIDs(Set(tailCandidates).union(previousSelections), in: request) : nil
@@ -512,6 +532,8 @@ import LocalClipCore
     /// 详情显示才加载完整格式；关闭时释放大内容，保留轻量选择状态。
     public func detailVisibilityChanged() {
         panelInteractionChanged?()
+        // 从详情发起的识别随详情关闭取消，不写剪贴板，by AI.Coding。
+        if !showingDetail, imageTextFromDetail { imageTextTask?.cancel(); imageTextTask = nil }
         if showingDetail { loadDetail() } else { invalidateDetail() }
     }
     private func loadDetail() {
@@ -592,11 +614,11 @@ import LocalClipCore
         select(items[min(items.count - 1, max(0, current + delta))].id)
     }
     /// 按配置动作执行；输出状态不会写成目标已接收。
-    public func perform(_ format: OutputFormat? = nil, action: PasteAction? = nil, transform: TextTransform? = nil, ids: [ClipID]? = nil) {
+    public func perform(_ format: OutputFormat? = nil, action: PasteAction? = nil, transform: TextTransform? = nil, join: JoinStyle = .newline, ids: [ClipID]? = nil) {
         let ids = ids ?? orderedSelection
         guard !ids.isEmpty else { return }
         Task {
-            let result = await paste.perform(.init(ids: ids, format: format ?? settings.defaultFormat, action: action ?? settings.defaultAction, target: target, transform: transform))
+            let result = await paste.perform(.init(ids: ids, format: format ?? settings.defaultFormat, action: action ?? settings.defaultAction, target: target, transform: transform, join: join))
             showPasteResult(result)
             notifyPasteResult(result)
             await recordUse(ids, result)
@@ -952,7 +974,7 @@ import LocalClipCore
     }
     /// 当前筛选条件下的分页请求；所有续页入口共用，避免各处重复拼装条件，by AI.Coding。
     private func pageRequest(cursor: SearchCursor?, queryID: UUID, pageSize: Int = 50) -> SearchRequest {
-        SearchRequest(query, favorites: favorites, kind: kind, cursor: cursor, queryID: queryID, pageSize: pageSize, categoryIDs: activeCategories, sourceBundleID: sourceFilter, from: dateBounds?.0, until: dateBounds?.1)
+        searchRequest(sources: querySources, cursor: cursor, queryID: queryID, pageSize: pageSize)
     }
     /// 全选与End共用的读完剩余分页：接管在途查询与预读，新代次使旧页只能被取消、不能重复追加，by AI.Coding。
     private func loadRemainingPages(failure: String, onPage: @escaping ([ClipSummary]) -> Void = { _ in }, completion: @escaping () -> Void = {}) {
@@ -1033,6 +1055,94 @@ import LocalClipCore
     public func quickLook() {
         guard let selectedID else { return }
         Task { do { let detail = try await store.detail(id: selectedID, at: clock.now()); if let urls = detail.payload.fileURLs { filePreview.show(urls, excludeFromSharing: settings.excludeFromSharing) } else { showingDetail = true; detailVisibilityChanged() } } catch { message = "预览不可用，记录已变化" } }
+    }
+    // MARK: F19 连续粘贴队列：只存在内存里，按选择顺序每按一次快捷键粘贴下一项，by AI.Coding。
+    @Published public private(set) var pasteQueue: [ClipID] = []
+    @Published public private(set) var pasteQueuePosition = 0
+    private var pasteQueueBusy = false
+    private var pasteQueueIdle: Task<Void, Never>?
+    public var pasteQueueActive: Bool { pasteQueuePosition < pasteQueue.count }
+    public var pasteQueueStatus: String? {
+        pasteQueueActive ? "粘贴队列 \(pasteQueuePosition)/\(pasteQueue.count) · \(HotKeyService.label(settings.queueShortcut)) 粘贴下一项" : nil
+    }
+    /// 新队列替换旧队列；快捷键注册失败（冲突）则不启动，by AI.Coding。
+    public func startPasteQueue(_ ids: [ClipID]) {
+        guard ids.count >= 2 else { return }
+        guard registerQueueShortcut?(settings.queueShortcut) == true else {
+            message = "队列快捷键 \(HotKeyService.label(settings.queueShortcut)) 注册冲突，请在设置 › 粘贴中更换"; showPasteFeedback?(message, true); return
+        }
+        pasteQueue = ids; pasteQueuePosition = 0; touchPasteQueue()
+        closePanel?()
+        showPasteFeedback?("已加入粘贴队列 0/\(ids.count) · \(HotKeyService.label(settings.queueShortcut)) 粘贴下一项", false)
+        pasteQueueChanged?()
+    }
+    public func stopPasteQueue() {
+        guard !pasteQueue.isEmpty else { return }
+        pasteQueue = []; pasteQueuePosition = 0; pasteQueueIdle?.cancel(); pasteQueueIdle = nil
+        unregisterQueueShortcut?(); pasteQueueChanged?()
+    }
+    /// 10分钟没有按键自动结束，避免快捷键长期占用。
+    private func touchPasteQueue() {
+        pasteQueueIdle?.cancel()
+        pasteQueueIdle = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(600))
+            guard !Task.isCancelled else { return }
+            self?.stopPasteQueue()
+        }
+    }
+    /// 宿主在按键时已记住当前前台应用与焦点；处理中再按忽略，不排队。
+    /// 物理修饰键（如队列快捷键的⌃⌥）未松开时最多等500ms，超时只复制并提示，指针照常前进，by AI.Coding。
+    public func pasteQueueNext(target: TargetToken?, modifiersHeld: @escaping () -> Bool) {
+        guard pasteQueueActive, !pasteQueueBusy else { return }
+        guard let target else { showPasteFeedback?("请先切换到要粘贴的应用", true); return }
+        pasteQueueBusy = true; touchPasteQueue()
+        Task { [weak self] in
+            guard let self else { return }
+            defer { pasteQueueBusy = false }
+            let deadline = ContinuousClock.now + .milliseconds(500)
+            while modifiersHeld(), ContinuousClock.now < deadline { try? await Task.sleep(for: .milliseconds(10)) }
+            let held = modifiersHeld()
+            var skipped: [Int] = [], shown = false
+            while pasteQueueActive {
+                let index = pasteQueuePosition, id = pasteQueue[index]
+                pasteQueuePosition += 1
+                let result = await paste.perform(.init(ids: [id], format: settings.defaultFormat, action: held ? .copy : settings.defaultAction, target: target))
+                if result == .failed("内容已删除或到期，请重新选择") { skipped.append(index + 1); continue }
+                await recordUse([id], result)
+                let progress = "\(pasteQueuePosition)/\(pasteQueue.count)"
+                let skippedText = skipped.isEmpty ? "" : "（第 \(skipped.map(String.init).joined(separator: "、")) 项已不存在，已跳过）"
+                switch result {
+                case .commandSent: showPasteFeedback?("已粘贴 \(progress)" + skippedText, false)
+                case .copied: showPasteFeedback?((held ? "修饰键未松开，已复制 \(progress)，请手动粘贴" : "已复制 \(progress)") + skippedText, held)
+                default: showPasteFeedback?(result.message + "（\(progress)）" + skippedText, true)
+                }
+                shown = true; break
+            }
+            // 剩余各项都已删除时，只提示跳过。
+            if !shown, !skipped.isEmpty { showPasteFeedback?("第 \(skipped.map(String.init).joined(separator: "、")) 项已不存在，已跳过", true) }
+            if !pasteQueueActive { stopPasteQueue() } else { pasteQueueChanged?() }
+        }
+    }
+    private var imageTextTask: Task<Void, Never>?
+    private var imageTextFromDetail = false
+    /// 复制图中文字：只在用户点击时识别原图，只复制不粘贴（识别可能超过1秒）；隐藏内容时不提供，by AI.Coding。
+    public func copyImageText(id: ClipID, fromDetail: Bool = false) {
+        guard !settings.hideContents else { return }
+        imageTextTask?.cancel(); imageTextFromDetail = fromDetail
+        notice("正在识别图中文字…")
+        imageTextTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let payload = try await store.loadPayload(id: id, at: clock.now())
+                let lines = try await ImageTextRecognizer.recognize(payload)
+                try Task.checkCancellation()
+                let result = paste.copyText(lines.joined(separator: "\n"))
+                let text = result == .copied ? "已复制图中文字（\(lines.count) 行）" : result.message
+                notice(text); showPasteFeedback?(text, result != .copied)
+            } catch is CancellationError { if message == "正在识别图中文字…" { message = "" } }
+            catch let error as ImageTextRecognizer.Failure { message = error.message; showPasteFeedback?(error.message, true) }
+            catch { message = "识别失败，记录已变化"; showPasteFeedback?(message, true) }
+        }
     }
     /// 转换菜单按需读取所选内容并逐项判定，不适用的置灰而不隐藏，位置固定便于记忆；按住⌥切换为仅复制，by AI.Coding。
     public func showTransformMenu(ids explicit: [ClipID]? = nil, atSelectedCard: Bool = false) {

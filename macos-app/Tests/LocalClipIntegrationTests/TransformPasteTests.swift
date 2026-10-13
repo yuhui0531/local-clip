@@ -93,4 +93,22 @@ import Testing
         let (huge, tooLarge) = HistoryViewModel.transformAvailability([text(String(repeating: "a", count: TextTransform.byteLimit + 1))])
         #expect(huge.isEmpty); #expect(tooLarge == "内容过大（超过 4 MiB），无法转换")
     }
+
+    /// F18：AC1 SQL列表只写纯文本并按选择顺序；AC2换行与原有合并逐字节一致；AC3含图片时拒绝且剪贴板不变，by AI.Coding。
+    @Test func joinStylesThroughPaste() async throws {
+        let h = try harness(); defer { try? FileManager.default.removeItem(at: h.root) }
+        let now = SystemClock().now()
+        let ids = [try await ingest(h.store, "x", at: now), try await ingest(h.store, "O'Brien", at: now + 1), try await ingest(h.store, "y", at: now + 2)]
+        #expect(await h.paste.perform(.init(ids: ids, action: .copy, join: .sqlList)) == .copied)
+        #expect(written(h.raw) == [SupportedType.string])
+        #expect(h.raw.items[0][SupportedType.string] == Data("'x', 'O''Brien', 'y'".utf8))
+        var records: [ClipboardPayload] = []
+        for id in ids { records.append(try await h.store.loadPayload(id: id, at: now)) }
+        #expect(try OutputComposer.combine(records, format: .original, join: .newline) == OutputComposer.combine(records, format: .original))
+        #expect(try OutputComposer.combine(records, format: .original).items[0].representations.map(\.type).contains(SupportedType.rtf))
+        guard case .inserted(let image) = try await h.store.ingest(.init(payload: .init([.init([.init(SupportedType.png, try ImageFixtures.image(width: 4, height: 4))])])), at: now + 3) else { Issue.record("Fixture rejected"); return }
+        let count = h.raw.count
+        #expect(await h.paste.perform(.init(ids: [ids[0], image], action: .copy, join: .comma)) == .failed("所选内容包含无文本项目，无法合并"))
+        #expect(h.raw.count == count)
+    }
 }

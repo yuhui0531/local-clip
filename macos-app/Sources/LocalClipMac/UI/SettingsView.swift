@@ -17,6 +17,7 @@ public struct SettingsView: View {
     @State private var retention = "30"
     @State private var quota = "500"
     @State private var recording = false
+    @State private var recordingQueue = false
     @State private var monitor: Any?
     @State private var loginStatus = ""
     @State private var loginEnabled = false
@@ -55,7 +56,7 @@ public struct SettingsView: View {
                         Toggle("紧凑布局", isOn: Binding(get: { model.settings.compactLayout }, set: { value in model.updateSettings { $0.compactLayout = value } }))
                         Toggle("显示菜单栏图标", isOn: Binding(get: { model.settings.showMenuIcon }, set: { value in model.updateSettings { $0.showMenuIcon = value } }))
                         LabeledContent("全局快捷键") {
-                            Button(recording ? "按下新的快捷键…" : HotKeyService.label(model.settings.shortcut), action: recordShortcut)
+                            Button(recording && !recordingQueue ? "按下新的快捷键…" : HotKeyService.label(model.settings.shortcut)) { recordShortcut() }
                                 .help(recording ? "按 Esc 取消" : "点按后按下新的快捷键")
                         }
                         // 登录启动显示系统真实状态，开关只在用户点击时请求注册。
@@ -118,6 +119,11 @@ public struct SettingsView: View {
                         Toggle("复制或粘贴后移到最前", isOn: Binding(get: { model.settings.moveUsedToFront }, set: { value in model.updateSettings { $0.moveUsedToFront = value } }))
                         Picker("数字 1–9 快捷粘贴", selection: Binding(get: { model.settings.quickModifiers }, set: { value in model.updateSettings { $0.quickModifiers = value } })) { Text("⌘ + 数字").tag(UInt32(256)); Text("⌥ + 数字").tag(UInt32(2048)); Text("⌃ + 数字").tag(UInt32(4096)); Text("⌘⇧ + 数字").tag(UInt32(768)) }
                         Picker("切换／新建分类", selection: Binding(get: { model.settings.boardModifiers }, set: { value in model.updateSettings { $0.boardModifiers = value } })) { Text("⌘⇧ + ← / → / N").tag(UInt32(768)); Text("⌘⌥ + ← / → / N").tag(UInt32(2304)); Text("⌃⌥ + ← / → / N").tag(UInt32(6144)) }
+                        // 只在粘贴队列进行中注册，平时不占用该组合键，by AI.Coding。
+                        LabeledContent("粘贴队列下一项") {
+                            Button(recording && recordingQueue ? "按下新的快捷键…" : HotKeyService.label(model.settings.queueShortcut)) { recordShortcut(queue: true) }
+                                .help(recording && recordingQueue ? "按 Esc 取消" : "多选后右键“加入粘贴队列”，每按一次粘贴下一项")
+                        }
                         LabeledContent("辅助功能权限") {
                             Label(permitted ? "已授予" : "未授予", systemImage: permitted ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
                                 .foregroundStyle(permitted ? Color.green : Color.orange)
@@ -250,8 +256,8 @@ public struct SettingsView: View {
         return Bundle(url: url)?.bundleIdentifier
     }
     /// 只捕获本设置窗口内用户主动录制的一次按键。
-    private func recordShortcut() {
-        stopRecording(); recording = true
+    private func recordShortcut(queue: Bool = false) {
+        stopRecording(); recording = true; recordingQueue = queue
         let window = NSApp.keyWindow
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak window] event in
             guard let window, event.window === window else { return event }
@@ -264,11 +270,12 @@ public struct SettingsView: View {
             if flags.contains(.shift) { modifiers |= UInt32(shiftKey) }
             if flags.contains(.control) { modifiers |= UInt32(controlKey) }
             let shortcut = Shortcut(keyCode: UInt32(event.keyCode), modifiers: modifiers)
-            stopRecording(); model.updateSettings { $0.shortcut = shortcut }; return nil
+            let queue = recordingQueue
+            stopRecording(); model.updateSettings { if queue { $0.queueShortcut = shortcut } else { $0.shortcut = shortcut } }; return nil
         }
     }
     /// 窗口关闭和录制完成都移除监听。
-    private func stopRecording() { if let monitor { NSEvent.removeMonitor(monitor) }; monitor = nil; recording = false }
+    private func stopRecording() { if let monitor { NSEvent.removeMonitor(monitor) }; monitor = nil; recording = false; recordingQueue = false }
     /// 只在用户点击时请求注册，不把 API 返回当作系统授权完成。
     private func loginChange(_ enabled: Bool) {
         do { try login.setEnabled(enabled); refreshLogin() }

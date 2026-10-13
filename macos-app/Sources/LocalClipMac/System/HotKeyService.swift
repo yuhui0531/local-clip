@@ -3,37 +3,51 @@ import AppKit
 import Carbon
 import LocalClipCore
 @MainActor public final class HotKeyService {
-    private var reference: EventHotKeyRef?
+    private var references: [UInt32: EventHotKeyRef] = [:]
     private var handler: EventHandlerRef?
-    private var registered: Shortcut?
+    private var registered: [UInt32: Shortcut] = [:]
+    /// id 1：打开/关闭历史面板。
     public var onInvoke: (() -> Void)?
+    /// id 2：粘贴队列下一项；只在队列进行中注册，by AI.Coding。
+    public var onQueueInvoke: (() -> Void)?
     public init() {}
     /// 新快捷键注册失败不丢掉旧快捷键；不使用全局键盘监听替代。
-    public func register(_ shortcut: Shortcut) -> Bool {
-        if shortcut == registered { return true }
+    public func register(_ shortcut: Shortcut) -> Bool { register(shortcut, id: 1) }
+    public func registerQueue(_ shortcut: Shortcut) -> Bool { register(shortcut, id: 2) }
+    public func unregisterQueue() { unregister(id: 2) }
+    private func register(_ shortcut: Shortcut, id: UInt32) -> Bool {
+        if shortcut == registered[id] { return true }
         if handler == nil {
             var event = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
-            let status = InstallEventHandler(GetApplicationEventTarget(), { _, _, context in
-                guard let context else { return OSStatus(eventNotHandledErr) }
+            let status = InstallEventHandler(GetApplicationEventTarget(), { _, event, context in
+                guard let context, let event else { return OSStatus(eventNotHandledErr) }
+                // 按注册时的id分派，面板与队列快捷键互不干扰。
+                var key = EventHotKeyID()
+                guard GetEventParameter(event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID), nil,
+                                        MemoryLayout<EventHotKeyID>.size, nil, &key) == noErr else { return OSStatus(eventNotHandledErr) }
                 let owner = Unmanaged<HotKeyService>.fromOpaque(context).takeUnretainedValue()
-                MainActor.assumeIsolated { owner.onInvoke?() }
+                MainActor.assumeIsolated { key.id == 2 ? owner.onQueueInvoke?() : owner.onInvoke?() }
                 return noErr
             }, 1, &event, Unmanaged.passUnretained(self).toOpaque(), &handler)
             guard status == noErr else { return false }
         }
         var newReference: EventHotKeyRef?
-        let id = EventHotKeyID(signature: 0x4C434C50, id: 1)
-        let result = RegisterEventHotKey(shortcut.keyCode, shortcut.modifiers, id, GetApplicationEventTarget(), 0, &newReference)
+        let key = EventHotKeyID(signature: 0x4C434C50, id: id)
+        let result = RegisterEventHotKey(shortcut.keyCode, shortcut.modifiers, key, GetApplicationEventTarget(), 0, &newReference)
         guard result == noErr, let newReference else { return false }
-        if let reference { UnregisterEventHotKey(reference) }
-        reference = newReference; registered = shortcut
+        if let old = references[id] { UnregisterEventHotKey(old) }
+        references[id] = newReference; registered[id] = shortcut
         return true
+    }
+    private func unregister(id: UInt32) {
+        if let reference = references.removeValue(forKey: id) { UnregisterEventHotKey(reference) }
+        registered[id] = nil
     }
     /// 应用退出时释放系统注册。
     public func stop() {
-        if let reference { UnregisterEventHotKey(reference) }; reference = nil
+        for reference in references.values { UnregisterEventHotKey(reference) }
+        references = [:]; registered = [:]
         if let handler { RemoveEventHandler(handler) }; handler = nil
-        registered = nil
     }
     /// 用户可读名称，不显示 Carbon 编码。
     public static func label(_ shortcut: Shortcut) -> String {

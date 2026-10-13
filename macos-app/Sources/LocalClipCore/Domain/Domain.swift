@@ -236,12 +236,18 @@ public struct SettingsSnapshot: Codable, Equatable, Sendable {
         set { smartPasteEditorBundleIDsValue = newValue }
     }
     public var shortcut = Shortcut()
+    /// 粘贴队列"下一项"快捷键，默认⌃⌥V；缺失字段按默认处理，只在队列进行中注册，by AI.Coding。
+    private var queueShortcutValue: Shortcut?
+    public var queueShortcut: Shortcut {
+        get { queueShortcutValue ?? Shortcut(keyCode: 9, modifiers: 6144) }
+        set { queueShortcutValue = newValue }
+    }
     public var revision: Int64 = 0
     public init() {}
     /// 设置范围校验不影响测试注入的小配额。
     public func validate() throws {
         guard (0...365).contains(retentionDays), (100 * MiB...4096 * MiB).contains(quotaBytes), shortcut.keyCode <= 127,
-              shortcut.modifiers != 0, (220...520).contains(panelHeight),
+              shortcut.modifiers != 0, queueShortcut.keyCode <= 127, queueShortcut.modifiers != 0, queueShortcut != shortcut, (220...520).contains(panelHeight),
               [UInt32(256),4096,2048,768].contains(quickModifiers), [UInt32(768),2304,6144].contains(boardModifiers) else { throw StoreError.invalidSettings }
     }
     /// 所有入库入口应用同一策略，旧配置快照不得穿透新暂停。
@@ -379,8 +385,10 @@ public struct PasteRequest: Sendable {
     public var target: TargetToken?
     /// 本次输出的文字转换；nil保持原有输出，by AI.Coding。
     public var transform: TextTransform?
-    public init(ids: [ClipID], format: OutputFormat = .original, action: PasteAction = .copy, target: TargetToken? = nil, transform: TextTransform? = nil) {
-        self.ids = ids; self.format = format; self.action = action; self.target = target; self.transform = transform
+    /// 多选合并方式；换行保持原有输出，by AI.Coding。
+    public var join: JoinStyle
+    public init(ids: [ClipID], format: OutputFormat = .original, action: PasteAction = .copy, target: TargetToken? = nil, transform: TextTransform? = nil, join: JoinStyle = .newline) {
+        self.ids = ids; self.format = format; self.action = action; self.target = target; self.transform = transform; self.join = join
     }
 }
 public struct WriteReceipt: Sendable, Equatable { public var count: Int; public var fingerprint: String; public var successful: Bool; public init(count: Int, fingerprint: String, successful: Bool) { self.count = count; self.fingerprint = fingerprint; self.successful = successful } }

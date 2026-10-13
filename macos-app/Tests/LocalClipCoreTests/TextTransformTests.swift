@@ -99,6 +99,37 @@ struct TextTransformTests {
         #expect(!TextTransform.sortLines.isApplicable("single\n"))
     }
 
+    /// F17识别专属转换：JWT载荷、时间戳⇄ISO 8601互逆、颜色hex⇄rgb()，by AI.Coding。
+    @Test func detectionTransforms() throws {
+        let jwt = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI0MiIsImV4cCI6MTcwMDAwMDAwMH0.c2lnbmF0dXJl"
+        #expect(try TextTransform.jwtPayload.apply(jwt) == "{\n  \"sub\": \"42\",\n  \"exp\": 1700000000\n}")
+        #expect(!TextTransform.jwtPayload.isApplicable("eyJhbGciOiJIUzI1NiJ9"))
+        let iso = try TextTransform.timestampToISO.apply("1760313600")
+        #expect(ISO8601DateFormatter().date(from: iso) == Date(timeIntervalSince1970: 1_760_313_600))
+        #expect(try TextTransform.isoToTimestamp.apply(iso) == "1760313600")
+        #expect(try TextTransform.isoToTimestamp.apply(try TextTransform.timestampToISO.apply("1760313600123")) == "1760313600123")
+        #expect(try TextTransform.isoToTimestamp.apply("2025-10-13T00:00:00Z") == "1760313600")
+        #expect(!TextTransform.timestampToISO.isApplicable("20261013"))
+        #expect(!TextTransform.isoToTimestamp.isApplicable("2025-10-13"))
+        #expect(try TextTransform.colorToRGB.apply("#34C759") == "rgb(52, 199, 89)")
+        #expect(try TextTransform.colorToHex.apply("rgb(52, 199, 89)") == "#34C759")
+        #expect(try TextTransform.colorToHex.apply("hsla(0, 100%, 50%, 0.5)") == "#FF000080")
+        #expect(!TextTransform.colorToRGB.isApplicable("green"))
+        #expect(TextTransform.allCases.filter { $0.group == 4 }.count == 5)
+    }
+
+    /// F18合并方式：AC1的SQL转义、JSON转义、Markdown项内换行缩进；去空白规则按方式区分，by AI.Coding。
+    @Test func joinStyles() {
+        #expect(JoinStyle.sqlList.join(["x", " O'Brien\n", "y"]) == "'x', 'O''Brien', 'y'")
+        #expect(JoinStyle.jsonArray.join(["a", "say \"hi\"\n", "中文\t"]) == "[\"a\", \"say \\\"hi\\\"\", \"中文\"]")
+        #expect(JoinStyle.comma.join([" a ", "b\n"]) == "a, b")
+        #expect(JoinStyle.space.join(["a", " b"]) == "a b")
+        #expect(JoinStyle.blankLine.join(["a\n", "b"]) == "a\n\n\nb")
+        #expect(JoinStyle.newline.join(["a", "b"]) == "a\nb")
+        #expect(JoinStyle.markdownList.join(["first\r\nsecond", "  third  "]) == "- first\n  second\n- third")
+        #expect(Set(JoinStyle.allCases.map(\.title)).count == JoinStyle.allCases.count)
+    }
+
     /// 可选即可执行：任何判定为适用的转换都不得抛错；超限内容一律不可用，by AI.Coding。
     @Test func applicabilityMatchesApply() {
         let samples = ["", "plain", "  $ ls -la\n  $ pwd", "1 a\n2 b\n3 c", "{\"a\": [1, 2]}", "\"quoted\\n\"", "aGVsbG8=",

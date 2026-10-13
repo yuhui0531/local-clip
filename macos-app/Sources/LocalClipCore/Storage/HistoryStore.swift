@@ -46,41 +46,12 @@ public actor HistoryStore: HistoryRepository {
         if FileManager.default.fileExists(atPath: strategy.databaseURL.path) {
             // 读写打开让SQLite回滚崩溃遗留的热日志；只读取版本，高版本库不被修改。
             let db = try SQLiteConnection(strategy.databaseURL)
-            var version = try db.scalarInt("PRAGMA user_version")
-            // 唯一受支持的旧版本：先在存储目录外写一致性备份，再原地无损升级；其他版本仍拒绝，by AI.Coding。
-            if version == 3 {
-                do {
-                    let backups = location.appendingPathComponent("Backups", isDirectory: true)
-                    try FileManager.default.createDirectory(at: backups, withIntermediateDirectories: true)
-                    let backup = backups.appendingPathComponent("history-v3-\(clock.now()).sqlite")
-                    if !FileManager.default.fileExists(atPath: backup.path) { try db.run("VACUUM INTO ?", [.text(backup.path)]) }
-                    try Schema.upgradeFromV3(db)
-                } catch { try? db.close(); throw StoreError.incompatibleSchema }
-                version = try db.scalarInt("PRAGMA user_version")
-            }
-            guard version == Schema.version else { try db.close(); throw StoreError.incompatibleSchema }
+            // 开发阶段不做旧库升级：版本不同即拒绝且不修改文件，删除History目录后重建，by AI.Coding。
+            guard try db.scalarInt("PRAGMA user_version") == Schema.version else { try db.close(); throw StoreError.incompatibleSchema }
             guard try db.scalarText("PRAGMA quick_check") == "ok", try db.rows("PRAGMA foreign_key_check").isEmpty else { throw StoreError.corruptPayload }
-            try Self.reclassifyTextLinks(db)
             try db.close()
         } else { try strategy.initialize { try Schema.create($0, settings: initialSettings) } }
         self.strategy = strategy; databaseURL = strategy.databaseURL
-    }
-    /// 旧版本把纯文本网址存为文本；打开时按当前规则补正，候选为空时不写库，by AI.Coding。
-    /// ponytail: 每次启动都会重查无空白且含点的文本记录，量大到拖慢启动时再加一次性完成标记。
-    private static func reclassifyTextLinks(_ db: SQLiteConnection) throws {
-        let rows = try db.rows("""
-            SELECT c.id,b.payload FROM clips c JOIN representations r ON r.clipID=c.id JOIN blobs b ON b.digest=r.blobDigest
-            WHERE c.kind='text' AND r.type=? AND instr(c.previewText,'.')>0
-              AND instr(trim(c.previewText,' '||char(9,10,13)),' ')=0 AND instr(trim(c.previewText,' '||char(9,10,13)),char(10))=0
-              AND (SELECT COUNT(*) FROM representations WHERE clipID=c.id)=1
-            """, [.text(SupportedType.string)])
-        let ids = rows.filter { ClipboardPayload([.init([.init(SupportedType.string, $0.data("payload"))])]).kind == .url }.map { $0.text("id") }
-        guard !ids.isEmpty else { return }
-        try db.exec("BEGIN IMMEDIATE")
-        do {
-            for id in ids { try db.run("UPDATE clips SET kind=? WHERE id=?", [.text(ClipKind.url.rawValue), .text(id)]) }
-            try db.exec("UPDATE store_meta SET storeRevision=storeRevision+1 WHERE singletonID=1; COMMIT")
-        } catch { try? db.exec("ROLLBACK"); throw error }
     }
     /// 读取不可用状态不重放已提交写入。
     private func requireAvailable() throws { if unavailable { throw StoreError.postCommitUnavailable } }
