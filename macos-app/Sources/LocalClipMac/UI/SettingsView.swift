@@ -26,6 +26,9 @@ public struct SettingsView: View {
     @State private var feedback = ""
     // 窗口高度跟随当前分组内容，过长分组才滚动，避免短分组下方大片留白，by AI.Coding。
     @State private var formHeight: CGFloat = 360
+    // 头部与底栏固定高度单独测量，窗口目标高度=头部+表单+底栏，by AI.Coding。
+    @State private var headerHeight: CGFloat = 0
+    @State private var footerHeight: CGFloat = 0
     public init(model: HistoryViewModel, login: LoginItemService) { self.model = model; self.login = login }
     /// 内容自然高度变化时调整承载窗口；默认交给设置窗口，调试渲染可替换。
     var fitWindow: (CGFloat) -> Void = { height in NSApp.windows.lazy.compactMap { $0 as? SettingsWindow }.first?.fitContent(height: height) }
@@ -39,7 +42,8 @@ public struct SettingsView: View {
             HStack(spacing: 4) {
                 ForEach(SettingsSection.allCases, id: \.self) { value in SettingsTab(section: value, selected: section == value) { section = value } }
             }.padding(.top, 10).padding(.bottom, 8).frame(maxWidth: .infinity)
-            Divider()
+                .overlay(alignment: .bottom) { Divider() }
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { headerHeight = $0 }
             Form {
                 if section == .general {
                     Section {
@@ -179,7 +183,8 @@ public struct SettingsView: View {
                 }
             }.formStyle(.grouped).scrollContentBackground(.hidden).id(section)
                 .onScrollGeometryChange(for: CGFloat.self) { $0.contentSize.height } action: { _, height in formHeight = height }
-                .frame(height: min(max(formHeight, 160), 600))
+                // 表单占据头部与底栏之间的剩余空间；窗口动画期间头部钉在顶部、底栏钉在底部，只有表单区伸缩，by AI.Coding。
+                .frame(maxHeight: .infinity)
         }
         // 操作反馈固定在底部，不随长表单滚走。
         .safeAreaInset(edge: .bottom) {
@@ -189,14 +194,13 @@ public struct SettingsView: View {
                 Label(feedback.isEmpty ? "常规设置自动保存；存储限制需点按“应用”" : feedback, systemImage: feedback.isEmpty ? "checkmark.circle" : "info.circle")
                     .font(.caption).foregroundStyle(.secondary).textSelection(.enabled).lineLimit(2)
                     .padding(.horizontal, 20).frame(maxWidth: .infinity, alignment: .leading).frame(height: 38)
-            }
+            }.onGeometryChange(for: CGFloat.self) { $0.size.height } action: { footerHeight = $0 }
         }
         .onChange(of: model.message) { _, message in if message.isEmpty || NSApp.keyWindow is SettingsWindow { feedback = message } }
         .frame(width: 620)
-        // 按自然高度测量整页，再让窗口贴合；窗口动画过程中内容保持顶部对齐。
-        .fixedSize(horizontal: false, vertical: true)
-        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in fitWindow(height) }
-        .frame(maxHeight: .infinity, alignment: .top)
+        // 不再按整页自然高度撑开：内容高于窗口时宿主会居中溢出，导致切换分组时头部上跳再回落，by AI.Coding。
+        .onChange(of: windowHeight, initial: true) { _, height in if headerHeight > 0, footerHeight > 0 { fitWindow(height) } }
+        .frame(maxHeight: .infinity)
         .background(Color(nsColor: .windowBackgroundColor))
         .onChange(of: section) { _, _ in stopRecording() }
         .onChange(of: model.settings.retentionDays) { _, value in retention = String(value) }
@@ -213,6 +217,7 @@ public struct SettingsView: View {
         }
         .onDisappear { model.settingsVisibilityChanged(false); stopRecording() }
     }
+    private var windowHeight: CGFloat { headerHeight + min(max(formHeight, 160), 600) + footerHeight }
     private func applyRetention() { if let days = Int(retention), (1...365).contains(days) { model.change(.retention(days)) } else { model.message = "保留天数需为1–365" } }
     private func applyQuota() { if let value = Int64(quota), (100...4096).contains(value) { model.change(.quota(value * MiB)) } else { model.message = "容量需为100–4096MiB" } }
     /// 应用选择器读取 bundleID，不将名称作为唯一键。
