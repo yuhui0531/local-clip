@@ -23,6 +23,9 @@ jobs:
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
+        with:
+          # 发布说明需要上一个版本 tag 之后的提交记录。
+          fetch-depth: 0
 
       - name: Setup Xcode & Swift Environment
         run: |
@@ -92,7 +95,21 @@ jobs:
           fi
           TITLE="LocalClip ${{ steps.package.outputs.version }} (Build ${{ steps.package.outputs.build }})"
 
-          BODY="## LocalClip macOS 安装包发布
+          # 更新清单取自注释 tag 的正文（git tag -a 时第一行标题之后的内容）；
+          # checkout 会把注释 tag 变成轻量 tag，先强制取回原 tag 对象。
+          git fetch --force origin "refs/tags/${TAG}:refs/tags/${TAG}"
+          NOTES=$(git tag -l --format='%(contents:body)' "$TAG" | sed '/^-----BEGIN PGP/,$d')
+          # tag 没写正文时，退回列出上一个版本 tag 以来的提交标题。
+          if [ -z "${NOTES//[[:space:]]/}" ]; then
+            PREV=$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)
+            if [ -n "$PREV" ]; then NOTES=$(git log --no-merges --format='- %s' "${PREV}..HEAD"); else NOTES=$(git log -1 --format='- %s'); fi
+          fi
+
+          BODY="## 更新内容
+
+          ${NOTES}
+
+          ## LocalClip macOS 安装包发布
 
           - **应用版本**: \`${{ steps.package.outputs.version }}\` (Build \`${{ steps.package.outputs.build }}\`)
           - **触发分支 / Tag**: \`${{ github.ref_name }}\`
