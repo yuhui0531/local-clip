@@ -81,6 +81,13 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+      # 更新签名独立于 Apple 证书；没有正确私钥时禁止发布不可验证的更新，by AI.Coding。
+      - name: Sign In-App Update Metadata
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        env:
+          LOCALCLIP_UPDATE_PRIVATE_KEY: ${{ secrets.LOCALCLIP_UPDATE_PRIVATE_KEY }}
+        run: bash macos-app/scripts/sign-update.sh
+
       # 只有推送版本 tag 才发布；main 推送与 PR 只构建和测试，不会覆盖已发布的安装包。
       - name: Publish to GitHub Releases
         if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
@@ -131,6 +138,8 @@ jobs:
             "macos-app/dist/LocalClip.dmg"
             "macos-app/dist/LocalClip.zip"
             "macos-app/dist/checksums.txt"
+            "macos-app/dist/update.json"
+            "macos-app/dist/update.sig"
           )
 
           # 同一版本只发布一次：已存在则失败，绝不覆盖已发布的安装包。

@@ -17,6 +17,8 @@
 .build-*/
 .swiftpm/
 .cache/
+# 更新发布私钥只保留在本机或 CI secret，禁止进入仓库，by AI.Coding。
+.update-signing/
 dist/
 build/
 DerivedData/

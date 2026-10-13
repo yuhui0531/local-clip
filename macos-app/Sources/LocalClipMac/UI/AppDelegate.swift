@@ -116,6 +116,8 @@ import LocalClipCore
                 do {
                     // 手动暂停只作用于上一轮运行，定时暂停和隐私规则由采集器保留，by AI.Coding。
                     try await model.start(resumeCapture: true)
+                    // 先确认真实存储恢复，再给安装器回执；权限引导可能等待用户，不能阻塞回执，by AI.Coding。
+                    if !Self.isolatedRun { UpdateInstaller.acknowledgeStartup() }
                     if !hotkeys.register(model.settings.shortcut) { model.message = "快捷键注册冲突，菜单栏仍可使用" }
                     applyAppearanceSettings(); updateMenu()
                     // 再次打开应用触发接替时，新进程完成启动后继续展示用户请求的历史。
@@ -199,7 +201,8 @@ import LocalClipCore
         settings.image = NSImage(systemSymbolName: "gearshape", accessibilityDescription: nil)
         // 有新版本时只在菜单里多一项，不弹窗打扰，by AI.Coding。
         if let release = UpdateChecker.shared.available {
-            let update = menu.addItem(withTitle: "有新版本 \(release.version)…", action: #selector(openUpdate), keyEquivalent: ""); update.target = self
+            let title = UpdateChecker.shared.phase == .ready ? "安装并重启 · \(release.version)…" : "更新 \(release.version)…"
+            let update = menu.addItem(withTitle: title, action: #selector(openUpdate), keyEquivalent: ""); update.target = self
             update.image = NSImage(systemSymbolName: "arrow.down.circle", accessibilityDescription: nil)
         }
         menu.addItem(.separator())
@@ -208,7 +211,11 @@ import LocalClipCore
         quit.target = self
         menu.delegate = self; return menu
     }
-    @objc private func openUpdate() { if let page = UpdateChecker.shared.available?.page { NSWorkspace.shared.open(page) } }
+    /// 菜单与设置共享唯一显式安装入口，下载中只展示设置状态，by AI.Coding。
+    @objc private func openUpdate() {
+        if UpdateChecker.shared.phase == .ready { Task { await UpdateChecker.shared.installAndRestart() } }
+        else { showSettings() }
+    }
     /// 隔离验收进程不弹授权向导、不访问网络。
     private static var isolatedRun: Bool {
         #if DEBUG

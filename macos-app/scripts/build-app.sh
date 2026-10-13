@@ -10,7 +10,10 @@ scratch="${LOCALCLIP_BUILD_PATH:-$root/.build}"
 swift build --disable-sandbox --cache-path "$root/.cache/packages" --package-path "$root" --scratch-path "$scratch" -c "$configuration"
 bin="$(swift build --disable-sandbox --cache-path "$root/.cache/packages" --package-path "$root" --scratch-path "$scratch" -c "$configuration" --show-bin-path)"
 bundle="$root/dist/LocalClip.app"
-mkdir -p "$bundle/Contents/MacOS" "$bundle/Contents/Resources"
+mkdir -p "$bundle/Contents/MacOS" "$bundle/Contents/Resources" "$bundle/Contents/Helpers"
+# 辅助进程随应用发布并独立签名，运行时复制到更新缓存，by AI.Coding。
+cp "$bin/LocalClipUpdater" "$bundle/Contents/Helpers/LocalClipUpdater.new"
+mv -f "$bundle/Contents/Helpers/LocalClipUpdater.new" "$bundle/Contents/Helpers/LocalClipUpdater"
 # 用新inode替换主程序，避免用户仍在运行上一版时覆盖其已映射的执行文件。
 cp "$bin/LocalClip" "$bundle/Contents/MacOS/LocalClip.new"
 mv -f "$bundle/Contents/MacOS/LocalClip.new" "$bundle/Contents/MacOS/LocalClip"
@@ -22,9 +25,11 @@ done
 # 设置 LOCALCLIP_SIGN_IDENTITY（如 "Developer ID Application: …"）可用稳定证书签名，
 # 更新后辅助功能授权不失效；未设置时保持 ad hoc 签名，by AI.Coding。
 if [ -n "${LOCALCLIP_SIGN_IDENTITY:-}" ]; then
+  codesign --force --options runtime --timestamp --sign "$LOCALCLIP_SIGN_IDENTITY" "$bundle/Contents/Helpers/LocalClipUpdater"
   codesign --force --options runtime --timestamp --sign "$LOCALCLIP_SIGN_IDENTITY" "$bundle"
 else
+  codesign --force --sign - "$bundle/Contents/Helpers/LocalClipUpdater"
   codesign --force --sign - "$bundle"
 fi
-codesign --verify --strict "$bundle"
+codesign --verify --deep --strict "$bundle"
 printf '%s\n' "$bundle"

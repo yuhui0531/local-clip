@@ -8,8 +8,12 @@ let package = Package(
                .executable(name: "LocalClip", targets: ["LocalClip"])],
     targets: [
         .systemLibrary(name: "CSQLite", pkgConfig: "sqlite3"),
+        // 更新事务独立于剪贴板存储，辅助进程不加载采集服务，by AI.Coding。
+        .target(name: "LocalClipUpdateKit"),
+        .executableTarget(name: "LocalClipUpdater", dependencies: ["LocalClipUpdateKit"]),
+        .executableTarget(name: "LocalClipUpdateTool", dependencies: ["LocalClipUpdateKit"]),
         .target(name: "LocalClipCore", dependencies: ["CSQLite"]),
-        .target(name: "LocalClipMac", dependencies: ["LocalClipCore"], resources: [.process("Resources")]),
+        .target(name: "LocalClipMac", dependencies: ["LocalClipCore", "LocalClipUpdateKit"], resources: [.process("Resources")]),
         .executableTarget(name: "LocalClip", dependencies: ["LocalClipMac"]),
         .testTarget(name: "LocalClipCoreTests", dependencies: ["LocalClipCore", "CSQLite"], swiftSettings: [.unsafeFlags(["-F", "/Library/Developer/CommandLineTools/Library/Developer/Frameworks"])], linkerSettings: [.unsafeFlags(["-F", "/Library/Developer/CommandLineTools/Library/Developer/Frameworks", "-Xlinker", "-rpath", "-Xlinker", "/Library/Developer/CommandLineTools/Library/Developer/Frameworks"])]),
         .testTarget(name: "LocalClipIntegrationTests", dependencies: ["LocalClipCore", "LocalClipMac"], resources: [.copy("Fixtures/PasteboardSoakWriter.m")], swiftSettings: [.unsafeFlags(["-F", "/Library/Developer/CommandLineTools/Library/Developer/Frameworks"])], linkerSettings: [.unsafeFlags(["-F", "/Library/Developer/CommandLineTools/Library/Developer/Frameworks", "-Xlinker", "-rpath", "-Xlinker", "/Library/Developer/CommandLineTools/Library/Developer/Frameworks"])])

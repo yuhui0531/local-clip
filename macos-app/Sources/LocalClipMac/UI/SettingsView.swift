@@ -60,20 +60,33 @@ public struct SettingsView: View {
                         }
                         // 登录启动显示系统真实状态，开关只在用户点击时请求注册。
                         Toggle("登录时启动", isOn: Binding(get: { loginEnabled }, set: { loginChange($0) }))
-                        Toggle("自动检查更新", isOn: Binding(get: { model.settings.autoCheckUpdates }, set: { value in model.updateSettings { $0.autoCheckUpdates = value } }))
+                        // 沿用原偏好控制后台检查和下载，关闭时立即取消未完成的后台下载，by AI.Coding。
+                        Toggle("自动检查并下载更新", isOn: Binding(get: { model.settings.autoCheckUpdates }, set: { value in
+                            model.updateSettings { $0.autoCheckUpdates = value }
+                            updates.automaticUpdatesChanged(enabled: value)
+                        }))
                         LabeledContent("当前版本 \(UpdateChecker.currentVersion)") {
-                            if let release = updates.available {
-                                Button("下载 \(release.version)…") { NSWorkspace.shared.open(release.page) }.buttonStyle(.borderedProminent)
-                            } else {
-                                if let result = updates.manualResult { Text(result).foregroundStyle(.secondary) }
+                            switch updates.phase {
+                            case .downloading:
+                                HStack { ProgressView().controlSize(.small); Text("正在下载更新…") }
+                            case .ready:
+                                Button("安装并重启") { Task { await updates.installAndRestart() } }.buttonStyle(.borderedProminent)
+                            case .installing:
+                                HStack { ProgressView().controlSize(.small); Text("正在准备安装…") }
+                            case .manualOnly:
+                                if let release = updates.available { Button("查看版本 \(release.version)…") { NSWorkspace.shared.open(release.page) } }
+                            case .failed, .idle:
                                 Button(updates.checking ? "正在检查…" : "检查更新") { Task { await updates.check(manual: true) } }.disabled(updates.checking)
                             }
                         }
+                        if case let .failed(message) = updates.phase { Text(message).foregroundStyle(.red).font(.caption) }
+                        if case .manualOnly = updates.phase { Text("此版本尚未提供签名更新包，请从发布页手动安装。").settingsFootnote() }
+                        if let result = updates.manualResult { Text(result).foregroundStyle(.secondary).font(.caption) }
                         if login.status == .requiresApproval || loginStatus.hasPrefix("请求失败") {
                             LabeledContent(loginStatus) { Button("打开登录项…") { login.openSettings() } }.foregroundStyle(.secondary)
                         }
                     } header: { Text("外观与启动") } footer: {
-                        Text("外观同时应用于历史面板和设置。紧凑布局缩短工具栏和操作区；窄屏自动使用紧凑布局。隐藏菜单栏图标要求快捷键可用。自动检查更新每天最多一次，只读取 GitHub 上的最新版本号，不发送任何剪贴板内容；不会自动下载或安装。").settingsFootnote()
+                        Text("自动检查每天最多一次；新版本会自动下载并验签，仅点击“安装并重启”后更新，普通退出不会安装。更新前保留旧应用及历史、设置快照，不发送剪贴板内容。当前使用临时签名，更新后 macOS 可能要求重新授予辅助功能权限。").settingsFootnote()
                     }
                 }
                 if section == .general {
