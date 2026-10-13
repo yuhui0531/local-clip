@@ -27,10 +27,10 @@ import Foundation
         externalInteractionPending = false; trackingMenus.removeAll(); lastInteractionTime = 0
     }
 
-    /// 拖动与确认先完成，普通key转移保留自有弹窗与菜单，by AI.Coding。
+    /// 置顶、拖动与确认先完成，普通key转移保留自有弹窗与菜单，by AI.Coding。
     func shouldDismiss(panelIsKey: Bool, ownsKeyWindow: Bool, dragging: Bool,
-                       confirming: Bool, hasModal: Bool) -> Bool {
-        guard !dragging, !confirming, !hasModal else { return false }
+                       confirming: Bool, hasModal: Bool, pinned: Bool = false) -> Bool {
+        guard !pinned, !dragging, !confirming, !hasModal else { return false }
         // 外部点击已经离开菜单交互；过期菜单通知不能永久拦住关闭，by AI.Coding。
         if externalInteractionPending { return true }
         return !panelIsKey && !ownsKeyWindow && !isTrackingMenu

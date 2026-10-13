@@ -13,17 +13,18 @@ public struct HistoryView: View {
     /// 单行工具栏释放的高度用于卡片，首屏查询仍共用实际边长，by AI.Coding。
     static func cardSide(height: CGFloat, filtered: Bool) -> CGFloat {
         let dense = height < 300
-        let available = max(1, height - 8 - (dense ? 40 : 48) - (filtered ? 22 : 0) - (dense ? 36 : 44) - 1 - 20)
-        return available
+        return max(1, height - 8 - toolbarHeight(dense: dense) - (filtered ? 22 : 0) - footerHeight(dense: dense) - 1 - 20)
     }
+    static func toolbarHeight(dense: Bool) -> CGFloat { dense ? 40 : 48 }
+    static func footerHeight(dense: Bool) -> CGFloat { dense ? 36 : 44 }
     public var body: some View {
         // 根布局只接受真实窗口视口；卡片最小内容尺寸不能反过来扩大托管视图。
         GeometryReader { viewport in
             // 用户可在宽屏主动启用紧凑工具栏；窄屏仍保持已有自适应行为，by AI.Coding。
             let compact = model.settings.compactLayout || viewport.size.width < 1000
             let dense = viewport.size.height < 300
-            let toolbarHeight: CGFloat = dense ? 40 : 48
-            let footerHeight: CGFloat = dense ? 36 : 44
+            let toolbarHeight = Self.toolbarHeight(dense: dense)
+            let footerHeight = Self.footerHeight(dense: dense)
             let filterHeight: CGFloat = model.sourceFilter != nil || model.dateFilterEnabled || !model.queryConditions.isEmpty || !model.queryProblems.isEmpty || model.pasteQueueActive ? 22 : 0
             // 正方形宽高一起收缩，完整边界始终留在实际视口内。
             let cardHeight = Self.cardSide(height: viewport.size.height, filtered: filterHeight > 0)
@@ -57,7 +58,6 @@ public struct HistoryView: View {
                         ToolbarIconButton(symbol: recording ? "pause.circle" : "play.circle.fill", tint: recording ? nil : .orange, help: recording ? "暂停记录" : "恢复记录", action: model.toggleRecording)
                         Menu {
                             Button(model.settings.hideContents ? "显示内容" : "隐藏内容") { model.updateSettings { $0.hideContents.toggle() } }
-                            Button("筛选…") { model.showingFilters.toggle() }
                             Button("撤销删除 · ⌘Z") { model.undoDeletion() }.disabled(!model.canUndoDeletion)
                             Divider()
                             Button("设置… · ⌘,") { model.openSettings?() }
@@ -65,6 +65,7 @@ public struct HistoryView: View {
                             Divider(); Button("退出 LocalClip") { model.quitApplication?() }.keyboardShortcut("q", modifiers: .command)
                         } label: { Image(systemName: "ellipsis.circle").font(.system(size: 17)).foregroundStyle(Color.primary.opacity(0.72)) }
                             .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().frame(width: 28, height: 28).help("更多").accessibilityLabel("更多")
+                        ToolbarIconButton(symbol: model.pinned ? "pin.fill" : "pin", tint: model.pinned ? .accentColor : nil, help: model.pinned ? "取消置顶" : "置顶（失焦不隐藏）", label: model.pinned ? "取消置顶" : "置顶") { model.pinned.toggle(); model.panelInteractionChanged?() }
                         ToolbarIconButton(symbol: "xmark.circle", help: "关闭 · Esc") { model.closePanel?() }
                     }
                 }.padding(.horizontal, 24).frame(height: toolbarHeight)
@@ -343,50 +344,46 @@ private struct HistorySelectionActions: View {
     let compact: Bool
     var body: some View {
         let value = footer.snapshot
-            Group {
-                let selected = value.selectedItem
-                if compact {
-                    Menu {
-                        Section("分类") {
-                            ForEach(model.categories) { category in
-                                let included = value.selectedMetadata?.summary.id == selected?.id && value.selectedMetadata?.categoryIDs.contains(category.id) == true
-                                Button { if let selected { model.setCategory(selected.id, categoryID: category.id, included: !included) } } label: {
-                                    if included { Label(category.name, systemImage: "checkmark") } else { Text(category.name) }
-                                }
-                            }
-                            Button("新建分类…") { model.editCategory() }
-                        }
-                        Button(selected?.isFavorite == true ? "取消收藏" : "收藏") {
-                            if let selected { model.change(.favorites(model.orderedSelection, !selected.isFavorite)) }
-                        }.disabled(selected == nil)
-                        Button("纯文本复制") { model.perform(.plainText, action: .copy) }
-                            .disabled(value.selectedMetadata?.hasTextRepresentations != true || selected == nil)
-                    } label: { Label("更多", systemImage: "ellipsis.circle") }
-                        .menuStyle(.borderlessButton).fixedSize().disabled(selected == nil)
-                } else {
-                    Menu {
-                        ForEach(model.categories) { category in
-                            let included = value.selectedMetadata?.summary.id == selected?.id && value.selectedMetadata?.categoryIDs.contains(category.id) == true
-                            Button { if let selected { model.setCategory(selected.id, categoryID: category.id, included: !included) } } label: {
-                                if included { Label(category.name, systemImage: "checkmark") } else { Text(category.name) }
-                            }
-                        }
-                        Divider(); Button("新建分类…") { model.editCategory() }
-                    } label: { Label("分类", systemImage: "folder") }
-                        .menuStyle(.borderlessButton).fixedSize().disabled(selected == nil || value.selectedMetadata?.summary.id != selected?.id)
-                    Button { if let selected { model.change(.favorites(model.orderedSelection, !selected.isFavorite)) } } label: { Image(systemName: selected?.isFavorite == true ? "star.fill" : "star").foregroundStyle(selected?.isFavorite == true ? Color.orange : Color.secondary).frame(width: 18) }.buttonStyle(.plain).help("收藏/取消收藏").accessibilityLabel(selected?.isFavorite == true ? "取消收藏" : "收藏")
-                }
-                Button { model.showingDetail.toggle() } label: { if compact { Image(systemName: "info.circle") } else { Label("详情", systemImage: "info.circle") } }.buttonStyle(.plain)
-                    .accessibilityLabel("详情").help("详情")
-                Divider().frame(height: 20)
-                if !compact {
-                    Button { model.perform(.plainText, action: .copy) } label: { Text("纯文本复制") }
-                        .disabled(value.selectedMetadata?.hasTextRepresentations != true).buttonStyle(.plain).foregroundStyle(.secondary).help("纯文本复制")
-                }
-                // Enter执行的动作作为主按钮并标↩，另一个为次按钮，图标与按键行为一致。
-                if model.settings.defaultAction == .directPaste { copyButton(primary: false); pasteButton(primary: true) }
-                else { pasteButton(primary: false); copyButton(primary: true) }
-            }.disabled(value.selectedID == nil)
+        Group {
+            let selected = value.selectedItem
+            if compact {
+                Menu {
+                    Section("分类") { categoryItems(value) }
+                    Button(selected?.isFavorite == true ? "取消收藏" : "收藏") {
+                        if let selected { model.change(.favorites(model.orderedSelection, !selected.isFavorite)) }
+                    }.disabled(selected == nil)
+                    Button("纯文本复制") { model.perform(.plainText, action: .copy) }
+                        .disabled(value.selectedMetadata?.hasTextRepresentations != true || selected == nil)
+                } label: { Label("更多", systemImage: "ellipsis.circle") }
+                    .menuStyle(.borderlessButton).fixedSize().disabled(selected == nil)
+            } else {
+                Menu { categoryItems(value, divided: true) } label: { Label("分类", systemImage: "folder") }
+                    .menuStyle(.borderlessButton).fixedSize().disabled(selected == nil || value.selectedMetadata?.summary.id != selected?.id)
+                Button { if let selected { model.change(.favorites(model.orderedSelection, !selected.isFavorite)) } } label: { Image(systemName: selected?.isFavorite == true ? "star.fill" : "star").foregroundStyle(selected?.isFavorite == true ? Color.orange : Color.secondary).frame(width: 18) }.buttonStyle(.plain).help("收藏/取消收藏").accessibilityLabel(selected?.isFavorite == true ? "取消收藏" : "收藏")
+            }
+            Button { model.showingDetail.toggle() } label: { if compact { Image(systemName: "info.circle") } else { Label("详情", systemImage: "info.circle") } }.buttonStyle(.plain)
+                .accessibilityLabel("详情").help("详情 · ⌘I")
+            Divider().frame(height: 20)
+            if !compact {
+                Button { model.perform(.plainText, action: .copy) } label: { Label("纯文本复制", systemImage: "doc.plaintext") }
+                    .disabled(value.selectedMetadata?.hasTextRepresentations != true).buttonStyle(.plain).foregroundStyle(.secondary).help("纯文本复制")
+            }
+            // Enter执行的动作作为主按钮并标↩，另一个为次按钮，图标与按键行为一致。
+            if model.settings.defaultAction == .directPaste { copyButton(primary: false); pasteButton(primary: true) }
+            else { pasteButton(primary: false); copyButton(primary: true) }
+        }.disabled(value.selectedID == nil)
+    }
+    /// 勾选所选记录已属分类，点按切换；紧凑菜单与分类菜单共用。
+    @ViewBuilder private func categoryItems(_ value: HistoryFooterState.Snapshot, divided: Bool = false) -> some View {
+        let selected = value.selectedItem
+        ForEach(model.categories) { category in
+            let included = value.selectedMetadata?.summary.id == selected?.id && value.selectedMetadata?.categoryIDs.contains(category.id) == true
+            Button { if let selected { model.setCategory(selected.id, categoryID: category.id, included: !included) } } label: {
+                if included { Label(category.name, systemImage: "checkmark") } else { Text(category.name) }
+            }
+        }
+        if divided { Divider() }
+        Button("新建分类…") { model.editCategory() }
     }
     private func primaryLabel(_ title: String, _ hint: String) -> some View {
         HStack(spacing: compact ? 4 : 12) { Text(title).fontWeight(.semibold); Text(hint).font(.system(size: compact ? 9 : 10)).opacity(0.7) }
@@ -1049,43 +1046,43 @@ private struct InspectionSection: View {
     let detail: ClipDetail
     let inspection: ContentInspector.Inspection
     var body: some View {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack(spacing: 6) {
-                        Text("识别为 " + inspection.kind).font(.caption.weight(.semibold))
-                        if let note = inspection.note { Text(note).font(.caption2).foregroundStyle(.orange) }
-                        Spacer(minLength: 4)
-                        if let color = inspection.color {
-                            RoundedRectangle(cornerRadius: 4).fill(Color(.sRGB, red: Double(color.red) / 255, green: Double(color.green) / 255, blue: Double(color.blue) / 255, opacity: color.alpha))
-                                .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(Color.primary.opacity(0.2))).frame(width: 44, height: 22).accessibilityHidden(true)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Text("识别为 " + inspection.kind).font(.caption.weight(.semibold))
+                if let note = inspection.note { Text(note).font(.caption2).foregroundStyle(.orange) }
+                Spacer(minLength: 4)
+                if let color = inspection.color {
+                    RoundedRectangle(cornerRadius: 4).fill(Color(.sRGB, red: Double(color.red) / 255, green: Double(color.green) / 255, blue: Double(color.blue) / 255, opacity: color.alpha))
+                        .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(Color.primary.opacity(0.2))).frame(width: 44, height: 22).accessibilityHidden(true)
+                }
+            }
+            Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 5) {
+                ForEach(Array(inspection.rows.enumerated()), id: \.offset) { _, row in
+                    // 多行JSON占满两列、标题在上，避免无基线内容把标签挤到下方。
+                    if row.block {
+                        GridRow {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(row.label).foregroundStyle(.secondary)
+                                Text(row.value).font(.system(size: 11, design: .monospaced)).lineLimit(14).textSelection(.enabled)
+                            }.gridCellColumns(2)
+                        }
+                    } else {
+                        GridRow {
+                            Text(row.label).foregroundStyle(.secondary).gridColumnAlignment(.trailing)
+                            Text(row.value).lineLimit(2).truncationMode(.middle).textSelection(.enabled)
                         }
                     }
-                    Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 5) {
-                        ForEach(Array(inspection.rows.enumerated()), id: \.offset) { _, row in
-                            // 多行JSON占满两列、标题在上，避免无基线内容把标签挤到下方。
-                            if row.block {
-                                GridRow {
-                                    VStack(alignment: .leading, spacing: 3) {
-                                        Text(row.label).foregroundStyle(.secondary)
-                                        Text(row.value).font(.system(size: 11, design: .monospaced)).lineLimit(14).textSelection(.enabled)
-                                    }.gridCellColumns(2)
-                                }
-                            } else {
-                                GridRow {
-                                    Text(row.label).foregroundStyle(.secondary).gridColumnAlignment(.trailing)
-                                    Text(row.value).lineLimit(2).truncationMode(.middle).textSelection(.enabled)
-                                }
-                            }
-                        }
-                    }.font(.caption)
-                    if !inspection.actions.isEmpty {
-                        HStack(spacing: 6) {
-                            ForEach(inspection.actions, id: \.title) { action in
-                                Button(action.title) { model.perform(.plainText, transform: action.transform, ids: [detail.summary.id]) }.buttonStyle(ToolbarTabStyle(selected: true))
-                            }
-                        }
+                }
+            }.font(.caption)
+            if !inspection.actions.isEmpty {
+                HStack(spacing: 6) {
+                    ForEach(inspection.actions, id: \.title) { action in
+                        Button(action.title) { model.perform(.plainText, transform: action.transform, ids: [detail.summary.id]) }.buttonStyle(ToolbarTabStyle(selected: true))
                     }
-                }.padding(10).frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 10))
+                }
+            }
+        }.padding(10).frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 10))
     }
 }
 /// 详情图片支持实况文本：框选文字、⌘C复制与系统数据检测；只在详情显示时分析，移除视图即取消，by AI.Coding。

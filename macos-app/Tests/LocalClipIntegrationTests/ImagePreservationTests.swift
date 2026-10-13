@@ -79,9 +79,6 @@ private enum PreservationImages {
         let category = try await store.createCategory(name: "Preserve images", colorHex: "34C759")
         _ = try await store.apply(store.preview(.category([id], category.id, true)).token)
         try await store.renameClip(id: id, title: "Original image")
-        let before = try Data(contentsOf: root.appendingPathComponent("History/history.sqlite"))
-        #expect(try await store.compactRedundantImages() == 0)
-        #expect(try Data(contentsOf: root.appendingPathComponent("History/history.sqlite")) == before)
         let capture = CaptureCoordinator(board: client, store: store)
         let model = HistoryViewModel(store: store, capture: capture,
                                     paste: PasteCoordinator(board: client, applications: FakeApplications(), store: store, capture: capture),

@@ -4,11 +4,13 @@ import SwiftUI
 import Carbon
 import ApplicationServices
 import LocalClipCore
-@MainActor private final class ClipPanel: NSPanel {
+@MainActor final class ClipPanel: NSPanel {
+    /// 与Esc、关闭按钮走同一收起流程，复位焦点与可见状态。
+    var onCancel: () -> Void = {}
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
     /// 标准取消命令也关闭历史，不依赖搜索框是否处于编辑状态。
-    override func cancelOperation(_ sender: Any?) { orderOut(sender) }
+    override func cancelOperation(_ sender: Any?) { onCancel() }
     /// 非文本第一响应者未消费按键时，窗口兜底处理Esc。
     override func keyDown(with event: NSEvent) {
         if event.keyCode == 53 { cancelOperation(nil) }
@@ -30,7 +32,7 @@ import LocalClipCore
     private var activatedObserver: NSObjectProtocol?
     private var wakeObserver: NSObjectProtocol?
     private var screenObserver: NSObjectProtocol?
-    private var pinnedScreenID: NSNumber?
+    private var panelScreenID: NSNumber?
     private var maintenance: Task<Void, Never>?
     private var focusObservers: [NSObjectProtocol] = []
     private var focusDismissal: Task<Void, Never>?
@@ -102,6 +104,11 @@ import LocalClipCore
             model.configureHistoryViewport(width: NSScreen.main?.frame.width ?? 1400, cardWidth: HistoryView.cardSide(height: initialSettings.panelHeight, filtered: false))
             model.panelVisibilityChanged(false)
             model.closePanel = { [weak self] in self?.dismissHistory() }
+            // 非激活面板不抢前台；置顶时前台应用即当前要粘贴的目标，by AI.Coding。
+            model.refreshPinnedTarget = { [weak self, weak model] in
+                guard let self, let model, let target = self.applications.target() else { return }
+                self.lastExternal = target; self.applications.rememberFocus(for: target); model.target = target
+            }
             model.panelInteractionChanged = { [weak self] in self?.scheduleFocusDismissal() }
             model.openSettings = { [weak self] in self?.showSettings() }
             model.quitApplication = { [weak self] in self?.quitApplication(nil) }
@@ -267,13 +274,13 @@ import LocalClipCore
         }
         let screen = targetScreen()
         let rect = screen?.frame ?? NSRect(x: 0, y: 0, width: 1400, height: 380)
-        let panelHeight = min(max(280,model.settings.panelHeight), min(520,rect.height))
+        let panelHeight = Self.clampedPanelHeight(model.settings.panelHeight, screenHeight: rect.height)
         model.configureHistoryViewport(width: rect.width, cardWidth: HistoryView.cardSide(height: panelHeight, filtered: model.sourceFilter != nil || model.dateFilterEnabled))
         model.panelVisibilityChanged(true)
         model.target = lastExternal
         model.revalidateVisibleContent()
         if model.items.isEmpty && !model.historyBusy { model.refresh() }
-        let initialFrame = NSRect(x: rect.minX, y: rect.minY, width: rect.width, height: min(max(280,model.settings.panelHeight), min(520,rect.height)))
+        let initialFrame = NSRect(x: rect.minX, y: rect.minY, width: rect.width, height: panelHeight)
         if panel == nil {
             // 非激活面板保留外部应用身份与文档焦点；搜索框仍可成为key接收键盘。
             // 先确定最终屏幕尺寸再挂载SwiftUI，避免1400pt初始布局到全宽的可见跳变。
@@ -287,24 +294,27 @@ import LocalClipCore
             let host = CategoryDropHostingView(rootView: HistoryView(model: model), model: model)
             host.sizingOptions = []
             panel.contentView = host; panel.minSize = NSSize(width: 680, height: 280)
+            panel.onCancel = { [weak self] in self?.dismissHistory() }
             self.panel = panel
         }
         if let panel {
-            pinnedScreenID = screen?.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber
-            model.actualPanelHeight = min(max(280,model.settings.panelHeight), min(520,rect.height))
+            panelScreenID = screen?.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber
+            model.actualPanelHeight = panelHeight
             panel.sharingType = model.settings.excludeFromSharing ? .none : .readOnly
-            pinPanel(to: screen)
+            placePanel(to: screen)
             panel.contentView?.layoutSubtreeIfNeeded()
             panel.contentView?.displayIfNeeded()
             panel.makeKeyAndOrderFront(nil)
             model.focusRequest = UUID()
         }
     }
+    /// 面板高度限制在280–520pt，且不超过所在屏幕。
+    private static func clampedPanelHeight(_ height: Double, screenHeight: CGFloat) -> Double { min(max(280, height), min(520, screenHeight)) }
     /// 使用物理显示器frame而不是visibleFrame，让侧边Dock也不会缩短面板宽度。
-    private func pinPanel(to screen: NSScreen?) {
+    private func placePanel(to screen: NSScreen?) {
         guard let panel, let rect = screen?.frame else { return }
         // 紧凑布局380pt，只有尺寸确实变化才重排；隐藏阶段不触发显示更新。
-        let frame = NSRect(x: rect.minX, y: rect.minY, width: rect.width, height: min(max(280,model?.actualPanelHeight ?? model?.settings.panelHeight ?? 340), min(520,rect.height)))
+        let frame = NSRect(x: rect.minX, y: rect.minY, width: rect.width, height: Self.clampedPanelHeight(model?.actualPanelHeight ?? model?.settings.panelHeight ?? 340, screenHeight: rect.height))
         if panel.frame != frame { panel.setFrame(frame, display: panel.isVisible) }
     }
     /// 外部焦点所在窗口优先决定显示器，取不到时才回退鼠标位置。
@@ -331,8 +341,8 @@ import LocalClipCore
     /// 调高只改变底部固定面板尺寸，结束手势后持久化一次。
     private func resizeHistory(_ height: Double, persist: Bool) {
         guard let model else { return }
-        model.actualPanelHeight = min(max(280,height),min(520,panel?.screen?.frame.height ?? 520))
-        pinPanel(to: panel?.screen)
+        model.actualPanelHeight = Self.clampedPanelHeight(height, screenHeight: panel?.screen?.frame.height ?? 520)
+        placePanel(to: panel?.screen)
         if persist { model.updateSettings { $0.panelHeight = model.actualPanelHeight } }
     }
     /// 隐藏图标必须仍有已注册快捷键；共享设置使用系统公开窗口属性。
@@ -349,7 +359,7 @@ import LocalClipCore
         status?.button?.appearsDisabled = !model.settings.captureEnabled
         if !registered { model.message = "快捷键冲突，菜单栏入口保留" }
         panel?.sharingType = model.settings.excludeFromSharing ? .none : .readOnly
-        model.actualPanelHeight = model.settings.panelHeight; pinPanel(to: panel?.screen)
+        model.actualPanelHeight = model.settings.panelHeight; placePanel(to: panel?.screen)
     }
     /// 隐藏历史和其详情，不激活旧目标，也不改变系统剪贴板。
     private func dismissHistory() {
@@ -376,7 +386,7 @@ import LocalClipCore
                 showingFilters: self.model?.showingFilters == true)
             guard self.focusState.shouldDismiss(panelIsKey: panel.isKeyWindow, ownsKeyWindow: ownsKey,
                 dragging: self.model?.dragActive == true, confirming: self.model?.confirmingChange == true,
-                hasModal: NSApp.modalWindow != nil) else { return }
+                hasModal: NSApp.modalWindow != nil, pinned: self.model?.pinned == true) else { return }
             self.dismissHistory()
         }
     }
@@ -505,8 +515,8 @@ import LocalClipCore
         screenObserver = NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
-                let screen = NSScreen.screens.first { ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber) == self.pinnedScreenID } ?? NSScreen.main
-                self.pinPanel(to: screen)
+                let screen = NSScreen.screens.first { ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber) == self.panelScreenID } ?? NSScreen.main
+                self.placePanel(to: screen)
             }
         }
         activatedObserver = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] notification in

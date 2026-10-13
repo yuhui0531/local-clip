@@ -36,7 +36,7 @@ public struct SettingsView: View {
     init(model: HistoryViewModel, login: LoginItemService, section: SettingsSection, fitWindow: @escaping (CGFloat) -> Void) {
         self.init(model: model, login: login); _section = State(initialValue: section); self.fitWindow = fitWindow
     }
-    /// 原生分组表单：按“通用 / 记录 / 粘贴 / 隐私 / 存储 / 高级”组织，说明放入分组脚注；失焦与Esc由窗口管理，录制期间Esc只取消录制，by AI.Coding。
+    /// 原生分组表单：按“通用 / 粘贴 / 隐私 / 存储 / 高级”组织，说明放入分组脚注；失焦与Esc由窗口管理，录制期间Esc只取消录制，by AI.Coding。
     public var body: some View {
         VStack(spacing: 0) {
             // macOS设置窗口惯用的图标标签栏，与下方表单同一底色，by AI.Coding。
@@ -48,13 +48,13 @@ public struct SettingsView: View {
             Form {
                 if section == .general {
                     Section {
-                        Picker("外观", selection: Binding(get: { model.settings.appearance }, set: { value in model.updateSettings { $0.appearance = value } })) {
+                        Picker("外观", selection: setting(\.appearance)) {
                             Text("跟随系统").tag(AppAppearance.system)
                             Text("浅色").tag(AppAppearance.light)
                             Text("深色").tag(AppAppearance.dark)
                         }.pickerStyle(.segmented)
-                        Toggle("紧凑布局", isOn: Binding(get: { model.settings.compactLayout }, set: { value in model.updateSettings { $0.compactLayout = value } }))
-                        Toggle("显示菜单栏图标", isOn: Binding(get: { model.settings.showMenuIcon }, set: { value in model.updateSettings { $0.showMenuIcon = value } }))
+                        Toggle("紧凑布局", isOn: setting(\.compactLayout))
+                        Toggle("显示菜单栏图标", isOn: setting(\.showMenuIcon))
                         LabeledContent("全局快捷键") {
                             Button(recording && !recordingQueue ? "按下新的快捷键…" : HotKeyService.label(model.settings.shortcut)) { recordShortcut() }
                                 .help(recording ? "按 Esc 取消" : "点按后按下新的快捷键")
@@ -89,8 +89,6 @@ public struct SettingsView: View {
                     } header: { Text("外观与启动") } footer: {
                         Text("自动检查每天最多一次；新版本会自动下载并验签，仅点击“安装并重启”后更新，普通退出不会安装。更新前保留旧应用及历史、设置快照，不发送剪贴板内容。当前使用临时签名，更新后 macOS 可能要求重新授予辅助功能权限。").settingsFootnote()
                     }
-                }
-                if section == .general {
                     Section {
                         // 开关传递绝对用户意图，不能由启动时的新配置反转，by AI.Coding。
                         Toggle("记录新的剪贴板变化", isOn: Binding(get: { model.settings.captureEnabled }, set: { value in model.setCaptureEnabled(value) }))
@@ -105,20 +103,20 @@ public struct SettingsView: View {
                                 }.fixedSize()
                             }
                         }
-                        Toggle("记录时播放提示音", isOn: Binding(get: { model.settings.captureSounds }, set: { value in model.updateSettings { $0.captureSounds = value } }))
+                        Toggle("记录时播放提示音", isOn: setting(\.captureSounds))
                     } header: { Text("记录") } footer: {
                         Text("启动后自动监听新复制内容；手动暂停只作用于本次运行，定时暂停按期限保留。").settingsFootnote()
                     }
                 }
                 if section == .paste {
                     Section {
-                        Picker("Return 默认操作", selection: Binding(get: { model.settings.defaultAction }, set: { value in model.updateSettings { $0.defaultAction = value } })) {
+                        Picker("Return 默认操作", selection: setting(\.defaultAction)) {
                             Text("直接粘贴").tag(PasteAction.directPaste); Text("仅复制").tag(PasteAction.copy)
                         }
-                        Picker("默认输出格式", selection: Binding(get: { model.settings.defaultFormat }, set: { value in model.updateSettings { $0.defaultFormat = value } })) { Text("原格式").tag(OutputFormat.original); Text("纯文本").tag(OutputFormat.plainText) }
-                        Toggle("复制或粘贴后移到最前", isOn: Binding(get: { model.settings.moveUsedToFront }, set: { value in model.updateSettings { $0.moveUsedToFront = value } }))
-                        Picker("数字 1–9 快捷粘贴", selection: Binding(get: { model.settings.quickModifiers }, set: { value in model.updateSettings { $0.quickModifiers = value } })) { Text("⌘ + 数字").tag(UInt32(256)); Text("⌥ + 数字").tag(UInt32(2048)); Text("⌃ + 数字").tag(UInt32(4096)); Text("⌘⇧ + 数字").tag(UInt32(768)) }
-                        Picker("切换／新建分类", selection: Binding(get: { model.settings.boardModifiers }, set: { value in model.updateSettings { $0.boardModifiers = value } })) { Text("⌘⇧ + ← / → / N").tag(UInt32(768)); Text("⌘⌥ + ← / → / N").tag(UInt32(2304)); Text("⌃⌥ + ← / → / N").tag(UInt32(6144)) }
+                        Picker("默认输出格式", selection: setting(\.defaultFormat)) { Text("原格式").tag(OutputFormat.original); Text("纯文本").tag(OutputFormat.plainText) }
+                        Toggle("复制或粘贴后移到最前", isOn: setting(\.moveUsedToFront))
+                        Picker("数字 1–9 快捷粘贴", selection: setting(\.quickModifiers)) { Text("⌘ + 数字").tag(UInt32(256)); Text("⌥ + 数字").tag(UInt32(2048)); Text("⌃ + 数字").tag(UInt32(4096)); Text("⌘⇧ + 数字").tag(UInt32(768)) }
+                        Picker("切换／新建分类", selection: setting(\.boardModifiers)) { Text("⌘⇧ + ← / → / N").tag(UInt32(768)); Text("⌘⌥ + ← / → / N").tag(UInt32(2304)); Text("⌃⌥ + ← / → / N").tag(UInt32(6144)) }
                         // 只在粘贴队列进行中注册，平时不占用该组合键，by AI.Coding。
                         LabeledContent("粘贴队列下一项") {
                             Button(recording && recordingQueue ? "按下新的快捷键…" : HotKeyService.label(model.settings.queueShortcut)) { recordShortcut(queue: true) }
@@ -132,10 +130,8 @@ public struct SettingsView: View {
                     } header: { Text("粘贴方式") } footer: {
                         Text("⌘C 复制所选，⇧Return 直接粘贴纯文本；搜索框 Return 或 Tab 先进入结果。直接粘贴需要辅助功能权限，仅恢复目标应用，不能保证原输入框或光标位置；没有权限仍可复制后手动粘贴。").settingsFootnote()
                     }
-                }
-                if section == .paste {
                     Section {
-                        Toggle("代码文件智能粘贴", isOn: Binding(get: { model.settings.smartCodeFilePaste }, set: { value in model.updateSettings { $0.smartCodeFilePaste = value } }))
+                        Toggle("代码文件智能粘贴", isOn: setting(\.smartCodeFilePaste))
                         ForEach(model.settings.smartPasteEditorBundleIDs.sorted(), id: \.self) { id in
                             BundleRow(id: id) { model.updateSettings { $0.smartPasteEditorBundleIDs.remove(id) } }
                         }
@@ -146,9 +142,9 @@ public struct SettingsView: View {
                 }
                 if section == .privacy {
                     Section {
-                        Toggle("隐藏历史内容", isOn: Binding(get: { model.settings.hideContents }, set: { value in model.updateSettings { $0.hideContents = value } }))
-                        Toggle("限制系统窗口共享读取", isOn: Binding(get: { model.settings.excludeFromSharing }, set: { value in model.updateSettings { $0.excludeFromSharing = value } }))
-                        Toggle("排除应用位于前台时暂停记录", isOn: Binding(get: { model.settings.pauseWhenExcludedFrontmost }, set: { value in model.updateSettings { $0.pauseWhenExcludedFrontmost = value } }))
+                        Toggle("隐藏历史内容", isOn: setting(\.hideContents))
+                        Toggle("限制系统窗口共享读取", isOn: setting(\.excludeFromSharing))
+                        Toggle("排除应用位于前台时暂停记录", isOn: setting(\.pauseWhenExcludedFrontmost))
                         ForEach(model.settings.excludedBundleIDs.sorted(), id: \.self) { id in
                             BundleRow(id: id) { model.updateSettings { $0.excludedBundleIDs.remove(id) } }
                         }
@@ -192,11 +188,11 @@ public struct SettingsView: View {
                             Slider(value: Binding(get: { model.actualPanelHeight }, set: { value in model.resizePanel?((value / 10).rounded() * 10, false) }), in: 280...520, onEditingChanged: { editing in if !editing { model.resizePanel?(model.actualPanelHeight, true) } }).frame(width: 220)
                             Text("\(Int(model.actualPanelHeight)) pt").monospacedDigit().foregroundStyle(.secondary).frame(width: 52, alignment: .trailing)
                         }
-                        Toggle("启用本机阶段计时日志", isOn: Binding(get: { model.settings.timingEnabled }, set: { value in model.updateSettings { $0.timingEnabled = value } }))
+                        Toggle("启用本机阶段计时日志", isOn: setting(\.timingEnabled))
                     } footer: {
                         VStack(alignment: .leading, spacing: 6) {
                             Text("计时日志只记录阶段、条数和毫秒，不含正文、文件路径、URL或搜索词。数据目录：LocalClip-LocalEdition。全新数据模型，不兼容或迁移旧库。")
-                            Text("支持文本、URL、RTF、简单HTML、PNG/TIFF/JPEG和文件引用；每次32项、表示数据50MiB。文件不备份本体，原件删除后无法恢复。Finder中双击文件复制到当前文件夹。RTFD、云同步、OCR、AI不在此版本。")
+                            Text("支持文本、URL、RTF、简单HTML、PNG/TIFF/JPEG和文件引用；每次32项、表示数据50MiB。文件不备份本体，原件删除后无法恢复。Finder中双击文件复制到当前文件夹。RTFD、云同步、AI不在此版本。")
                         }.settingsFootnote()
                     }
                 }
@@ -235,6 +231,10 @@ public struct SettingsView: View {
             if notification.object is SettingsWindow { model.settingsVisibilityChanged(false); stopRecording(); feedback = "" }
         }
         .onDisappear { model.settingsVisibilityChanged(false); stopRecording() }
+    }
+    /// 普通偏好直接读写快照字段，保存仍走updateSettings。
+    private func setting<Value>(_ key: WritableKeyPath<SettingsSnapshot, Value>) -> Binding<Value> {
+        Binding(get: { model.settings[keyPath: key] }, set: { value in model.updateSettings { $0[keyPath: key] = value } })
     }
     private var windowHeight: CGFloat { headerHeight + min(max(formHeight, 160), 600) + footerHeight }
     private func applyRetention() { if let days = Int(retention), (1...365).contains(days) { model.change(.retention(days)) } else { model.message = "保留天数需为1–365" } }

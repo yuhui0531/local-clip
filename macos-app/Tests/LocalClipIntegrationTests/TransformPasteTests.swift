@@ -35,6 +35,26 @@ import Testing
         #expect(try await h.store.loadPayload(id: id, at: SystemClock().now()).items[0].representations.first?.data == Data(json.utf8))
     }
 
+    /// 置顶面板在粘贴时重取前台目标；未置顶不重取，沿用打开面板时的目标。
+    @Test func pinnedPasteRefreshesTarget() async throws {
+        let h = try harness(); defer { try? FileManager.default.removeItem(at: h.root) }
+        let id = try await ingest(h.store, "pinned")
+        try await h.capture.start(); defer { h.capture.stop() }
+        let model = HistoryViewModel(store: h.store, capture: h.capture, paste: h.paste, derived: DerivedContentService(store: h.store))
+        var refreshes = 0
+        model.refreshPinnedTarget = { refreshes += 1; model.target = h.apps.remembered }
+        // 切换应用后目标已被清空：置顶时仍能直接粘贴到当前前台应用。
+        model.target = nil; model.pinned = true
+        model.perform(action: .directPaste, ids: [id])
+        let deadline = ContinuousClock.now + .seconds(3)
+        while h.apps.events == 0 && ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(20)) }
+        #expect(refreshes == 1); #expect(h.apps.events == 1)
+        model.pinned = false; model.target = nil
+        model.perform(action: .directPaste, ids: [id])
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(refreshes == 1); #expect(h.apps.events == 1)
+    }
+
     /// AC4：转换失败不写剪贴板、不关闭面板、不激活目标，返回带行列的原因，by AI.Coding。
     @Test func failureKeepsClipboardAndPanel() async throws {
         let h = try harness(); defer { try? FileManager.default.removeItem(at: h.root) }

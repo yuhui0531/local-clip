@@ -121,11 +121,6 @@ public actor HistoryStore: HistoryRepository {
     private func trackBlobRemovals(_ db: SQLiteConnection) throws {
         try db.exec("CREATE TEMP TABLE removed_blob_refs(digest TEXT PRIMARY KEY); CREATE TEMP TRIGGER track_removed_blob_refs AFTER DELETE ON main.representations BEGIN INSERT OR IGNORE INTO removed_blob_refs VALUES(old.blobDigest); END;")
     }
-    /// 保留旧接口；没有表示等价性的证明时，不改写历史图片、内容身份或BLOB。
-    @discardableResult public func compactRedundantImages() throws -> Int {
-        try requireAvailable()
-        return 0
-    }
     /// 共享BLOB只有最后引用消失才删除，不扫描未变更记录；名称随记录行级联删除。
     private func garbageCollect(_ db: SQLiteConnection) throws {
         try db.exec("DELETE FROM blobs WHERE digest IS NULL; DELETE FROM blobs WHERE digest IN (SELECT digest FROM removed_blob_refs) AND NOT EXISTS(SELECT 1 FROM representations WHERE blobDigest=blobs.digest); DELETE FROM removed_blob_refs")

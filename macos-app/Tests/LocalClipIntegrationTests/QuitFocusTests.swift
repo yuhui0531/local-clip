@@ -51,6 +51,24 @@ import Testing
         #expect(!focus.shouldDismiss(panelIsKey: true, ownsKeyWindow: true, dragging: false, confirming: false, hasModal: true))
         #expect(focus.shouldDismiss(panelIsKey: true, ownsKeyWindow: true, dragging: false, confirming: false, hasModal: false))
     }
+    /// 置顶时外部点击与失焦都不收起面板；取消置顶后恢复原规则。
+    @Test func pinnedPanelIgnoresFocusLoss() {
+        var focus = HistoryPanelFocusState()
+        focus.externalInteraction()
+        #expect(!focus.shouldDismiss(panelIsKey: false, ownsKeyWindow: false, dragging: false, confirming: false, hasModal: false, pinned: true))
+        #expect(focus.shouldDismiss(panelIsKey: false, ownsKeyWindow: false, dragging: false, confirming: false, hasModal: false, pinned: false))
+    }
+    /// 面板兜底的Esc与取消命令走统一收起回调，不再绕过状态复位。
+    @Test func panelCancelRoutesThroughDismissal() throws {
+        _ = NSApplication.shared
+        let panel = ClipPanel(contentRect: .init(x: 0, y: 0, width: 200, height: 100), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        var cancels = 0
+        panel.onCancel = { cancels += 1 }
+        panel.cancelOperation(nil)
+        let escape = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: panel.windowNumber, context: nil, characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53))
+        panel.keyDown(with: escape)
+        #expect(cancels == 2)
+    }
     /// 用户重新进入面板会取消离开意图，自动恢复key不能取消已发生的外部点击，by AI.Coding。
     @Test func ownedInputSupersedesPendingOutsideClick() {
         var focus = HistoryPanelFocusState()

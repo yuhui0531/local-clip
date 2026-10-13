@@ -39,8 +39,6 @@ struct ImageCompactionTests {
 
         let store = try HistoryStore(location: root)
         let before = try Data(contentsOf: root.appendingPathComponent("History/history.sqlite"))
-        #expect(try await store.compactRedundantImages() == 0)
-        #expect(try await store.compactRedundantImages() == 0)
         #expect(try Data(contentsOf: root.appendingPathComponent("History/history.sqlite")) == before)
         #expect(try await store.detail(id: id, at: now).payload.canonicalData == legacy.canonicalData)
         #expect(try await store.ingest(image(true), at: now + 1) == .deduplicated(id))

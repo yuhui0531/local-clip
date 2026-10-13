@@ -21,6 +21,15 @@ import LocalClipCore
     let listState = HistoryListState()
     public var query: String { get { queryState.literal } set { queryState.literal = newValue } }
     @Published public var favorites = false
+    /// 置顶时失焦不自动隐藏；粘贴、Esc、关闭仍照常收起，仅本次运行有效。
+    @Published public var pinned = false
+    /// 置顶期间用户可能已切换应用；由宿主在粘贴前重取当前前台应用与焦点。
+    public var refreshPinnedTarget: (() -> Void)?
+    /// 未置顶沿用打开面板时记住的目标；置顶时以粘贴这一刻的前台应用为准。
+    private func pasteTarget() -> TargetToken? {
+        if pinned { refreshPinnedTarget?() }
+        return target
+    }
     @Published public var categoryID: String?
     @Published public private(set) var categories: [ClipCategory] = []
     @Published public var categoryFilters: Set<String> = []
@@ -618,7 +627,7 @@ import LocalClipCore
         let ids = ids ?? orderedSelection
         guard !ids.isEmpty else { return }
         Task {
-            let result = await paste.perform(.init(ids: ids, format: format ?? settings.defaultFormat, action: action ?? settings.defaultAction, target: target, transform: transform, join: join))
+            let result = await paste.perform(.init(ids: ids, format: format ?? settings.defaultFormat, action: action ?? settings.defaultAction, target: pasteTarget(), transform: transform, join: join))
             showPasteResult(result)
             notifyPasteResult(result)
             await recordUse(ids, result)
@@ -650,7 +659,7 @@ import LocalClipCore
         if !selectedIDs.contains(id) { select(id) }
         focusResults?()
         let ids = orderedSelection
-        let rememberedTarget = target
+        let rememberedTarget = pasteTarget()
         let copyFiles = ids.allSatisfy { id in items.first(where: { $0.id == id })?.kind == .file } && rememberedTarget?.bundleID == "com.apple.finder"
         Task {
             let result = await paste.perform(.init(ids: ids, format: settings.defaultFormat, action: copyFiles ? .copy : .directPaste, target: rememberedTarget), copyFilesToFinder: copyFiles)
