@@ -69,6 +69,29 @@ import LocalClipCore
         model.panelVisibilityChanged(false)
         try await wait { model.thumbnails.byteCount == 0 }
         #expect(model.thumbnails.byteCount == 0)
+        // 重复取消、清理和切换视口，验证同一实例不会累积旧屏保护项或误清当前屏。
+        for cycle in 0..<8 {
+            model.panelVisibilityChanged(true)
+            let visibleID = "viewport-\(cycle)", offscreenID = "offscreen-\(cycle)"
+            let visibleImage = try image()
+            model.thumbnails.setObject(visibleImage, forKey: visibleID as NSString)
+            model.thumbnails.setObject(try image(), forKey: offscreenID as NSString)
+            model.thumbnailVisibilityChanged(id: visibleID, visible: true)
+            model.panelVisibilityChanged(false)
+            model.panelVisibilityChanged(true)
+            try await Task.sleep(for: .milliseconds(120))
+            #expect(model.thumbnails.object(forKey: offscreenID as NSString) != nil)
+            model.panelVisibilityChanged(false)
+            try await wait { model.thumbnails.object(forKey: offscreenID as NSString) == nil }
+            #expect(model.thumbnails.object(forKey: visibleID as NSString) === visibleImage)
+            #expect(model.thumbnails.byteCount == 40_000)
+            model.panelVisibilityChanged(true)
+            #expect(model.query == "unchanged")
+            #expect(model.thumbnails.object(forKey: visibleID as NSString) === visibleImage)
+            model.thumbnailVisibilityChanged(id: visibleID, visible: false)
+            model.panelVisibilityChanged(false)
+            try await wait { model.thumbnails.byteCount == 0 }
+        }
     }
     /// 清理编码缓存只影响可再生内存，持久缩略图、原图和修订号保持不变。
     @Test func encodedCacheReloadPreservesOriginal() async throws {
