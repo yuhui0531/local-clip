@@ -325,7 +325,8 @@ private enum PreservationImages {
         #expect(image.width == 32 && image.height == 24)
     }
 
-    @Test(.enabled(if: ProcessInfo.processInfo.environment["LOCALCLIP_NAMED_TEST"] == "1"), arguments: ["png", "tiff", "jpeg", "high-depth", "paired"])
+    // 不访问任何剪贴板，CI发布门禁同样执行。
+    @Test(arguments: ["png", "tiff", "jpeg", "high-depth", "paired"])
     func imageFilePromisePreservesOriginalBytes(format: String) async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -349,9 +350,10 @@ private enum PreservationImages {
         #expect(error == nil)
         #expect(try Data(contentsOf: destination) == data)
         #expect(try await store.loadPayload(id: id, at: now).canonicalData == payload.canonicalData)
+        #expect(((try? FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent("Exports").path)) ?? []).isEmpty)
     }
 
-    @Test(.enabled(if: ProcessInfo.processInfo.environment["LOCALCLIP_NAMED_TEST"] == "1"), arguments: ["cancelled", "deleted", "quota", "existing-file"])
+    @Test(arguments: ["cancelled", "deleted", "quota", "existing-file"])
     func imageFilePromiseFailureLeavesDestinationAndHistorySafe(reason: String) async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -381,6 +383,76 @@ private enum PreservationImages {
         else { #expect(!FileManager.default.fileExists(atPath: destination.path)) }
         if reason != "deleted" { #expect(try await store.loadPayload(id: id, at: now).canonicalData == payload.canonicalData) }
         if reason == "quota" { #expect(error as? StoreError == .quotaExceeded) }
+        // 失败路径不得遗留本次导出租约；quota用例只保留预先占位文件。
+        let leases = ((try? FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent("Exports").path)) ?? []).filter { $0 != "occupied.png" }
+        #expect(leases.isEmpty)
+    }
+
+    /// 原始TIFF不再转码，租约可能很大；复制到目标后立即释放，连续拖出不被10分钟租约挤占50MiB导出预算，by AI.Coding。
+    @Test func largeTIFFExportsReleaseLeaseAfterCopy() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let targets = root.appendingPathComponent("Targets")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: targets, withIntermediateDirectories: true)
+        let store = try HistoryStore(location: root.appendingPathComponent("Store")), now = SystemClock().now()
+        let data = try PreservationImages.tiff(width: 2600, height: 2600)
+        #expect(data.count > 25 * 1024 * 1024)
+        let payload = ClipboardPayload([.init([.init(SupportedType.tiff, data)])])
+        guard case .inserted(let id) = try await store.ingest(.init(payload: payload), at: now) else { Issue.record("Fixture rejected"); return }
+        let writers = try await ContentExportProvider.writers(ids: [id], store: store, token: "test", register: { _ in })
+        let provider = try #require(writers.first as? NSFilePromiseProvider), delegate = try #require(provider.delegate)
+        for attempt in 0..<2 {
+            let destination = targets.appendingPathComponent("received-\(attempt).tiff")
+            let error: Error? = await withCheckedContinuation { continuation in
+                delegate.filePromiseProvider(provider, writePromiseTo: destination) { continuation.resume(returning: $0) }
+            }
+            #expect(error == nil, "attempt \(attempt)")
+            #expect((try? Data(contentsOf: destination)) == data, "attempt \(attempt)")
+        }
+        let leases = (try? FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent("Store/Exports").path)) ?? []
+        #expect(leases.isEmpty)
+        #expect(try await store.loadPayload(id: id, at: now).canonicalData == payload.canonicalData)
+    }
+
+    /// 多选拖出时AppKit不等待前一个承诺完成；任意两份约27MB租约同时存在即超出50MiB导出预算，全部仍须成功，by AI.Coding。
+    @Test func concurrentLargeTIFFPromisesAllComplete() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let targets = root.appendingPathComponent("Targets")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: targets, withIntermediateDirectories: true)
+        let store = try HistoryStore(location: root.appendingPathComponent("Store")), now = SystemClock().now()
+        var ids: [ClipID] = [], originals: [Data] = []
+        for index in 0..<3 {
+            let data = try PreservationImages.tiff(width: 2600 + index, height: 2600)
+            #expect(data.count > 25 * 1024 * 1024)
+            guard case .inserted(let id) = try await store.ingest(.init(payload: .init([.init([.init(SupportedType.tiff, data)])])), at: now + Int64(index)) else { Issue.record("Fixture rejected"); return }
+            ids.append(id); originals.append(data)
+        }
+        let writers = try await ContentExportProvider.writers(ids: ids, store: store, token: "test", register: { _ in })
+        let promises = try writers.map { writer -> (NSFilePromiseProvider, any NSFilePromiseProviderDelegate) in
+            let provider = try #require(writer as? NSFilePromiseProvider)
+            return (provider, try #require(provider.delegate))
+        }
+        // AppKit连续调用各承诺而不等待前一个完成回调；这里同样背靠背发起，再统一等待。
+        final class Results: @unchecked Sendable {
+            // 空字符串表示成功；避免可选值写入字典被当作删除。
+            private let lock = NSLock(); private var values: [Int: String] = [:]
+            func set(_ index: Int, _ error: Error?) { lock.lock(); values[index] = error.map { String(describing: $0) } ?? ""; lock.unlock() }
+            var snapshot: [Int: String] { lock.lock(); defer { lock.unlock() }; return values }
+        }
+        let results = Results()
+        for (index, promise) in promises.enumerated() {
+            promise.1.filePromiseProvider(promise.0, writePromiseTo: targets.appendingPathComponent("received-\(index).tiff")) { results.set(index, $0) }
+        }
+        let deadline = ContinuousClock.now + .seconds(30)
+        // 模拟拖放期间繁忙的主线程：反复阻塞40ms，只短暂让出。导出不得依赖主线程推进或释放租约。
+        while results.snapshot.count < 3, ContinuousClock.now < deadline { usleep(40_000); try await Task.sleep(for: .milliseconds(1)) }
+        let errors = results.snapshot
+        for index in 0..<3 {
+            #expect(errors[index] == "", "promise \(index)")
+            #expect((try? Data(contentsOf: targets.appendingPathComponent("received-\(index).tiff"))) == originals[index], "promise \(index)")
+        }
+        #expect(((try? FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent("Store/Exports").path)) ?? []).isEmpty)
     }
 
     @Test func imageExportRejectsUnsafeExtensionWithoutWriting() async throws {

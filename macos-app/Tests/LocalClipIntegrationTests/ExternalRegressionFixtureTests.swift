@@ -62,6 +62,13 @@ struct ExternalRegressionFixtureTests {
             manifest.append(["id": id, "title": entry.0, "fingerprint": payload.fingerprint,
                              "representations": entry.1.map { ["type": $0.type, "bytes": $0.data.count, "sha256": ContentFingerprint.hash($0.data)] }])
         }
+        // 入库后再提交（暂停期间存储拒绝入库，重新生成需先删除working-store）：外部验收使用系统剪贴板，
+        // 30天定时暂停跨启动保留，避免捕获用户内容；⌃⌥⌘V避开正式版⌥⌘V；卡片顺序固定供数字键验证。
+        settings = try await store.settings()
+        settings.pauseUntil = SystemClock().now() + 30 * 24 * 3_600_000
+        settings.shortcut = .init(keyCode: 9, modifiers: 6400)
+        settings.moveUsedToFront = false
+        _ = try await store.updateCaptureSettings(settings)
         if try await store.categories().isEmpty { _ = try await store.createCategory(name: "E2E Drop", colorHex: "34C759") }
         try JSONSerialization.data(withJSONObject: manifest, options: [.prettyPrinted, .sortedKeys]).write(to: output.appendingPathComponent("fixture-manifest.json"))
         #expect(manifest.count == cases.count)

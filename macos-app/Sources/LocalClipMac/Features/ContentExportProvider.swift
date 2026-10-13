@@ -86,21 +86,36 @@ private final class ClipWriter: NSObject, NSPasteboardWriting {
         let callback: (Error?) -> Void
         init(_ callback: @escaping (Error?) -> Void) { self.callback = callback }
     }
+    /// 不依赖主线程：拖放期间主线程忙于拖拽界面，回主线程会推迟租约释放甚至卡住导出。
     nonisolated func filePromiseProvider(_ provider: NSFilePromiseProvider, writePromiseTo url: URL, completionHandler: @escaping (Error?) -> Void) {
-        let access = self.access, index = self.index, store = self.store
+        let access = self.access, index = self.index, store = self.store, type = exportType, suffix = exportExtension
         let box = CompletionBox(completionHandler)
-        Task { @MainActor in
-            let type = exportType, suffix = exportExtension
-            do {
-                let data = try await Task.detached { try access.itemData(index: index, type: type) }.value
-                let lease = try await store.writeExport(data, id: access.id, revision: access.revision, fileExtension: suffix)
-                try await Task.detached {
+        Task {
+            await ExportLeaseQueue.shared.run {
+                do {
+                    let data = try access.itemData(index: index, type: type)
+                    let lease = try await store.writeExport(data, id: access.id, revision: access.revision, fileExtension: suffix)
+                    // 目标拿到副本后租约即无用；成功或失败都立即释放，避免大幅原始TIFF挤占导出预算。
+                    defer { try? FileManager.default.removeItem(at: lease) }
                     try access.checkValid()
                     try FileManager.default.copyItem(at: lease, to: url)
-                }.value
-                box.callback(nil)
-            } catch { box.callback(error) }
+                    box.callback(nil)
+                } catch { box.callback(error) }
+            }
         }
+    }
+}
+/// 多选拖出时AppKit并发索取承诺；逐个完成"读取→租约→复制→释放"，同一时刻至多一个租约，
+/// 多个大幅原始TIFF不会合计超出50MiB导出预算，内存也只驻留一份载荷。
+/// ponytail: 全局串行，慢速目标卷会让后续导出排队；需要并行时改为按预算计数的信号量。
+private actor ExportLeaseQueue {
+    static let shared = ExportLeaseQueue()
+    private var tail: Task<Void, Never>?
+    func run(_ work: @escaping @Sendable () async -> Void) async {
+        let previous = tail
+        let current = Task { await previous?.value; await work() }
+        tail = current
+        await current.value
     }
 }
 // 卡片点击和拖动共享一次原生事件认领，避免SwiftUI在拖动结束后误选相邻卡片，by AI.Coding。

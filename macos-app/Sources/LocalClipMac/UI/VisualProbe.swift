@@ -64,11 +64,14 @@ import LocalClipCore
         if popover == "detail" { while model.items.isEmpty { try await Task.sleep(for: .milliseconds(20)) }; model.select(model.items.first(where: { HistoryView.kindName($0.kind) == ProcessInfo.processInfo.environment["LOCALCLIP_VISUAL_KIND"] })?.id ?? model.items.first?.id); model.showingDetail = true; model.detailVisibilityChanged() }
         var settingsHeight: CGFloat?
         let guide = AccessibilityGuideState()
-        switch ProcessInfo.processInfo.environment["LOCALCLIP_VISUAL_GUIDE"] { case "drag": guide.step = .drag; guide.waitedLong = true; case "done": guide.step = .done; default: break }
+        // 引导宽度来自宿主设置窗口；离屏验收用调用方指定宽度复现同一布局，by AI.Coding。
+        if ProcessInfo.processInfo.environment["LOCALCLIP_VISUAL_GUIDE"] != nil { guide.panelWidth = width }
+        // 分别渲染正常等待与延迟帮助，避免只验证展开态而漏掉紧凑布局，by AI.Coding。
+        switch ProcessInfo.processInfo.environment["LOCALCLIP_VISUAL_GUIDE"] { case "drag": guide.step = .drag; case "drag-waiting": guide.step = .drag; guide.waitedLong = true; case "done": guide.step = .done; default: break }
         let view: AnyView = ProcessInfo.processInfo.environment["LOCALCLIP_VISUAL_TOAST"] != nil
             ? AnyView(VStack(spacing: 16) { PasteFeedbackView(message: "已复制，请确认目标位置后手动粘贴", failed: false); PasteFeedbackView(message: "剪贴板已变化或复制失败，请重新选择", failed: true) }.frame(maxWidth: .infinity, maxHeight: .infinity).background(Color(nsColor: .windowBackgroundColor)))
             : ProcessInfo.processInfo.environment["LOCALCLIP_VISUAL_GUIDE"] != nil
-            ? AnyView(AccessibilityGuideView(state: guide, openSettings: {}, close: {}).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top).background(Color(nsColor: .windowBackgroundColor)))
+            ? AnyView(AccessibilityGuideView(state: guide, openSettings: {}, close: {}, fitContent: { settingsHeight = $0 }).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top).background(Color(nsColor: .windowBackgroundColor)))
             : popover == "filter" ? AnyView(FilterEditor(model: model).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top).background(Color(nsColor: .windowBackgroundColor)))
             : popover == "detail" ? AnyView(ClipInspector(model: model).frame(width: 520).frame(maxHeight: .infinity, alignment: .top).background(Color(nsColor: .windowBackgroundColor)))
             : ProcessInfo.processInfo.environment["LOCALCLIP_VISUAL_SETTINGS"] == "1"
