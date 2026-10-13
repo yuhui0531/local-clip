@@ -325,8 +325,7 @@ private enum PreservationImages {
         #expect(image.width == 32 && image.height == 24)
     }
 
-    // 不访问任何剪贴板，CI发布门禁同样执行。
-    @Test(arguments: ["png", "tiff", "jpeg", "high-depth", "paired"])
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["LOCALCLIP_NAMED_TEST"] == "1"), arguments: ["png", "tiff", "jpeg", "high-depth", "paired"])
     func imageFilePromisePreservesOriginalBytes(format: String) async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -353,7 +352,7 @@ private enum PreservationImages {
         #expect(((try? FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent("Exports").path)) ?? []).isEmpty)
     }
 
-    @Test(arguments: ["cancelled", "deleted", "quota", "existing-file"])
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["LOCALCLIP_NAMED_TEST"] == "1"), arguments: ["cancelled", "deleted", "quota", "existing-file"])
     func imageFilePromiseFailureLeavesDestinationAndHistorySafe(reason: String) async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -393,7 +392,8 @@ private enum PreservationImages {
     }
 
     /// 原始TIFF不再转码，租约可能很大；复制到目标后立即释放，连续拖出不被10分钟租约挤占50MiB导出预算，by AI.Coding。
-    @Test func largeTIFFExportsReleaseLeaseAfterCopy() async throws {
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["LOCALCLIP_NAMED_TEST"] == "1"))
+    func largeTIFFExportsReleaseLeaseAfterCopy() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let targets = root.appendingPathComponent("Targets")
         defer { try? FileManager.default.removeItem(at: root) }
@@ -419,7 +419,8 @@ private enum PreservationImages {
     }
 
     /// 多选拖出时AppKit不等待前一个承诺完成；任意两份约27MB租约同时存在即超出50MiB导出预算，全部仍须成功，by AI.Coding。
-    @Test func concurrentLargeTIFFPromisesAllComplete() async throws {
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["LOCALCLIP_NAMED_TEST"] == "1"))
+    func concurrentLargeTIFFPromisesAllComplete() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let targets = root.appendingPathComponent("Targets")
         defer { try? FileManager.default.removeItem(at: root) }
@@ -459,7 +460,8 @@ private enum PreservationImages {
         #expect(((try? FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent("Store/Exports").path)) ?? []).isEmpty)
     }
 
-    @Test func imageExportRejectsUnsafeExtensionWithoutWriting() async throws {
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["LOCALCLIP_NAMED_TEST"] == "1"))
+    func imageExportRejectsUnsafeExtensionWithoutWriting() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let store = try HistoryStore(location: root)

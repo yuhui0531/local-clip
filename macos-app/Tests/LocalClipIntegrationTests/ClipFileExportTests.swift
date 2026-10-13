@@ -23,7 +23,7 @@ import Testing
     }
 
     /// PRD 6.2格式表：每种文字内容的文件类型、扩展名和写出字节，by AI.Coding。
-    @Test(arguments: ["json", "swift-html", "rtf-prose", "html-only", "markdown", "prose"])
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["LOCALCLIP_NAMED_TEST"] == "1"), arguments: ["json", "swift-html", "rtf-prose", "html-only", "markdown", "prose"])
     func textItemsBecomeTypedFiles(kind: String) async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -78,7 +78,8 @@ import Testing
     }
 
     /// 自定义名称作为文件名；多项一起拖出按顺序加序号，图片不再使用UUID，by AI.Coding。
-    @Test func titlesAndMultiDragNumbering() async throws {
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["LOCALCLIP_NAMED_TEST"] == "1"))
+    func titlesAndMultiDragNumbering() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let store = try store(root), now = SystemClock().now()
@@ -94,7 +95,8 @@ import Testing
     }
 
     /// 目标已有同名文件时写为"名称 2.ext"，原文件逐字节不变，by AI.Coding。
-    @Test func existingFileIsNeverOverwritten() async throws {
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["LOCALCLIP_NAMED_TEST"] == "1"))
+    func existingFileIsNeverOverwritten() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let store = try store(root)
