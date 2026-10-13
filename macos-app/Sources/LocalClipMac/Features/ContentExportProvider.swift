@@ -1,8 +1,6 @@
 // 原生有序多项拖出、延迟载荷与图片文件租约，by AI.Coding。
 @preconcurrency import AppKit
 import SwiftUI
-import UniformTypeIdentifiers
-import ImageIO
 import LocalClipCore
 
 @MainActor final class ContentExportProvider {
@@ -55,7 +53,7 @@ private final class ClipWriter: NSObject, NSPasteboardWriting {
         // initWithFileType:delegate:会动态调用子类init；Swift合成的未实现init会直接trap。
         // 使用AppKit头文件标记的指定初始化器，然后设置文件类型与弱delegate；owner保持强引用。
         super.init()
-        fileType = UTType.png.identifier
+        fileType = owner.exportType
         delegate = owner
     }
     override func writableTypes(for pasteboard: NSPasteboard) -> [NSPasteboard.PasteboardType] { super.writableTypes(for: pasteboard) + (types + [HistoryViewModel.categoryDragType]).map { NSPasteboard.PasteboardType($0) } }
@@ -73,35 +71,33 @@ private final class ClipWriter: NSObject, NSPasteboardWriting {
 @MainActor private final class ImagePromise: NSObject, NSFilePromiseProviderDelegate {
     let access: ClipExportAccess
     let index: Int
-    let types: [String]
     let store: HistoryStore
-    init(access: ClipExportAccess, index: Int, types: [String], store: HistoryStore) { self.access = access; self.index = index; self.types = types; self.store = store }
-    func filePromiseProvider(_ provider: NSFilePromiseProvider, fileNameForType fileType: String) -> String { "LocalClip-" + UUID().uuidString + ".png" }
+    let exportType: String
+    let exportExtension: String
+    // 保持既有单文件格式优先级，但不转码原始TIFF/JPEG，避免丢页、精度和元数据。
+    init(access: ClipExportAccess, index: Int, types: [String], store: HistoryStore) {
+        self.access = access; self.index = index; self.store = store
+        if types.contains(SupportedType.png) { exportType = SupportedType.png; exportExtension = "png" }
+        else if types.contains(SupportedType.tiff) { exportType = SupportedType.tiff; exportExtension = "tiff" }
+        else { exportType = SupportedType.jpeg; exportExtension = "jpg" }
+    }
+    func filePromiseProvider(_ provider: NSFilePromiseProvider, fileNameForType fileType: String) -> String { "LocalClip-" + UUID().uuidString + "." + exportExtension }
     private final class CompletionBox: @unchecked Sendable {
         let callback: (Error?) -> Void
         init(_ callback: @escaping (Error?) -> Void) { self.callback = callback }
     }
     nonisolated func filePromiseProvider(_ provider: NSFilePromiseProvider, writePromiseTo url: URL, completionHandler: @escaping (Error?) -> Void) {
-        let access = self.access, index = self.index, types = self.types, store = self.store
+        let access = self.access, index = self.index, store = self.store
         let box = CompletionBox(completionHandler)
-        Task {
+        Task { @MainActor in
+            let type = exportType, suffix = exportExtension
             do {
-                guard let type = [SupportedType.png,SupportedType.tiff,SupportedType.jpeg].first(where: { types.contains($0) }) else { throw StoreError.notFound }
-                let raw = try access.itemData(index: index, type: type)
-                let data: Data
-                if type == SupportedType.png { data = raw }
-                else {
-                    guard let source = CGImageSourceCreateWithData(raw as CFData, nil), let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any], let width = props[kCGImagePropertyPixelWidth] as? Int, let height = props[kCGImagePropertyPixelHeight] as? Int, width > 0, height > 0, Int64(width)*Int64(height) <= 40_000_000, let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else { throw StoreError.corruptPayload }
-                    let output = NSMutableData()
-                    guard let destination = CGImageDestinationCreateWithData(output, UTType.png.identifier as CFString, 1, nil) else { throw StoreError.ioFailure }
-                    CGImageDestinationAddImage(destination, image, nil)
-                    guard CGImageDestinationFinalize(destination) else { throw StoreError.ioFailure }
-                    data = output as Data
-                }
-                try access.checkValid()
-                let lease = try await store.writeExport(data, id: access.id, revision: access.revision)
-                try access.checkValid()
-                try FileManager.default.copyItem(at: lease, to: url)
+                let data = try await Task.detached { try access.itemData(index: index, type: type) }.value
+                let lease = try await store.writeExport(data, id: access.id, revision: access.revision, fileExtension: suffix)
+                try await Task.detached {
+                    try access.checkValid()
+                    try FileManager.default.copyItem(at: lease, to: url)
+                }.value
                 box.callback(nil)
             } catch { box.callback(error) }
         }

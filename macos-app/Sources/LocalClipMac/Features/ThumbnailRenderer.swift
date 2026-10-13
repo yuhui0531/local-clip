@@ -5,10 +5,21 @@ import UniformTypeIdentifiers
 import LocalClipCore
 public enum ThumbnailResult: Sendable { case image(Data), unavailable, tooManyPixels }
 public enum ThumbnailRenderer {
-    /// 解码前读取像素尺寸，超过40MP不解码。
+    /// 按原顺序尝试图片表示；某一格式损坏不遮蔽其它有效格式，超过40MP仍不解码。
     public static func render(_ payload: ClipboardPayload) -> ThumbnailResult {
-        guard let data = payload.items.flatMap(\.representations).first(where: { [SupportedType.png, SupportedType.tiff, SupportedType.jpeg].contains($0.type) })?.data,
-              let source = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary),
+        var exceededPixelLimit = false
+        for representation in payload.items.flatMap(\.representations) where [SupportedType.png, SupportedType.tiff, SupportedType.jpeg].contains(representation.type) {
+            switch render(representation.data) {
+            case .image(let data): return .image(data)
+            case .tooManyPixels: exceededPixelLimit = true
+            case .unavailable: continue
+            }
+        }
+        return exceededPixelLimit ? .tooManyPixels : .unavailable
+    }
+    /// 只派生第一帧的有界缩略图，不修改原始图片或多页TIFF。
+    private static func render(_ data: Data) -> ThumbnailResult {
+        guard let source = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary),
               let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
               let width = properties[kCGImagePropertyPixelWidth] as? NSNumber, let height = properties[kCGImagePropertyPixelHeight] as? NSNumber else { return .unavailable }
         guard width.int64Value > 0, height.int64Value > 0, width.int64Value <= 40_000_000 / height.int64Value else { return .tooManyPixels }

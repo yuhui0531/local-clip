@@ -442,7 +442,8 @@ private struct ClipCard: View, Equatable {
     let target: TargetToken?
     let model: HistoryViewModel
     @State private var characterCount: Int?
-    @State private var thumbnail: NSImage?
+    @State private var thumbnailState: ThumbnailPreviewState = .loading
+    private var thumbnail: NSImage? { thumbnailState.image }
     @State private var isOnscreen = false
     @State private var detectedLanguage: String?
     @State private var hovering = false
@@ -451,6 +452,13 @@ private struct ClipCard: View, Equatable {
             && lhs.categoryID == rhs.categoryID && lhs.categories == rhs.categories && lhs.target == rhs.target
     }
     private var code: Bool { item.kind == .text && detectedLanguage != nil }
+    /// 卡片合并辅助功能子元素后仍朗读预览状态；隐藏内容时不泄露状态或正文。
+    private var accessibilityDescription: String {
+        let title = "\(item.title ?? HistoryView.kindName(item.kind))，\(item.source.name)"
+        if hidden { return title + "，内容已隐藏" }
+        if item.kind == .image || item.kind == .mixed { return title + "，" + item.preview + "，" + thumbnailState.label }
+        return title + "，" + item.preview
+    }
     private var tint: Color { switch item.kind {
         // 文本与链接色相拉开，且都不同于选中强调色，选中环不会与标题栏混在一起，by AI.Coding。
         case .text: Color(red: 0.36, green: 0.38, blue: 0.80)
@@ -577,7 +585,7 @@ private struct ClipCard: View, Equatable {
             // 隐藏内容时辅助功能也不朗读正文，与界面模糊保持同一隐私承诺，by AI.Coding。
             // 每张卡片只暴露一个可操作元素；重命名时保留原生输入框，by AI.Coding。
             .accessibilityElement(children: editing ? .contain : .ignore)
-            .accessibilityLabel(hidden ? "\(item.title ?? HistoryView.kindName(item.kind))，\(item.source.name)，内容已隐藏" : "\(item.title ?? HistoryView.kindName(item.kind))，\(item.source.name)，\(item.preview)").accessibilityAddTraits(selected ? [.isButton, .isSelected] : [.isButton])
+            .accessibilityLabel(accessibilityDescription).accessibilityAddTraits(selected ? [.isButton, .isSelected] : [.isButton])
             .accessibilityAction { model.select(item.id) }
             .accessibilityAction(named: Text("复制并粘贴")) { model.doubleClick(item.id) }
             .accessibilityAction(named: Text("重命名")) { model.beginRename(item.id) }
@@ -612,7 +620,7 @@ private struct ClipCard: View, Equatable {
             // LazyHStack可能提前创建邻近卡片；正文/图片任务只在真实可见时运行，离屏释放解码图，by AI.Coding。
             .onScrollVisibilityChange(threshold: 0.01) { visible in
                 isOnscreen = visible
-                if !visible { model.cancelRename(id: item.id); thumbnail = nil; Task { await model.derived.cancel(id: item.id) } }
+                if !visible { model.cancelRename(id: item.id); thumbnailState = .loading; Task { await model.derived.cancel(id: item.id) } }
             }
             .task(id: isOnscreen) {
                 guard isOnscreen else { return }
@@ -625,17 +633,21 @@ private struct ClipCard: View, Equatable {
                     characterCount = count
                 }
                 guard item.kind == .image || item.kind == .mixed else { return }
+                // 可见即自动加载；失败必须退出加载态，不把错误伪装成等待用户操作。
+                thumbnailState = .loading
                 let result = await model.derived.thumbnail(id: item.id)
                 guard !Task.isCancelled, model.contains(item.id) else { return }
-                do { _ = try await model.store.metadata(id: item.id, at: SystemClock().now()) } catch { return }
-                guard !Task.isCancelled, model.contains(item.id) else { return }
-                if case .image(let data) = result {
-                    thumbnail = NSImage(data: data)
-                    #if DEBUG
-                    if thumbnail != nil { GUIAcceptanceProbe.imageReadyIDs.insert(item.id) }
-                    #endif
+                do { _ = try await model.store.metadata(id: item.id, at: SystemClock().now()) }
+                catch {
+                    if !Task.isCancelled, model.contains(item.id) { thumbnailState = .failed }
+                    return
                 }
-            }.onDisappear { model.cancelRename(id: item.id); thumbnail = nil; characterCount = nil; Task { await model.derived.cancel(id: item.id) } }
+                guard !Task.isCancelled, model.contains(item.id) else { return }
+                thumbnailState = ThumbnailPreviewState(result)
+                #if DEBUG
+                if thumbnail != nil { GUIAcceptanceProbe.imageReadyIDs.insert(item.id) }
+                #endif
+            }.onDisappear { model.cancelRename(id: item.id); thumbnailState = .loading; characterCount = nil; Task { await model.derived.cancel(id: item.id) } }
     }
     @ViewBuilder private var cardContent: some View {
         if tiny && item.kind == .file {
@@ -656,9 +668,7 @@ private struct ClipCard: View, Equatable {
                 Spacer(minLength: 0)
             }.padding(.horizontal, 12).padding(.top, 10)
         } else if item.kind == .image || item.kind == .mixed {
-            ZStack { Rectangle().fill(tint.opacity(0.06)); if let thumbnail { Image(nsImage: thumbnail).resizable().scaledToFit().padding(tiny ? 2 : 9) }
-                else if tiny { Image(systemName: "photo").font(.system(size: 14)).foregroundStyle(tint) }
-                else { VStack(spacing: 9) { Image(systemName: "photo").font(.system(size: 40, weight: .ultraLight)); Text("图片内容").font(.system(size: 12)); Text("原始格式保留 · 按需预览").font(.system(size: 10)) }.foregroundStyle(tint.opacity(0.65)).frame(maxWidth: .infinity, maxHeight: .infinity) } }
+            ThumbnailPreview(state: thumbnailState, tint: tint, compact: tiny)
         } else if tiny && item.kind == .url {
             Text(URL(string: item.preview)?.host ?? item.context).font(.system(size: 10)).lineLimit(1).padding(.horizontal, 6).padding(.top, 3)
         } else if item.kind == .url {

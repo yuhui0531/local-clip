@@ -907,14 +907,15 @@ public actor HistoryStore: HistoryRepository {
         return ClipExportAccess(database: strategy.databaseURL, id: id, revision: metadata.revision, types: types, contentHash: try strategy.read { try $0.scalarText("SELECT contentHash FROM clips WHERE id=?", [.text(id)]) })
     }
     /// 导出仅占用自有临时空间，拒绝超配额，不淘汰历史；10分钟内文件租约保留。
-    public func writeExport(_ data: Data, id: ClipID, revision: Int64) throws -> URL {
+    public func writeExport(_ data: Data, id: ClipID, revision: Int64, fileExtension: String = "png") throws -> URL {
+        guard ["png", "tiff", "jpg"].contains(fileExtension) else { throw StoreError.invalidSettings }
         _ = try metadata(id: id, at: clock.now())
         guard Int64(data.count) <= 50 * MiB else { throw StoreError.stalePreview }
         let settings = try settings(), usage = try usage()
         guard usage.temporary + Int64(data.count) + 8192 <= 50 * MiB, usage.measuredTotal + Int64(data.count) + 8192 <= settings.quotaBytes else { throw StoreError.quotaExceeded }
         let directory = strategy.root.appendingPathComponent("Exports")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let file = directory.appendingPathComponent(UUID().uuidString + ".png")
+        let file = directory.appendingPathComponent(UUID().uuidString + "." + fileExtension)
         do { try data.write(to: file, options: .atomic); guard try self.usage().measuredTotal <= settings.quotaBytes else { throw StoreError.quotaExceeded }; return file }
         catch { try? FileManager.default.removeItem(at: file); throw error }
     }

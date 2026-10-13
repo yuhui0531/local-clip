@@ -69,6 +69,43 @@ private actor SuspendedStartupRepository: HistoryRepository {
         }
         #expect(try await store.search(.init(text)).items.count == 1)
     }
+    /// 更新后的真实模型启动与UI保存保留完整偏好；仅既定的会话暂停恢复会改变采集开关，by AI.Coding。
+    @Test(arguments: [true, false])
+    func relaunchAndPreferenceEditPreserveAllSettings(smartPaste: Bool) async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        var saved = SettingsSnapshot()
+        saved.appearance = .dark; saved.compactLayout = true
+        saved.retentionDays = 17; saved.quotaBytes = 768 * MiB; saved.panelHeight = 410
+        saved.defaultAction = .copy; saved.defaultFormat = .plainText
+        saved.pauseUntil = SystemClock().now() + 600_000; saved.pauseWhenExcludedFrontmost = true
+        saved.smartCodeFilePaste = smartPaste; saved.moveUsedToFront = false
+        saved.captureSounds = true; saved.showMenuIcon = false; saved.hideContents = true
+        saved.excludeFromSharing = true; saved.timingEnabled = true
+        saved.quickModifiers = 4096; saved.boardModifiers = 6144; saved.captureEnabled = false
+        saved.excludedBundleIDs = ["local.fixture.private"]
+        saved.autoCheckUpdates = false; saved.smartPasteEditorBundleIDs = ["local.fixture.editor"]
+        saved.shortcut = .init(keyCode: 8, modifiers: 6400); saved.revision = 23
+        _ = try HistoryStore(location: root, initialSettings: saved)
+        let store = try HistoryStore(location: root), raw = RawBoard(), model = model(store, raw)
+        // 不注册系统快捷键，不读系统剪贴板，也不修改生产应用权限。
+        model.registerShortcut = { _ in true }
+        try await model.start(resumeCapture: true); model.capture.stop()
+        saved.captureEnabled = true; saved.revision += 1
+        #expect(model.settings == saved && model.capture.policy == saved)
+        #expect(try await store.settings() == saved)
+        #expect(raw.reads.isEmpty)
+
+        // 修改无关偏好后等待实际提交，再重开库确认智能粘贴等其它设置没有被整份默认值覆盖。
+        model.updateSettings { $0.captureSounds = false }
+        saved.captureSounds = false; saved.revision += 1
+        let deadline = ContinuousClock.now + .seconds(3)
+        while model.settings.revision < saved.revision, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(model.settings == saved && model.capture.policy == saved)
+        #expect(try await HistoryStore(location: root).settings() == saved)
+    }
     /// 新启动自动监听后续变化，但不导入启动前的剪贴板，也不重复提交已启用设置，by AI.Coding。
     @Test func freshLaunchCapturesOnlyNewCopiesWithoutSettingsCommit() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

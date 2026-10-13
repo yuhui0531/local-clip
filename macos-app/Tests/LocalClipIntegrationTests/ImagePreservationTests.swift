@@ -324,4 +324,74 @@ private enum PreservationImages {
         let image = try #require(CGImageSourceCreateImageAtIndex(source, 0, nil))
         #expect(image.width == 32 && image.height == 24)
     }
+
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["LOCALCLIP_NAMED_TEST"] == "1"), arguments: ["png", "tiff", "jpeg", "high-depth", "paired"])
+    func imageFilePromisePreservesOriginalBytes(format: String) async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try HistoryStore(location: root), now = SystemClock().now()
+        let type = format == "tiff" || format == "high-depth" ? SupportedType.tiff : format == "jpeg" ? SupportedType.jpeg : SupportedType.png
+        let data = format == "high-depth" ? try PreservationImages.highDepthTIFF() : type == SupportedType.tiff ? try PreservationImages.tiff(pages: 2) : try ImageFixtures.image(width: 32, height: 24, type: type)
+        var payload = ClipboardPayload([.init([.init(type, data)])])
+        if format == "paired" { payload.items[0].representations.append(.init(SupportedType.tiff, try PreservationImages.tiff(pages: 2))) }
+        guard case .inserted(let id) = try await store.ingest(.init(payload: payload), at: now) else { Issue.record("Fixture rejected"); return }
+        let writers = try await ContentExportProvider.writers(ids: [id], store: store, token: "test", register: { _ in })
+        let provider = try #require(writers.first as? NSFilePromiseProvider)
+        let delegate = try #require(provider.delegate)
+        #expect(provider.fileType == type)
+        let name = delegate.filePromiseProvider(provider, fileNameForType: provider.fileType)
+        let suffix = type == SupportedType.tiff ? "tiff" : type == SupportedType.jpeg ? "jpg" : "png"
+        #expect(name.hasSuffix("." + suffix))
+        let destination = root.appendingPathComponent(name)
+        let error: Error? = await withCheckedContinuation { continuation in
+            delegate.filePromiseProvider(provider, writePromiseTo: destination) { error in continuation.resume(returning: error) }
+        }
+        #expect(error == nil)
+        #expect(try Data(contentsOf: destination) == data)
+        #expect(try await store.loadPayload(id: id, at: now).canonicalData == payload.canonicalData)
+    }
+
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["LOCALCLIP_NAMED_TEST"] == "1"), arguments: ["cancelled", "deleted", "quota", "existing-file"])
+    func imageFilePromiseFailureLeavesDestinationAndHistorySafe(reason: String) async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try HistoryStore(location: root), now = SystemClock().now()
+        let payload = ClipboardPayload([.init([.init(SupportedType.tiff, try PreservationImages.tiff(pages: 2))])])
+        guard case .inserted(let id) = try await store.ingest(.init(payload: payload), at: now) else { Issue.record("Fixture rejected"); return }
+        var access: ClipExportAccess?
+        let writers = try await ContentExportProvider.writers(ids: [id], store: store, token: "test", register: { access = $0 })
+        let provider = try #require(writers.first as? NSFilePromiseProvider), delegate = try #require(provider.delegate)
+        let destination = root.appendingPathComponent("received.tiff")
+        let existing = Data("Do not overwrite".utf8)
+        switch reason {
+        case "cancelled": access?.cancel()
+        case "deleted": _ = try await store.apply(store.preview(.delete([id])).token)
+        case "quota":
+            // Exhaust only the export-lease budget; history must not be evicted to make room.
+            let exports = root.appendingPathComponent("Exports")
+            try FileManager.default.createDirectory(at: exports, withIntermediateDirectories: true)
+            try Data(repeating: 0, count: 50 * 1024 * 1024).write(to: exports.appendingPathComponent("occupied.png"))
+        default: try existing.write(to: destination)
+        }
+        let error: Error? = await withCheckedContinuation { continuation in
+            delegate.filePromiseProvider(provider, writePromiseTo: destination) { continuation.resume(returning: $0) }
+        }
+        #expect(error != nil)
+        if reason == "existing-file" { #expect(try Data(contentsOf: destination) == existing) }
+        else { #expect(!FileManager.default.fileExists(atPath: destination.path)) }
+        if reason != "deleted" { #expect(try await store.loadPayload(id: id, at: now).canonicalData == payload.canonicalData) }
+        if reason == "quota" { #expect(error as? StoreError == .quotaExceeded) }
+    }
+
+    @Test func imageExportRejectsUnsafeExtensionWithoutWriting() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try HistoryStore(location: root)
+        do {
+            _ = try await store.writeExport(Data(), id: "unused", revision: 0, fileExtension: "../escape")
+            Issue.record("Unsafe export extension accepted")
+        } catch { #expect(error as? StoreError == .invalidSettings) }
+        #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent("Exports").path))
+    }
+
 }

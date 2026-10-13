@@ -127,6 +127,10 @@ struct ImageFixtures {
         let large = try ImageFixtures.image(width: 6401, height: 6400)
         let result = await Task.detached { ThumbnailRenderer.render(.init([.init([.init(SupportedType.png, large)])])) }.value
         if case .tooManyPixels = result {} else { Issue.record("40MP保护失效") }
+        // 超限表示仍不解码，但同一条记录中的安全备用图片应自动显示，by AI.Coding。
+        let fallback = try ImageFixtures.image(width: 32, height: 24, type: SupportedType.tiff)
+        let alternatives = ClipboardPayload([.init([.init(SupportedType.png, large), .init(SupportedType.tiff, fallback)])])
+        if case .image = ThumbnailRenderer.render(alternatives) {} else { Issue.record("安全备用预览被超限表示遮蔽") }
     }
     /// 新查询立即作废旧queryID；删除选中项后详情和恢复不可见。
     @Test func E02_AC14_viewModelQueryAndDeletion() async throws {
