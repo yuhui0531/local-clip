@@ -33,6 +33,8 @@ import LocalClipCore
         var loading = false
         var cursor: SearchCursor?
         var scrollRestoration: HistoryViewModel.ScrollRestoration?
+        /// 新查询替换整个列表时递增；滚动区据此重建身份。
+        var scrollEpoch = 0
     }
     @Published private(set) var snapshot = Snapshot()
     let footerState = HistoryFooterState()

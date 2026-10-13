@@ -28,18 +28,23 @@ struct SyntaxText: View {
     @Environment(\.colorScheme) private var scheme
     @State private var highlighted: SyntaxHighlight?
     @State private var source = ""
+    /// 高亮器是actor，缓存命中也要异步；主线程留一份结果，重新出现的卡片首帧即是高亮正文，by AI.Coding。
+    @MainActor private static var recent: [String: SyntaxHighlight] = [:]
     var body: some View {
         Group {
-            if source == text, let highlighted {
+            if let ready = source == text ? highlighted : Self.recent[text] {
                 // 窄卡片按词软换行，并以源行缩进作为续行悬挂缩进，by AI.Coding。
-                SyntaxCardPreview(content: SyntaxLineCache.content(text, highlight: highlighted, size: size, dark: scheme == .dark, spacing: spacing))
+                SyntaxCardPreview(content: SyntaxLineCache.content(text, highlight: ready, size: size, dark: scheme == .dark, spacing: spacing))
             }
             else { Text(text).font(.system(size: size)) }
         }.task(id: text) {
+            if let cached = Self.recent[text] { highlighted = cached; source = text; onLanguage(cached.language); return }
             highlighted = nil; source = text; onLanguage(nil)
             let result = await SyntaxHighlighter.shared.highlight(text)
             guard !Task.isCancelled else { return }
             highlighted = result; onLanguage(result?.language)
+            // ponytail: 满128条整体清空，需要更细的淘汰时换LRU。
+            if let result { if Self.recent.count >= 128 { Self.recent.removeAll() }; Self.recent[text] = result }
         }
     }
 }

@@ -7,6 +7,9 @@ import LocalClipCore
     public let capture: CaptureCoordinator
     public let paste: PasteCoordinator
     public let derived: DerivedContentService
+    /// 卡片派生显示结果按记录缓存；同一ID内容不变，切换分类回到已见卡片时首帧即是最终内容，by AI.Coding。
+    let characterCounts = NSCache<NSString, NSNumber>()
+    let thumbnails: NSCache<NSString, NSImage> = { let value = NSCache<NSString, NSImage>(); value.countLimit = 120; return value }()
     let queryState = HistoryQueryState()
     let listState = HistoryListState()
     public var query: String { get { queryState.literal } set { queryState.literal = newValue } }
@@ -285,11 +288,12 @@ import LocalClipCore
         catch { message = "空间计量失败" }
     }
     /// 更新输入立即作废旧queryID，防抖20ms给检索和绘制保留延迟预算。
-    public func searchChanged() {
+    /// 输入防抖；点击筛选是一次性动作，不等防抖直接查询，by AI.Coding。
+    public func searchChanged(debounce: Bool = true) {
         // 同一在途请求合并分类行的多个属性观察，不打断定位或重复查询，by AI.Coding。
         if queryPending, activeSearchSignature == currentSearchSignature { return }
         if let recordUndoQuery, recordUndoQuery != query { self.recordUndoQuery = nil }
-        search(debounce: true)
+        search(debounce: debounce)
     }
     /// 捕获/删除/到期刷新不额外防抖。
     public func refresh() { search(debounce: false, preserveWindow: true) }
@@ -371,6 +375,7 @@ import LocalClipCore
                         selectedIDs.removeAll()
                         anchorID = nil
                         scrollRestoration = .init(offset: 0)
+                        listState[\.scrollEpoch] += 1
                     }
                     items = visible; cursor = window.cursor; pageRevision = page.revision; loading = false
                     if preserveWindow {

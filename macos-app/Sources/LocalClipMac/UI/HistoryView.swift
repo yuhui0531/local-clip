@@ -95,14 +95,14 @@ public struct HistoryView: View {
                 .onGeometryChange(for: CGSize.self) { CGSize(width: $0.size.width, height: cardHeight) } action: { size in
                     model.configureHistoryViewport(width: size.width, cardWidth: size.height)
                 }
-                .onChange(of: model.favorites) { _, _ in model.searchChanged() }
-                .onChange(of: model.categoryID) { _, _ in model.searchChanged() }
-                .onChange(of: model.categoryFilters) { _, _ in model.searchChanged() }
-                .onChange(of: model.sourceFilter) { _, _ in model.searchChanged() }
-                .onChange(of: model.dateFilterEnabled) { _, _ in model.searchChanged() }
-                .onChange(of: model.dateFrom) { _, _ in if model.dateFilterEnabled { model.searchChanged() } }
-                .onChange(of: model.dateUntil) { _, _ in if model.dateFilterEnabled { model.searchChanged() } }
-                .onChange(of: model.kind) { _, _ in model.searchChanged() }
+                .onChange(of: model.favorites) { _, _ in model.searchChanged(debounce: false) }
+                .onChange(of: model.categoryID) { _, _ in model.searchChanged(debounce: false) }
+                .onChange(of: model.categoryFilters) { _, _ in model.searchChanged(debounce: false) }
+                .onChange(of: model.sourceFilter) { _, _ in model.searchChanged(debounce: false) }
+                .onChange(of: model.dateFilterEnabled) { _, _ in model.searchChanged(debounce: false) }
+                .onChange(of: model.dateFrom) { _, _ in if model.dateFilterEnabled { model.searchChanged(debounce: false) } }
+                .onChange(of: model.dateUntil) { _, _ in if model.dateFilterEnabled { model.searchChanged(debounce: false) } }
+                .onChange(of: model.kind) { _, _ in model.searchChanged(debounce: false) }
                 .onChange(of: model.showingDetail) { _, _ in model.detailVisibilityChanged() }
                 .onChange(of: model.showingCategoryEditor) { _, _ in model.panelInteractionChanged?() }
         }.frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -199,7 +199,7 @@ private struct HistorySearchInput: View {
     @ObservedObject var input: HistoryQueryState
     let focus: UUID
     var body: some View {
-        SearchField(text: $input.literal, focus: focus, onChange: model.searchChanged,
+        SearchField(text: $input.literal, focus: focus, onChange: { model.searchChanged() },
             onNavigate: model.navigate, onEnter: { model.focusResults?() }, onEscape: { model.closePanel?() })
     }
 }
@@ -215,49 +215,14 @@ private struct HistoryStrip: View {
     let focusRequest: UUID
     let renamingID: ClipID?
     let showingDetail: Bool
-    @State private var scrollPosition = ScrollPosition(edge: .leading)
-    @State private var scrollWheelState = HistoryScrollWheel.State()
     var body: some View {
         ZStack {
             if model.items.isEmpty {
                 HistoryEmptyState(model: model, input: model.queryState, loading: list.snapshot.loading)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                ScrollViewReader { proxy in
-                    ScrollView(.horizontal) {
-                        LazyHStack(spacing: 16) {
-                            ForEach(Array(model.items.enumerated()), id: \.element.id) { index, item in
-                                ClipCard(item: item, index: index, selected: model.selectedIDs.contains(item.id), dragging: draggedIDs.contains(item.id), editing: renamingID == item.id, hidden: hideContents, quickModifiers: model.settings.quickModifiers, height: cardHeight, categoryID: categoryID, categories: categories, target: target, model: model).equatable().id(item.id)
-                                    // 详情贴着所选卡片弹出，而不是远在底栏右侧的按钮，by AI.Coding。
-                                    .popover(isPresented: Binding(get: { showingDetail && model.selectedID == item.id }, set: { if !$0 { model.showingDetail = false } }), arrowEdge: .top) {
-                                        ClipInspector(model: model).frame(width: 520)
-                                    }
-                            }
-                            if model.hasMore {
-                                Button(action: model.loadMore) {
-                                    VStack(spacing: 10) {
-                                        if model.loading { ProgressView() } else { Image(systemName: "arrow.right").font(.title2) }
-                                        Text(model.loading ? "正在读取…" : "更多历史")
-                                    }.frame(width: 130, height: cardHeight)
-                                }.buttonStyle(.plain)
-                            }
-                        }.padding(.horizontal, 24).padding(.vertical, 10)
-                            .background(OverlayScrollerStyle())
-                    }.scrollIndicators(.visible)
-                        .scrollPosition($scrollPosition)
-                        .onScrollGeometryChange(for: HistoryScrollMetrics.self) { geometry in
-                            HistoryScrollMetrics(offset: max(0, geometry.contentOffset.x), maximum: max(0, geometry.contentSize.width - geometry.containerSize.width), viewport: geometry.containerSize.width)
-                        } action: { _, metrics in scrollWheelState.update(metrics); model.historyScrolled(offset: metrics.offset) }
-                        .background(HistoryScrollWheel(state: scrollWheelState) { x in scrollPosition.scrollTo(x: x) })
-                        .onChange(of: model.selectedID) { _, id in
-                            if let id, let index = model.items.firstIndex(where: { $0.id == id }), scrollWheelState.needsReveal(index: index, cardWidth: cardHeight) {
-                                proxy.scrollTo(id)
-                            }
-                        }
-                        .onChange(of: model.scrollRestoration) { _, restore in
-                            if let restore { scrollPosition.scrollTo(x: restore.offset) }
-                        }
-                }
+                // 换筛选整组重建滚动区，新列表首帧就在最左侧，不先按旧偏移绘制再跳回，by AI.Coding。
+                HistoryScroller(strip: self, list: list).id(list.snapshot.scrollEpoch)
             }
         }.frame(maxWidth: .infinity).frame(height: cardHeight + 20).clipped()
         // 隐藏状态用明确占位替代整层模糊，避免正文轮廓泄露及持续模糊合成，by AI.Coding。
@@ -281,6 +246,51 @@ private struct HistoryStrip: View {
             #endif
         }
         .onChange(of: list.snapshot.selectedID) { _, _ in if model.showingDetail { model.showingDetail = false } }
+    }
+}
+/// 滚动位置与滚轮状态随滚动区身份重建；列表就地刷新时身份不变，保持浏览位置，by AI.Coding。
+private struct HistoryScroller: View {
+    let strip: HistoryStrip
+    /// 列表就地刷新必须重算本视图，不能依赖父视图传入的值相等判断。
+    @ObservedObject var list: HistoryListState
+    @State private var scrollPosition = ScrollPosition(edge: .leading)
+    @State private var scrollWheelState = HistoryScrollWheel.State()
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal) {
+                LazyHStack(spacing: 16) {
+                    ForEach(Array(strip.model.items.enumerated()), id: \.element.id) { index, item in
+                        ClipCard(item: item, index: index, selected: strip.model.selectedIDs.contains(item.id), dragging: strip.draggedIDs.contains(item.id), editing: strip.renamingID == item.id, hidden: strip.hideContents, quickModifiers: strip.model.settings.quickModifiers, height: strip.cardHeight, categoryID: strip.categoryID, categories: strip.categories, target: strip.target, model: strip.model).equatable().id(item.id)
+                            // 详情贴着所选卡片弹出，而不是远在底栏右侧的按钮，by AI.Coding。
+                            .popover(isPresented: Binding(get: { strip.showingDetail && strip.model.selectedID == item.id }, set: { if !$0 { strip.model.showingDetail = false } }), arrowEdge: .top) {
+                                ClipInspector(model: strip.model).frame(width: 520)
+                            }
+                    }
+                    if strip.model.hasMore {
+                        Button(action: strip.model.loadMore) {
+                            VStack(spacing: 10) {
+                                if strip.model.loading { ProgressView() } else { Image(systemName: "arrow.right").font(.title2) }
+                                Text(strip.model.loading ? "正在读取…" : "更多历史")
+                            }.frame(width: 130, height: strip.cardHeight)
+                        }.buttonStyle(.plain)
+                    }
+                }.padding(.horizontal, 24).padding(.vertical, 10)
+                    .background(OverlayScrollerStyle())
+            }.scrollIndicators(.visible)
+                .scrollPosition($scrollPosition)
+                .onScrollGeometryChange(for: HistoryScrollMetrics.self) { geometry in
+                    HistoryScrollMetrics(offset: max(0, geometry.contentOffset.x), maximum: max(0, geometry.contentSize.width - geometry.containerSize.width), viewport: geometry.containerSize.width)
+                } action: { _, metrics in scrollWheelState.update(metrics); strip.model.historyScrolled(offset: metrics.offset) }
+                .background(HistoryScrollWheel(state: scrollWheelState) { x in scrollPosition.scrollTo(x: x) })
+                .onChange(of: strip.model.selectedID) { _, id in
+                    if let id, let index = strip.model.items.firstIndex(where: { $0.id == id }), scrollWheelState.needsReveal(index: index, cardWidth: strip.cardHeight) {
+                        proxy.scrollTo(id)
+                    }
+                }
+                .onChange(of: strip.model.scrollRestoration) { _, restore in
+                    if let restore { scrollPosition.scrollTo(x: restore.offset) }
+                }
+        }
     }
 }
 /// 搜索词只让空结果提示订阅，避免每个输入字符重建整条卡片列表，by AI.Coding。
@@ -443,7 +453,13 @@ private struct ClipCard: View, Equatable {
     let model: HistoryViewModel
     @State private var characterCount: Int?
     @State private var thumbnailState: ThumbnailPreviewState = .loading
-    private var thumbnail: NSImage? { thumbnailState.image }
+    /// 离屏会丢弃解码状态；缓存命中时直接显示，不经过加载占位，by AI.Coding。
+    private var displayedThumbnail: ThumbnailPreviewState {
+        if case .loading = thumbnailState, let image = model.thumbnails.object(forKey: item.id as NSString) { return .ready(image) }
+        return thumbnailState
+    }
+    private var thumbnail: NSImage? { displayedThumbnail.image }
+    private var displayedCharacterCount: Int? { characterCount ?? model.characterCounts.object(forKey: item.id as NSString)?.intValue }
     @State private var isOnscreen = false
     @State private var detectedLanguage: String?
     @State private var hovering = false
@@ -456,7 +472,7 @@ private struct ClipCard: View, Equatable {
     private var accessibilityDescription: String {
         let title = "\(item.title ?? HistoryView.kindName(item.kind))，\(item.source.name)"
         if hidden { return title + "，内容已隐藏" }
-        if item.kind == .image || item.kind == .mixed { return title + "，" + item.preview + "，" + thumbnailState.label }
+        if item.kind == .image || item.kind == .mixed { return title + "，" + item.preview + "，" + displayedThumbnail.label }
         return title + "，" + item.preview
     }
     private var tint: Color { switch item.kind {
@@ -533,7 +549,7 @@ private struct ClipCard: View, Equatable {
                     }
                 }
             HStack(spacing: 4) {
-                Text(characterCount.map { "\($0) 个字符" } ?? (item.kind == .file ? "文件引用" : "复制\(item.copyCount)次")).lineLimit(1)
+                Text(displayedCharacterCount.map { "\($0) 个字符" } ?? (item.kind == .file ? "文件引用" : "复制\(item.copyCount)次")).lineLimit(1)
                 Spacer(minLength: 2)
                 // 详情入口跟随卡片：悬停或选中时出现，点按在本卡上方弹出详情，by AI.Coding。
                 if (hovering || selected) && !tiny && !hidden {
@@ -628,14 +644,15 @@ private struct ClipCard: View, Equatable {
             .task(id: isOnscreen) {
                 guard isOnscreen else { return }
                 // 只为实际出现的文字卡片统计全文，计数缓存不随选中状态重算。
-                if [.text, .url, .richText].contains(item.kind) {
+                if [.text, .url, .richText].contains(item.kind), displayedCharacterCount == nil {
                     let count = try? await model.store.textCharacterCount(id: item.id, at: SystemClock().now())
                     guard !Task.isCancelled, model.contains(item.id),
                           (try? await model.store.metadata(id: item.id, at: SystemClock().now())) != nil else { return }
                     guard !Task.isCancelled, model.contains(item.id) else { return }
                     characterCount = count
+                    if let count { model.characterCounts.setObject(count as NSNumber, forKey: item.id as NSString) }
                 }
-                guard item.kind == .image || item.kind == .mixed else { return }
+                guard item.kind == .image || item.kind == .mixed, thumbnail == nil else { return }
                 // 可见即自动加载；失败必须退出加载态，不把错误伪装成等待用户操作。
                 thumbnailState = .loading
                 let result = await model.derived.thumbnail(id: item.id)
@@ -647,6 +664,7 @@ private struct ClipCard: View, Equatable {
                 }
                 guard !Task.isCancelled, model.contains(item.id) else { return }
                 thumbnailState = ThumbnailPreviewState(result)
+                if let image = thumbnailState.image { model.thumbnails.setObject(image, forKey: item.id as NSString) }
                 #if DEBUG
                 if thumbnail != nil { GUIAcceptanceProbe.imageReadyIDs.insert(item.id) }
                 #endif
@@ -671,7 +689,7 @@ private struct ClipCard: View, Equatable {
                 Spacer(minLength: 0)
             }.padding(.horizontal, 12).padding(.top, 10)
         } else if item.kind == .image || item.kind == .mixed {
-            ThumbnailPreview(state: thumbnailState, tint: tint, compact: tiny)
+            ThumbnailPreview(state: displayedThumbnail, tint: tint, compact: tiny)
         } else if tiny && item.kind == .url {
             Text(ClipboardPayload.webLink(item.preview)?.host ?? item.context).font(.system(size: 10)).lineLimit(1).padding(.horizontal, 6).padding(.top, 3)
         } else if item.kind == .url {
