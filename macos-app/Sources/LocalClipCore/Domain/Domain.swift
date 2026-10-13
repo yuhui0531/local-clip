@@ -95,7 +95,26 @@ public struct ClipboardPayload: Codable, Equatable, Sendable {
         let texts = !types.isDisjoint(with: [SupportedType.string, SupportedType.url, SupportedType.rtf, SupportedType.html])
         if images { return texts ? .mixed : .image }
         if types.contains(SupportedType.rtf) || types.contains(SupportedType.html) { return .richText }
-        return types.contains(SupportedType.url) ? .url : .text
+        if types.contains(SupportedType.url) { return .url }
+        // 浏览器地址栏等来源只写纯文本；单项全文恰为一个网址时同样归为链接，by AI.Coding。
+        guard items.count == 1, let value = items[0].representations.first(where: { $0.type == SupportedType.string }),
+              let text = String(data: value.data, encoding: .utf8) else { return .text }
+        return Self.webLink(text) != nil ? .url : .text
+    }
+    /// 整段文本去首尾空白后是唯一的网址才返回；夹带空白或其他文字的段落仍是文本。
+    /// 无协议时交给系统链接识别（按真实顶级域判断），"README.md"、"v0.3.22"等不会误判，结果补全为http。
+    public static func webLink(_ text: String) -> URL? {
+        let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty, value.utf8.count <= 8192, !value.contains(where: \.isWhitespace) else { return nil }
+        if value.contains("://") {
+            guard let url = URL(string: value), ["http", "https"].contains(url.scheme?.lowercased() ?? ""), url.host?.isEmpty == false else { return nil }
+            return url
+        }
+        let range = NSRange(value.startIndex..., in: value)
+        guard let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue),
+              let match = detector.firstMatch(in: value, range: range), match.range == range,
+              let url = match.url, ["http", "https"].contains(url.scheme?.lowercased() ?? "") else { return nil }
+        return url
     }
 }
 public enum ContentFingerprint {

@@ -673,9 +673,9 @@ private struct ClipCard: View, Equatable {
         } else if item.kind == .image || item.kind == .mixed {
             ThumbnailPreview(state: thumbnailState, tint: tint, compact: tiny)
         } else if tiny && item.kind == .url {
-            Text(URL(string: item.preview)?.host ?? item.context).font(.system(size: 10)).lineLimit(1).padding(.horizontal, 6).padding(.top, 3)
+            Text(ClipboardPayload.webLink(item.preview)?.host ?? item.context).font(.system(size: 10)).lineLimit(1).padding(.horizontal, 6).padding(.top, 3)
         } else if item.kind == .url {
-            VStack(alignment: .leading, spacing: 10) { Image(systemName: "link").font(.system(size: 22, weight: .light)).foregroundStyle(tint); Text(URL(string: item.preview)?.host ?? "链接").font(.system(size: 15, weight: .semibold, design: .rounded)).lineLimit(1); Text(item.context).font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary).lineLimit(4); Spacer(minLength: 0) }.padding(14)
+            VStack(alignment: .leading, spacing: 10) { Image(systemName: "link").font(.system(size: 22, weight: .light)).foregroundStyle(tint); Text(ClipboardPayload.webLink(item.preview)?.host ?? "链接").font(.system(size: 15, weight: .semibold, design: .rounded)).lineLimit(1); Text(item.context).font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary).lineLimit(4); Spacer(minLength: 0) }.padding(14)
         } else {
             // 卡片正文自动高亮代码，普通内容保持原有排版，by AI.Coding。
             SyntaxText(text: item.context, size: tiny ? 10 : height < 200 ? 12 : height < 260 ? 13 : 15, spacing: tiny ? 0 : 3, onLanguage: { detectedLanguage = $0 })

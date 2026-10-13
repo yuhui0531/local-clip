@@ -1063,11 +1063,13 @@ import LocalClipCore
                     for (type, ext, title) in [(SupportedType.rtf, "rtf", "RTF（.rtf）"), (SupportedType.html, "html", "HTML（.html）")] where types.contains(type) && plan.fileExtension != ext {
                         options.append((title, ext, { try access.itemData(index: 0, type: type) }))
                     }
-                } else if types.contains(SupportedType.url) {
-                    options.append(("链接（.webloc）", "webloc", {
-                        let link = String(decoding: try access.itemData(index: 0, type: SupportedType.url), as: UTF8.self)
-                        return try PropertyListSerialization.data(fromPropertyList: ["URL": link], format: .xml, options: 0)
-                    }))
+                }
+                // 链接（含纯文本网址）默认存为.webloc，纯文本网址另保留文本格式可选，by AI.Coding。
+                let link: String? = if types.contains(SupportedType.url) { String(decoding: try access.itemData(index: 0, type: SupportedType.url), as: UTF8.self) }
+                    else if summary.kind == .url, types.contains(SupportedType.string) { ClipboardPayload.webLink(String(decoding: try access.itemData(index: 0, type: SupportedType.string), as: UTF8.self))?.absoluteString }
+                    else { nil }
+                if let link {
+                    options.insert(("链接（.webloc）", "webloc", { try PropertyListSerialization.data(fromPropertyList: ["URL": link], format: .xml, options: 0) }), at: 0)
                 }
                 guard !options.isEmpty else { message = "该记录没有可存储的内容"; return }
                 let panel = NSSavePanel()
@@ -1093,7 +1095,9 @@ import LocalClipCore
         Task {
             do {
                 let value = try await store.detail(id: selectedID, at: clock.now())
-                let urls = value.payload.fileURLs ?? value.payload.items.flatMap { $0.representations }.filter { $0.type == SupportedType.url }.compactMap { String(data: $0.data, encoding: .utf8).flatMap(URL.init(string:)) }.filter { ["http","https","mailto"].contains($0.scheme?.lowercased() ?? "") }
+                let declared = value.payload.items.flatMap { $0.representations }.filter { $0.type == SupportedType.url }.compactMap { String(data: $0.data, encoding: .utf8).flatMap(URL.init(string:)) }.filter { ["http","https","mailto"].contains($0.scheme?.lowercased() ?? "") }
+                // 纯文本网址没有public.url表示，按同一识别规则回退，by AI.Coding。
+                let urls = value.payload.fileURLs ?? (declared.isEmpty && value.payload.kind == .url ? value.payload.plainText.flatMap(ClipboardPayload.webLink).map { [$0] } ?? [] : declared)
                 guard !urls.isEmpty else { message = "没有可打开的链接或文件"; return }
                 var url = urls[0]
                 if urls.count > 1 { let picker = NSAlert(); picker.messageText = "选择要打开的对象"; let popup = NSPopUpButton(frame: NSRect(x:0,y:0,width:400,height:26)); popup.addItems(withTitles: urls.map { $0.isFileURL ? $0.lastPathComponent : $0.absoluteString }); picker.accessoryView = popup; picker.addButton(withTitle:"打开"); picker.addButton(withTitle:"取消"); guard picker.runModal() == .alertFirstButtonReturn else { return }; url = urls[popup.indexOfSelectedItem] }
