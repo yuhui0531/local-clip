@@ -771,6 +771,15 @@ import LocalClipCore
     public func resumeRecording() {
         updateSettings { $0.captureEnabled = true; $0.pauseUntil = nil }
     }
+    /// 菜单和面板共用暂停意图，不依赖异步状态文案；到期暂停不再显示为暂停，by AI.Coding。
+    var recordingPaused: Bool {
+        !settings.captureEnabled || settings.pauseUntil.map { $0 > clock.now() } == true
+    }
+    /// 恢复入口同时清除手动和定时暂停，暂停入口保持即时阻止采集的原有语义。
+    func toggleRecording() {
+        if recordingPaused { resumeRecording() }
+        else { setCaptureEnabled(false) }
+    }
     /// 统一清除范围筛选；搜索词保持不变，由独立清除搜索动作控制，by AI.Coding。
     public func clearHistoryFilters() {
         sourceFilter = nil; dateFilterEnabled = false; categoryFilters = []; categoryID = nil
@@ -832,10 +841,6 @@ import LocalClipCore
             if expired.removed > 0 { refresh() }
         }
         catch { message = "清理失败，未报告已释放" }
-        if !imagesCompacted {
-            imagesCompacted = true
-            if let count = try? await store.compactRedundantImages(), count > 0 { await refreshUsage(); refresh() }
-        }
         // 启动只做快速检查；完整页级校验在面板隐藏时每天后台执行一次，不阻塞采集与界面，by AI.Coding。
         if !panelVisible, lastIntegrityCheck.map({ ContinuousClock.now - $0 > .seconds(86_400) }) ?? true {
             lastIntegrityCheck = ContinuousClock.now
@@ -846,8 +851,6 @@ import LocalClipCore
         }
     }
     private var lastIntegrityCheck: ContinuousClock.Instant?
-    // 旧图片记录的冗余TIFF每次启动只整理一次，此后新采集不再写入。
-    private var imagesCompacted = false
     /// 二进制容量单位与真实计量一致；零值显示数字而非“Zero KB”，by AI.Coding。
     public static func bytes(_ value: Int64) -> String {
         let formatter = ByteCountFormatter(); formatter.countStyle = .binary; formatter.allowsNonnumericFormatting = false

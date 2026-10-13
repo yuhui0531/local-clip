@@ -4,6 +4,36 @@ import Testing
 @testable import LocalClipCore
 
 struct CategoryOrderTests {
+    /// 使用多选记录时保留选择顺序，每个分类只置前一次，重复ID不能重复计数，by AI.Coding。
+    @Test func usedBatchPreservesOrderAcrossCategories() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let clock = TestClock(), store = try HistoryStore(location: root, clock: clock)
+        let first = try await store.createCategory(name: "First", colorHex: "34C759")
+        let second = try await store.createCategory(name: "Second", colorHex: "AF52DE")
+        var ids: [ClipID] = []
+        for index in 0..<4 {
+            ids.append(insertedID(try await store.ingest(fixture("used-\(index)"), at: clock.now())))
+        }
+        try await include(ids, in: first, store: store)
+        try await include([ids[0], ids[2], ids[3]], in: second, store: store)
+        for order in [[ids[2], ids[1], ids[0]], [ids[0], ids[1], ids[2]]] {
+            clock.advance(1000)
+            try await store.touch(ids: order + [order[0]], at: clock.now())
+            #expect(try await store.search(.init(categoryIDs: [first.id])).items.map(\.id) == order + [ids[3]])
+            #expect(try await store.search(.init(categoryIDs: [second.id])).items.map(\.id) == order.filter { $0 != ids[1] } + [ids[3]])
+        }
+        for id in ids.prefix(3) {
+            let detail = try await store.detail(id: id, at: clock.now())
+            #expect(detail.summary.copyCount == 3)
+            #expect(detail.summary.lastCopiedAt == clock.now())
+            #expect(detail.payload.plainText == "used-\(ids.firstIndex(of: id)!)")
+        }
+        #expect(try await store.detail(id: ids[3], at: clock.now()).summary.copyCount == 1)
+        let reopened = try HistoryStore(location: root, clock: clock)
+        #expect(try await reopened.search(.init(categoryIDs: [first.id])).items.map(\.id) == ids)
+    }
+
     /// 添加沿用生产预览/提交入口，测试拖入多选的原始顺序和已有成员再次置前。
     private func include(_ ids: [ClipID], in category: ClipCategory, store: HistoryStore) async throws {
         let preview = try await store.preview(.category(ids, category.id, true))

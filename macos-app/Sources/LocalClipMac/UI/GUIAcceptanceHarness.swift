@@ -16,6 +16,8 @@ import LocalClipCore
         return value
     }()
     static var output: URL? { configuration?["output"].map { URL(fileURLWithPath: $0) } }
+    /// 仅显式构建的外部应用验收包使用系统板；数据库仍隔离，禁用自动写板驱动。
+    static var usesExternalPasteboard: Bool { configuration?["externalPasteboard"] == "true" }
     private static var pending: (String, ContinuousClock.Instant, String?, String?, UUID)?
     static var imageReadyIDs = Set<ClipID>()
     private static var expectedGeneration: UUID?
@@ -37,9 +39,6 @@ import LocalClipCore
         try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted,.sortedKeys]).write(to: output.appendingPathComponent(file), options: .atomic)
     }
     static func inputChanged(_ query: String) { if configuration != nil { _ = start("actualInputToDraw", query: query) } }
-    static func imageBecameReady(_ id: ClipID) {
-        imageReadyIDs.insert(id)
-    }
     static func event(_ name: String, _ model: HistoryViewModel) {
         guard output != nil else { return }
         trace.append(["event":name,"uptime":ProcessInfo.processInfo.systemUptime,"selectedID":model.selectedID ?? "", "selectedIDs":model.selectedIDs.sorted(),"draggedIDs":model.draggedIDs.sorted(),"dragActive":model.dragActive])
@@ -76,7 +75,7 @@ import LocalClipCore
                 let window = NSApp.windows.first { $0.title == "LocalClip" }
                 write(["visible":window?.isVisible ?? false,"key":window?.isKeyWindow ?? false,"loading":model.loading,"query":model.query,"selectedID":model.selectedID ?? "", "selectedIDs":model.selectedIDs.sorted(), "draggedIDs":model.draggedIDs.sorted(),"dragActive":model.dragActive,"items":model.items.prefix(50).map { ["id":$0.id,"preview":$0.preview] },"frame":NSStringFromRect(window?.frame ?? .zero),"message":model.message], "state.json")
                 // 明确的隔离验收命令，仅向私有命名剪贴板写合成文本，by AI.Coding。
-                if let output, FileManager.default.fileExists(atPath: output.appendingPathComponent("run-seed" ).path) {
+                if !usesExternalPasteboard, let output, FileManager.default.fileExists(atPath: output.appendingPathComponent("run-seed" ).path) {
                     try? FileManager.default.removeItem(at: output.appendingPathComponent("run-seed"))
                     for index in 1...12 {
                         board.board.clearContents()
@@ -97,7 +96,7 @@ import LocalClipCore
                     do { try await idle(model: model) } catch { write(["failure":String(describing:error)], "idle-failure.json") }
                 }
                 // 文件命令只在明确标记的隔离验收包存在，正式Release没有此入口。
-                if let output, FileManager.default.fileExists(atPath: output.appendingPathComponent("run-benchmark").path) {
+                if !usesExternalPasteboard, let output, FileManager.default.fileExists(atPath: output.appendingPathComponent("run-benchmark").path) {
                     try? FileManager.default.removeItem(at: output.appendingPathComponent("run-benchmark"))
                     do { try await benchmark(model: model, board: board) }
                     catch { write(["failure":String(describing:error)], "gui-failure.json") }

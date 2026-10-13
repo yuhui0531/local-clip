@@ -97,13 +97,6 @@ final class SQLiteConnection {
               try scalarInt("PRAGMA secure_delete") == 1,
               try scalarText("PRAGMA journal_mode") == "delete" else { throw StoreError.ioFailure }
     }
-    /// 在线备份产生一致快照，禁止拷贝正在写入的原始文件。
-    func backup(to other: SQLiteConnection) throws {
-        guard let backup = sqlite3_backup_init(other.handle, "main", handle, "main") else { throw StoreError.ioFailure }
-        let result = sqlite3_backup_step(backup, -1)
-        let finished = sqlite3_backup_finish(backup)
-        try check(result); try check(finished)
-    }
 }
 extension SQLValue {
     var text: String { if case .text(let v) = self { return v }; return "" }

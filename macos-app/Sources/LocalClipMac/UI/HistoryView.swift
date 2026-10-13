@@ -26,7 +26,6 @@ public struct HistoryView: View {
             let filterHeight: CGFloat = model.sourceFilter != nil || model.dateFilterEnabled ? 22 : 0
             // 正方形宽高一起收缩，完整边界始终留在实际视口内。
             let cardHeight = Self.cardSide(height: viewport.size.height, filtered: filterHeight > 0)
-            let availableCardHeight = cardHeight
             VStack(spacing: 0) {
                 Capsule().fill(.secondary.opacity(0.3)).frame(width: 36, height: 3).frame(maxWidth: .infinity).frame(height: 8).contentShape(Rectangle())
                     .help("上下拖动调整高度")
@@ -53,8 +52,8 @@ public struct HistoryView: View {
                         ToolbarIconButton(symbol: filtering ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle", tint: filtering ? .accentColor : nil, help: "筛选") { model.showingFilters.toggle() }
                             .popover(isPresented: $model.showingFilters) { FilterEditor(model: model) }
                         // 暂停时图标转为醒目的恢复入口，状态与动作一眼可辨，by AI.Coding。
-                        let recording = model.settings.captureEnabled && model.status != "定时暂停"
-                        ToolbarIconButton(symbol: recording ? "pause.circle" : "play.circle.fill", tint: recording ? nil : .orange, help: recording ? "暂停记录" : "恢复记录") { if recording { model.setCaptureEnabled(false) } else { model.resumeRecording() } }
+                        let recording = !model.recordingPaused
+                        ToolbarIconButton(symbol: recording ? "pause.circle" : "play.circle.fill", tint: recording ? nil : .orange, help: recording ? "暂停记录" : "恢复记录", action: model.toggleRecording)
                         Menu {
                             Button(model.settings.hideContents ? "显示内容" : "隐藏内容") { model.updateSettings { $0.hideContents.toggle() } }
                             Button("筛选…") { model.showingFilters.toggle() }
@@ -70,7 +69,7 @@ public struct HistoryView: View {
                 }.padding(.horizontal, 24).frame(height: toolbarHeight)
                 if filterHeight > 0 { FilterStrip(model: model) }
                 HistoryStrip(model: model, list: model.listState, cardHeight: cardHeight,
-                    availableCardHeight: availableCardHeight, categoryID: model.categoryID, categories: model.categories,
+                    categoryID: model.categoryID, categories: model.categories,
                     target: model.target, draggedIDs: model.draggedIDs, hideContents: model.settings.hideContents, focusRequest: model.focusRequest, renamingID: model.renamingID, showingDetail: model.showingDetail)
                 Divider().opacity(0.5)
                 HStack(spacing: 12) {
@@ -79,7 +78,7 @@ public struct HistoryView: View {
                         .foregroundStyle(model.message.isEmpty ? Color.secondary : Color.primary)
                         .help(model.ignoreDescription)
                     // 暂停时就地提供恢复入口，不必去找工具栏或菜单，by AI.Coding。
-                    if (!model.settings.captureEnabled || model.status == "定时暂停") && model.message.isEmpty {
+                    if model.recordingPaused && model.message.isEmpty {
                         Button("恢复记录") { model.resumeRecording() }.buttonStyle(.link).font(.system(size: 11))
                     }
                     HistoryListStatistics(footer: model.listState.footerState)
@@ -121,7 +120,6 @@ public struct HistoryView: View {
                             if !model.categories.isEmpty { Divider().frame(height: 16).padding(.horizontal, 6) }
                             ForEach(model.categories) { categoryTab($0).id($0.id) }
                             ToolbarIconButton(symbol: "plus", help: "新建分类") { model.editCategory() }
-                                .popover(isPresented: $model.showingCategoryEditor, arrowEdge: .top) { CategoryEditor(model: model) }
                         // 标签从收藏右侧依次排列，剩余空间不能把分类推到第二行，by AI.Coding。
                         }.fixedSize(horizontal: true, vertical: false)
                             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { categoryContentWidth = $0 }
@@ -146,6 +144,8 @@ public struct HistoryView: View {
                             ForEach(model.categories) { category in
                                 Button(category.name) { model.selectCategories([category.id]); proxy.scrollTo(category.id, anchor: .center) }
                             }
+                            Divider()
+                            Button("新建分类…") { model.editCategory() }
                         } label: { Image(systemName: "chevron.down.circle").font(.system(size: 15)) }
                             .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
                             .help("全部分类").accessibilityLabel("全部分类")
@@ -153,6 +153,8 @@ public struct HistoryView: View {
                 }.frame(width: geometry.size.width, alignment: .leading)
             }
         }.frame(height: 32)
+            // 弹窗锚定可见导航区域；加号滚出视口时，溢出菜单和快捷键仍能打开编辑器。
+            .popover(isPresented: $model.showingCategoryEditor, arrowEdge: .top) { CategoryEditor(model: model) }
     }
     /// 类型菜单与类型标签同一选择规则；选中时显示类型名并高亮，by AI.Coding。
     private var kindMenu: some View {
@@ -198,14 +200,13 @@ private struct HistorySearchInput: View {
     let focus: UUID
     var body: some View {
         SearchField(text: $input.literal, focus: focus, onChange: model.searchChanged,
-            onNavigate: model.navigate, onEnter: { model.focusResults?() }, onEscape: { model.closePanel?() }, onDelete: model.deleteSelected)
+            onNavigate: model.navigate, onEnter: { model.focusResults?() }, onEscape: { model.closePanel?() })
     }
 }
 private struct HistoryStrip: View {
     let model: HistoryViewModel
     @ObservedObject var list: HistoryListState
     let cardHeight: CGFloat
-    let availableCardHeight: CGFloat
     let categoryID: String?
     let categories: [ClipCategory]
     let target: TargetToken?
@@ -258,7 +259,7 @@ private struct HistoryStrip: View {
                         }
                 }
             }
-        }.frame(maxWidth: .infinity).frame(height: availableCardHeight + 20).clipped()
+        }.frame(maxWidth: .infinity).frame(height: cardHeight + 20).clipped()
         // 隐藏状态用明确占位替代整层模糊，避免正文轮廓泄露及持续模糊合成，by AI.Coding。
         .opacity(hideContents ? 0 : 1).allowsHitTesting(!hideContents).accessibilityHidden(hideContents)
         .overlay {
@@ -273,7 +274,7 @@ private struct HistoryStrip: View {
         .background {
             #if DEBUG
             if GUIAcceptanceProbe.configuration != nil {
-                GUIRenderWitness(displayCycle: model.focusRequest, query: model.query, generation: model.guiQueryGeneration, first: model.items.first?.preview, firstID: model.items.first?.id, firstImage: model.items.first?.kind == .image, ready: model.items.first?.kind != .image || GUIAcceptanceProbe.imageReadyIDs.contains(model.items.first?.id ?? ""), loading: model.historyBusy).frame(width: 1, height: 1)
+                GUIRenderWitness(displayCycle: focusRequest, query: model.query, generation: model.guiQueryGeneration, first: model.items.first?.preview, firstID: model.items.first?.id, firstImage: model.items.first?.kind == .image, ready: model.items.first?.kind != .image || GUIAcceptanceProbe.imageReadyIDs.contains(model.items.first?.id ?? ""), loading: model.historyBusy).frame(width: 1, height: 1)
             }
             #else
             EmptyView()
@@ -305,7 +306,7 @@ private struct HistoryEmptyState: View {
                     if !searched && !filtered && (model.favorites || !model.activeCategories.isEmpty) {
                         Button("查看剪贴板") { model.selectKind(nil) }
                     }
-                    if !model.settings.captureEnabled || model.status == "定时暂停" {
+                    if model.recordingPaused {
                         Button("恢复记录") { model.resumeRecording() }
                     }
                 }.buttonStyle(.bordered).controlSize(.small)

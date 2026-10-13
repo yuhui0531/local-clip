@@ -5,6 +5,30 @@ import Testing
 @testable import LocalClipMac
 
 @MainActor struct SettingsAppearanceTests {
+    /// 设置中的中文组合输入先处理Esc；组合结束后同一按键仍可关闭窗口，by AI.Coding。
+    @Test func settingsEscapePreservesMarkedText() throws {
+        _ = NSApplication.shared
+        let window = SettingsWindow(contentRect: .init(x: 0, y: 0, width: 200, height: 100), styleMask: .titled, backing: .buffered, defer: true)
+        window.isReleasedWhenClosed = false
+        let editor = NSTextView(frame: .init(x: 0, y: 0, width: 200, height: 100))
+        window.contentView = editor
+        #expect(window.makeFirstResponder(editor))
+        editor.setMarkedText("拼", selectedRange: NSRange(location: 1, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+        var closed = false
+        let observer = NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: window, queue: .main) { _ in
+            MainActor.assumeIsolated { closed = true }
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
+        let escape = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+            windowNumber: window.windowNumber, context: nil, characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53))
+        #expect(editor.hasMarkedText())
+        window.sendEvent(escape)
+        #expect(!closed)
+        editor.unmarkText()
+        window.sendEvent(escape)
+        #expect(closed)
+    }
+
     /// 旧JSON缺少新字段时保留默认值；所有主题与紧凑选择可往返保存。
     @Test func appearanceDefaultsAndPersistence() async throws {
         let original = try JSONEncoder().encode(SettingsSnapshot())

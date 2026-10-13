@@ -198,10 +198,20 @@ import LocalClipCore
         try await model.start(); defer { model.capture.stop() }
         model.updateSettings { $0.pauseUntil = SystemClock().now() + 60_000 }
         try await until { model.settings.pauseUntil != nil }
-        model.resumeRecording()
+        #expect(model.recordingPaused)
+        model.toggleRecording()
         try await until { model.settings.captureEnabled && model.settings.pauseUntil == nil }
+        #expect(!model.recordingPaused)
         let saved = try await store.settings()
         #expect(saved.captureEnabled && saved.pauseUntil == nil)
+        model.toggleRecording()
+        try await until { !model.settings.captureEnabled }
+        #expect(model.recordingPaused)
+        model.toggleRecording()
+        try await until { model.settings.captureEnabled }
+        model.updateSettings { $0.pauseUntil = SystemClock().now() - 1 }
+        try await until { model.settings.pauseUntil != nil }
+        #expect(!model.recordingPaused)
         model.query = "keep my search"; model.favorites = true; model.kind = .image
         model.sourceFilter = "com.example"; model.dateFilterEnabled = true
         model.categoryID = "category"; model.categoryFilters = ["category"]
@@ -225,15 +235,13 @@ import LocalClipCore
     }
     /// 空输入也不删除历史，IME和原生文本编辑仍由field editor处理。
     @Test func backspaceInEmptySearchNeverDeletesRecord() {
-        var deletes = 0
-        let field = SearchField(text: .constant(""), focus: UUID(), onChange: {}, onNavigate: { _ in }, onEnter: {}, onEscape: {}, onDelete: { deletes += 1 })
+        let field = SearchField(text: .constant(""), focus: UUID(), onChange: {}, onNavigate: { _ in }, onEnter: {}, onEscape: {})
         let coordinator = field.makeCoordinator(), editor = NSTextView(), control = NSSearchField()
         for text in ["ab", "a", "", ""] {
             editor.string = text
             #expect(!coordinator.control(control, textView: editor, doCommandBy: #selector(NSResponder.deleteBackward(_:))))
         }
         #expect(!coordinator.control(control, textView: editor, doCommandBy: #selector(NSResponder.deleteForward(_:))))
-        #expect(deletes == 0)
     }
     /// 终端应用、嵌入式终端和只有窗口角色的Zed不能转为文件正文。
     @Test func terminalsAndUnknownWindowsNeverConvertCodeFiles() {

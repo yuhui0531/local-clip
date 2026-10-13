@@ -86,6 +86,12 @@ import LocalClipCore
         let timed = (policy.pauseUntil ?? 0) > clock.now()
         if timed != timedPauseActive { timedPauseActive = timed; rebaseline(); setState(timed ? "定时暂停" : "正常"); return false }
         if timed || pausePending || !policy.captureEnabled || capacityBlocked { baseline = board.changeCount; return false }
+        // 精确自写收据先于正文读取，避免为随后丢弃的PNG恢复触发昂贵的TIFF生成。
+        // matches读取标记期间也可能发生用户复制，因此再次核对计数，不能跳过新世代。
+        if let receipt = ownReceipt, receipt.successful, board.changeCount == receipt.count,
+           board.matches(receipt), board.changeCount == receipt.count {
+            baseline = receipt.count; ownReceipt = nil; ignored(.selfWrite); return false
+        }
         return true
     }
     public func tick() {

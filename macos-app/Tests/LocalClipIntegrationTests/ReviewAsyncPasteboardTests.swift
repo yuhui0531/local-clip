@@ -127,8 +127,7 @@ private final class CountingBodyProvider: NSObject, NSPasteboardItemDataProvider
         #expect(snapshot.payload.items.count == 2)
         #expect(snapshot.payload.items[0].representations.first { $0.type == SupportedType.html }?.data == Data("<b>中文</b>".utf8))
         #expect(snapshot.payload.items[1].representations.first { $0.type == SupportedType.png }?.data == Data([1,2,3]))
-        // 同项已有PNG时TIFF为冗余副本，不读取不保存。
-        #expect(snapshot.payload.items[1].representations.contains { $0.type == SupportedType.tiff } == false)
+        #expect(snapshot.payload.items[1].representations.first { $0.type == SupportedType.tiff }?.data == Data([4,5,6]))
     }
     /// 另一进程在私有命名板写入一万次时由生产 captureAsync 读取并核对守恒，by AI.Coding。
     @Test(.enabled(if: ProcessInfo.processInfo.environment["LOCALCLIP_NAMED_TEST"] == "1"

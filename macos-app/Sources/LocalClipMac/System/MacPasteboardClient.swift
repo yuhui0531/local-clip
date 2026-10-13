@@ -32,8 +32,8 @@ public enum PasteboardBody: Sendable {
         var items: [PasteboardItemValue] = []; var size: Int64 = 0
         for (index, list) in types.enumerated() {
             if list.contains("com.apple.pasteboard.promised-file-url"), !list.contains(SupportedType.fileURL) { return .failure(.unsupported) }
-            // 同项有PNG时不读取TIFF：既省去大块未压缩数据的读取，也不触发本应用写入的按需TIFF转换，by AI.Coding。
-            let supported = list.filter { SupportedType.all.contains($0) && !($0 == SupportedType.tiff && list.contains(SupportedType.png)) }.sorted()
+            // PNG不能替代尚未读取的TIFF；页数、精度与元数据可能不同。
+            let supported = list.filter { SupportedType.all.contains($0) }.sorted()
             guard !supported.isEmpty else { return .failure(.unsupported) }
             var values: [Representation] = []
             for type in supported {

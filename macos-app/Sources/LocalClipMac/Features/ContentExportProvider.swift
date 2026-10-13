@@ -75,8 +75,7 @@ private final class ClipWriter: NSObject, NSPasteboardWriting {
     let index: Int
     let types: [String]
     let store: HistoryStore
-    private let queue = OperationQueue()
-    init(access: ClipExportAccess, index: Int, types: [String], store: HistoryStore) { self.access = access; self.index = index; self.types = types; self.store = store; queue.maxConcurrentOperationCount = 1 }
+    init(access: ClipExportAccess, index: Int, types: [String], store: HistoryStore) { self.access = access; self.index = index; self.types = types; self.store = store }
     func filePromiseProvider(_ provider: NSFilePromiseProvider, fileNameForType fileType: String) -> String { "LocalClip-" + UUID().uuidString + ".png" }
     private final class CompletionBox: @unchecked Sendable {
         let callback: (Error?) -> Void

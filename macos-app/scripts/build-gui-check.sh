@@ -4,6 +4,8 @@ set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 output="${1:?Pass an isolated evidence directory}"
 output="$(cd "$output" && pwd)"
+mode="${2:-named}"
+case "$mode" in named|external) ;; *) echo "Mode must be named or external" >&2; exit 2 ;; esac
 export CLANG_MODULE_CACHE_PATH="$root/.cache/clang"
 export SWIFTPM_MODULECACHE_OVERRIDE="$root/.cache/swift"
 scratch="$root/.build-gui-check"
@@ -18,16 +20,17 @@ cp "$root/Resources/LocalClip.icns" "$bundle/Contents/Resources/LocalClip.icns"
 for resource in "$bin"/*.bundle; do
   [ ! -d "$resource" ] || cp -R "$resource" "$bundle/Contents/Resources/"
 done
-python3 - "$bundle" "$output" <<'PY'
+python3 - "$bundle" "$output" "$mode" <<'PY'
 import sys,plistlib,json
 from pathlib import Path
-bundle,output=map(Path,sys.argv[1:])
+bundle,output=map(Path,sys.argv[1:3])
 p=bundle/'Contents/Info.plist';info=plistlib.loads(p.read_bytes())
 info['CFBundleIdentifier']='local.localclip.gui-check'
 info['CFBundleName']='LocalClip GUI Check'
 info['LSUIElement']=False
 p.write_bytes(plistlib.dumps(info,sort_keys=False))
 config={'root':str(output/'working-store'),'output':str(output),'board':'local.localclip.gui.scaling-check'}
+if sys.argv[3] == 'external': config['externalPasteboard']='true'
 (bundle/'Contents/Resources/IsolatedGUIProbe.json').write_text(json.dumps(config,indent=2))
 PY
 codesign --force --sign - "$bundle"

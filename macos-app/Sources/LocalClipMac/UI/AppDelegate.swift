@@ -85,7 +85,8 @@ import LocalClipCore
             let store = try HistoryStore(location: location, initialSettings:initialSettings, extractor: ContentDecoder.extract)
             let access: NativePasteboardAccess
             #if DEBUG
-            if let name = GUIAcceptanceProbe.configuration?["board"] { access = NativePasteboardAccess(NSPasteboard(name: .init(name))) }
+            if GUIAcceptanceProbe.usesExternalPasteboard { access = NativePasteboardAccess() }
+            else if let name = GUIAcceptanceProbe.configuration?["board"] { access = NativePasteboardAccess(NSPasteboard(name: .init(name))) }
             else { access = NativePasteboardAccess() }
             #else
             access = NativePasteboardAccess()
@@ -218,7 +219,7 @@ import LocalClipCore
     }
     private var statusMenuTitle: String { "LocalClip · " + HistoryView.statusLabel(model?.capture.state ?? "准备中") }
     private func updateCaptureItem(_ item: NSMenuItem) {
-        let paused = model?.settings.captureEnabled == false
+        let paused = model?.recordingPaused == true
         item.title = paused ? "恢复记录" : "暂停记录"
         item.image = NSImage(systemSymbolName: paused ? "play.circle" : "pause.circle", accessibilityDescription: nil)
     }
@@ -400,13 +401,17 @@ import LocalClipCore
         // orderFront不激活应用，也不把反馈窗口设为key；淡入淡出避免突兀出现。
         feedbackPanel?.alphaValue = 0
         feedbackPanel?.orderFrontRegardless()
-        NSAnimationContext.runAnimationGroup { $0.duration = 0.15; feedbackPanel?.animator().alphaValue = 1 }
+        NSAnimationContext.runAnimationGroup {
+            $0.duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : 0.15
+            feedbackPanel?.animator().alphaValue = 1
+        }
         feedbackTask = Task { [weak self] in
             do { try await Task.sleep(for: .seconds(3)) } catch { return }
             guard let panel = self?.feedbackPanel else { return }
             // 不用异步动画接口：其闭包跨并发边界，严格并发检查下无法编译，by AI.Coding。
-            NSAnimationContext.runAnimationGroup({ $0.duration = 0.25; panel.animator().alphaValue = 0 }, completionHandler: nil)
-            try? await Task.sleep(for: .milliseconds(250))
+            let duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0.0 : 0.25
+            NSAnimationContext.runAnimationGroup({ $0.duration = duration; panel.animator().alphaValue = 0 }, completionHandler: nil)
+            try? await Task.sleep(for: .seconds(duration))
             if !Task.isCancelled { panel.orderOut(nil) }
         }
     }
@@ -426,8 +431,7 @@ import LocalClipCore
     }
     /// 按点击时的状态保存明确意图，恢复仍从新计数开始，by AI.Coding。
     @objc private func toggleCapture() {
-        guard let model else { return }
-        model.setCaptureEnabled(!model.settings.captureEnabled)
+        model?.toggleRecording()
     }
     /// 外部前台身份由系统公开事件更新，不用于复制来源归因。
     private func observeLifecycle() {

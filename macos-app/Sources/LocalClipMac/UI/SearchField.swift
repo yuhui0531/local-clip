@@ -8,7 +8,6 @@ public struct SearchField: NSViewRepresentable {
     var onNavigate: (Int) -> Void
     var onEnter: () -> Void
     var onEscape: () -> Void
-    var onDelete: () -> Void = {}
     /// 原生 field editor 决定输入法候选，不抢 Enter。
     public func makeNSView(context: Context) -> NSSearchField {
         let field = NSSearchField(); field.placeholderString = "搜索历史"

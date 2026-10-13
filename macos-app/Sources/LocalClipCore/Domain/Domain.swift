@@ -52,10 +52,9 @@ public struct PasteboardItemValue: Codable, Equatable, Sendable {
     }
 }
 extension PasteboardItemValue {
-    /// 同一项已有PNG时，TIFF只是同一张图的未压缩副本（常为PNG的10–20倍），不入库；恢复时由PNG按需生成，by AI.Coding。
+    /// 保留旧接口；类型共存无法证明像素、页数或元数据等价，必须保留原始表示。
     public var withoutRedundantTIFF: PasteboardItemValue {
-        guard representations.contains(where: { $0.type == SupportedType.png }) else { return self }
-        var copy = self; copy.representations.removeAll { $0.type == SupportedType.tiff }; return copy
+        self
     }
 }
 public struct ClipboardPayload: Codable, Equatable, Sendable {
@@ -87,7 +86,8 @@ public struct ClipboardPayload: Codable, Equatable, Sendable {
         return result
     }
     public var fingerprint: String { ContentFingerprint.hash(canonicalData) }
-    public var withoutRedundantTIFF: ClipboardPayload { .init(items.map(\.withoutRedundantTIFF)) }
+    /// 保留旧接口，不依据类型删除任何原始表示。
+    public var withoutRedundantTIFF: ClipboardPayload { self }
     public var kind: ClipKind {
         if hasFileReferences { return fileURLs != nil ? .file : .mixed }
         let types = Set(items.flatMap { $0.representations.map(\.type) })
