@@ -17,10 +17,18 @@ public enum ThumbnailRenderer {
         }
         return exceededPixelLimit ? .tooManyPixels : .unavailable
     }
-    /// 只派生第一帧的有界缩略图，不修改原始图片或多页TIFF。
+    /// 图片文件引用直接从磁盘下采样；文件随时可能变更或删除，结果不入库，by AI.Coding。
+    public static func render(fileAt url: URL) -> ThumbnailResult {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary) else { return .unavailable }
+        return render(source)
+    }
     private static func render(_ data: Data) -> ThumbnailResult {
-        guard let source = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary),
-              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+        guard let source = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary) else { return .unavailable }
+        return render(source)
+    }
+    /// 只派生第一帧的有界缩略图，不修改原始图片或多页TIFF。
+    private static func render(_ source: CGImageSource) -> ThumbnailResult {
+        guard let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
               let width = properties[kCGImagePropertyPixelWidth] as? NSNumber, let height = properties[kCGImagePropertyPixelHeight] as? NSNumber else { return .unavailable }
         guard width.int64Value > 0, height.int64Value > 0, width.int64Value <= 40_000_000 / height.int64Value else { return .tooManyPixels }
         let options: [CFString: Any] = [kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceThumbnailMaxPixelSize: 800,
@@ -31,6 +39,23 @@ public enum ThumbnailRenderer {
         CGImageDestinationAddImage(destination, image, nil)
         guard CGImageDestinationFinalize(destination) else { return .unavailable }
         return .image(output as Data)
+    }
+}
+/// 文本文件引用只读开头一段作卡片预览；按内容判断而非扩展名，非UTF-8或含NUL视为不可预览，卡片退回文件样式，by AI.Coding。
+public enum TextFilePreview {
+    /// 扩展名的系统类型会被第三方应用改写，.tsx/.vue等也没有系统类型；这里只排除图片与RTF，其余交给read按内容判断。
+    public static func isCandidate(_ path: String) -> Bool {
+        !ClipboardPayload.isImageFile(path) && !["rtf", "rtfd"].contains((path as NSString).pathExtension.lowercased())
+    }
+    public static func read(_ url: URL, limit: Int = 4096) -> String? {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+        guard let data = try? handle.read(upToCount: limit), !data.isEmpty, !data.contains(0) else { return nil }
+        // 只有读满上限时截断处才可能切开多字节字符，最多回退3字节再按UTF-8校验。
+        for trim in 0...(data.count == limit ? min(3, data.count - 1) : 0) {
+            if let text = String(data: data.dropLast(trim), encoding: .utf8) { return text }
+        }
+        return nil
     }
 }
 public actor DerivedContentService {

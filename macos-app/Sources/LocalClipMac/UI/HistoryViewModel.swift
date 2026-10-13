@@ -9,7 +9,14 @@ import LocalClipCore
     public let derived: DerivedContentService
     /// 卡片派生显示结果按记录缓存；同一ID内容不变，切换分类回到已见卡片时首帧即是最终内容，by AI.Coding。
     let characterCounts = NSCache<NSString, NSNumber>()
-    let thumbnails: NSCache<NSString, NSImage> = { let value = NSCache<NSString, NSImage>(); value.countLimit = 120; return value }()
+    /// 图片文件引用的文件数；预览文本截断时据此显示准确张数。
+    let fileCounts = NSCache<NSString, NSNumber>()
+    /// 文本文件引用的开头内容。
+    let fileTexts: NSCache<NSString, NSString> = { let value = NSCache<NSString, NSString>(); value.countLimit = 200; return value }()
+    let thumbnails = ThumbnailMemoryCache()
+    private var visibleThumbnailIDs: Set<ClipID> = []
+    private var thumbnailCleanup: Task<Void, Never>?
+    var thumbnailCleanupDelay: Duration = .seconds(30)
     let queryState = HistoryQueryState()
     let listState = HistoryListState()
     public var query: String { get { queryState.literal } set { queryState.literal = newValue } }
@@ -210,10 +217,27 @@ import LocalClipCore
             }
         }
     }
-    /// 隐藏期间只记失效；重新打开先展示列表再读廉价元数据，by AI.Coding。
+    /// 记录真正可见的卡片；窗口隐藏产生的离屏通知不丢掉最后一屏的热缓存，by AI.Coding。
+    func thumbnailVisibilityChanged(id: ClipID, visible: Bool) {
+        guard panelVisible else { return }
+        if visible { visibleThumbnailIDs.insert(id) } else { visibleThumbnailIDs.remove(id) }
+    }
+    /// 隐藏期间只记失效，30秒后回收离屏图片；快速重开取消清理，by AI.Coding。
     public func panelVisibilityChanged(_ visible: Bool) {
         panelVisible = visible
-        if !visible { cancelRename() }
+        thumbnailCleanup?.cancel(); thumbnailCleanup = nil
+        if !visible {
+            cancelRename()
+            let delay = thumbnailCleanupDelay
+            thumbnailCleanup = Task { [weak self] in
+                do { try await Task.sleep(for: delay) } catch { return }
+                guard let self, !Task.isCancelled, !self.panelVisible else { return }
+                // 仅释放可再生的离屏缓存，保留视口、选择、SwiftUI树和语法引擎，避免重开变慢。
+                self.thumbnails.retainOnly(self.visibleThumbnailIDs)
+                self.thumbnailCleanup = nil
+                await self.store.releaseThumbnailMemoryCache()
+            }
+        }
         guard visible, hiddenChanges else { return }
         hiddenChanges = false
         refresh()

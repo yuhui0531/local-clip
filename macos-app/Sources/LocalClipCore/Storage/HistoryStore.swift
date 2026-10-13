@@ -765,6 +765,10 @@ public actor HistoryStore: HistoryRepository {
     private var thumbnailCache: [ClipID: Data] = [:]
     private var thumbnailOrder: [ClipID] = []
     private var thumbnailBytes = 0
+    /// 隐藏后回收可再生的编码缓存；持久缩略图、原始数据及修订号不变，by AI.Coding。
+    public func releaseThumbnailMemoryCache() {
+        thumbnailCache.removeAll(); thumbnailOrder.removeAll(); thumbnailBytes = 0
+    }
     /// 不可变内容按ID缓存至多16MiB派生数据；当前可见性检查阻止删除后重生，by AI.Coding。
     public func cacheThumbnail(id: ClipID, revision expected: Int64, data: Data) throws -> Bool {
         let metadata = try? metadata(id: id, at: clock.now())
@@ -817,7 +821,10 @@ public actor HistoryStore: HistoryRepository {
         let cutoff = retentionCutoff(settings: settings, at: at)
         var values: [SQLValue] = [cutoff.map(SQLValue.integer) ?? .null, cutoff.map(SQLValue.integer) ?? .null]
         if request.favoritesOnly { clauses.append("isFavorite=1") }
-        if let kind = request.kind { clauses.append("kind=?"); values.append(.text(kind.rawValue)) }
+        // 全部为图片的文件引用仍是文件记录，同时出现在图片筛选中，by AI.Coding。
+        if request.kind == .image {
+            clauses.append("(kind='image' OR (kind='file' AND EXISTS(SELECT 1 FROM text_content WHERE clipID=clips.id) AND NOT EXISTS(SELECT 1 FROM text_content WHERE clipID=clips.id AND clip_image_path(plainText)=0)))")
+        } else if let kind = request.kind { clauses.append("kind=?"); values.append(.text(kind.rawValue)) }
         if let source = request.sourceBundleID { clauses.append("COALESCE(sourceBundleID,'')=?"); values.append(.text(source)) }
         if let from = request.from { clauses.append("lastCopiedAtMs>=?"); values.append(.integer(from)) }
         if let until = request.until { clauses.append("lastCopiedAtMs<?"); values.append(.integer(until)) }

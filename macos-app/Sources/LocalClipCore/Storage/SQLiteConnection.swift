@@ -24,6 +24,12 @@ final class SQLiteConnection {
             let source = name.map { String(decoding: UnsafeBufferPointer(start: $0, count: Int(sqlite3_value_bytes(values[2]))), as: UTF8.self) } ?? ""
             sqlite3_result_int(context, matcher.rank(body: body, count: bodyCount, needle: needle, needleCount: needleCount, source: source))
         }, nil, nil, { pointer in if let pointer { Unmanaged<SQLLiteralMatcher>.fromOpaque(pointer).release() } }) == SQLITE_OK else { throw StoreError.ioFailure }
+        // 图片筛选与卡片共用同一判定，文件引用的路径是否为可解码图片，by AI.Coding。
+        guard sqlite3_create_function_v2(handle, "clip_image_path", 1, SQLITE_UTF8 | SQLITE_DETERMINISTIC, nil, { context, count, values in
+            guard count == 1, let values, let text = sqlite3_value_text(values[0]) else { sqlite3_result_int(context, 0); return }
+            let path = String(decoding: UnsafeBufferPointer(start: text, count: Int(sqlite3_value_bytes(values[0]))), as: UTF8.self)
+            sqlite3_result_int(context, ClipboardPayload.isImageFile(path) ? 1 : 0)
+        }, nil, nil, nil) == SQLITE_OK else { throw StoreError.ioFailure }
     }
     deinit { if let handle { sqlite3_close(handle) } }
     /// 关闭所有语句后方可原子替换。

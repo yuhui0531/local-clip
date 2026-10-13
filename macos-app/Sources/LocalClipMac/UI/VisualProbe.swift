@@ -16,6 +16,11 @@ import LocalClipCore
         // 长文件名fixture用于检查卡片正文与辅助图标的空间分配。
         let file = directory.appendingPathComponent("LocalClip-source-example.txt")
         try Data("LocalClip synthetic file fixture".utf8).write(to: file)
+        // 图片文件引用应显示图片预览而非文件图标。
+        let imageFile = directory.appendingPathComponent("LocalClip-photo.png")
+        try fixtureImage().write(to: imageFile)
+        let secondImage = directory.appendingPathComponent("LocalClip-photo-2.png")
+        try fixtureImage().write(to: secondImage)
         let now = SystemClock().now()
         var inputs: [(ClipboardPayload, SourceAttribution)] = [
             (.init([.init([.init(SupportedType.string, Data("今天整理需求，明天处理代码。\n\n好的工具应该让工作流动起来。\nLocalClip · 只保存在这台 Mac".utf8))])]), .init(bundleID: "com.apple.TextEdit", name: "TextEdit")),
@@ -23,7 +28,8 @@ import LocalClipCore
             (.init([.init([.init(SupportedType.string, Data("func restore(_ clip: Clip) {\n  guard clip.isVisible else {\n    return\n  }\n  pasteboard.write(clip.payload)\n}\n\n// a->b · foo_bar · 50%".utf8))])]), .init(bundleID: "com.microsoft.VSCode", name: "Visual Studio Code")),
             (.init([.init([.init(SupportedType.html, Data("<b>让想法留在手边。</b><br><br>文字、链接与图片，<br>从复制开始，一次找回。".utf8))])]), .init(bundleID: "com.apple.iWork.Pages", name: "Pages")),
             (.init([.init([.init(SupportedType.png, try fixtureImage())])]), .init(bundleID: "com.apple.Preview", name: "预览")),
-            (.init([.init([.init(SupportedType.fileURL, Data(file.absoluteString.utf8))])]), .init(bundleID: "com.apple.finder", name: "Finder"))
+            (.init([.init([.init(SupportedType.fileURL, Data(file.absoluteString.utf8))])]), .init(bundleID: "com.apple.finder", name: "Finder")),
+            (.init([imageFile, secondImage].map { .init([.init(SupportedType.fileURL, Data($0.absoluteString.utf8))]) }), .init(bundleID: "com.apple.finder", name: "Finder"))
         ]
         let codeFixtures = [
             "{\n  \"name\": \"LocalClip 中文\",\n  \"count\": 42,\n  \"enabled\": true\n}",

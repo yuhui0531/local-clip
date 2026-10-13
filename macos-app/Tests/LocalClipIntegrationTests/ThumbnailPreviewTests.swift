@@ -8,6 +8,39 @@ import LocalClipCore
 @testable import LocalClipMac
 
 struct ThumbnailPreviewTests {
+    /// 文本文件引用只读开头；截断处的多字节字符、二进制与缺失文件都有确定结果。
+    @Test func textFileReferencePreview() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        for path in ["a.txt", "b.go", "c.tsx", "d.sql", "Makefile", "e.vue"] { #expect(TextFilePreview.isCandidate(path), "\(path)") }
+        for path in ["a.rtf", "b.png", "c.JPG"] { #expect(!TextFilePreview.isCandidate(path), "\(path)") }
+        let code = directory.appendingPathComponent("main.go"), pdf = directory.appendingPathComponent("doc.pdf")
+        try Data("package main\n\nfunc main() {}\n".utf8).write(to: code)
+        try Data([0x25, 0x50, 0x44, 0x46, 0x2D, 0x31, 0x2E, 0x37, 0x0A, 0xE2, 0xE3, 0xCF, 0xD3]).write(to: pdf)
+        #expect(TextFilePreview.read(code) == "package main\n\nfunc main() {}\n")
+        #expect(TextFilePreview.read(pdf) == nil)
+        let chinese = directory.appendingPathComponent("中文.txt"), binary = directory.appendingPathComponent("bin.txt")
+        try Data(String(repeating: "汉", count: 10).utf8).write(to: chinese)
+        try Data([0x41, 0x00, 0x42]).write(to: binary)
+        #expect(TextFilePreview.read(chinese) == String(repeating: "汉", count: 10))
+        #expect(TextFilePreview.read(chinese, limit: 7) == "汉汉")
+        #expect(TextFilePreview.read(binary) == nil)
+        #expect(TextFilePreview.read(directory.appendingPathComponent("missing.txt")) == nil)
+    }
+    /// 图片文件引用从磁盘生成预览；文件缺失或内容不是图片时返回不可用，卡片退回普通文件样式。
+    @Test func imageFileReferenceThumbnail() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let image = directory.appendingPathComponent("photo.png"), fake = directory.appendingPathComponent("fake.png")
+        try ImageFixtures.image(width: 120, height: 60).write(to: image)
+        try Data("not an image".utf8).write(to: fake)
+        guard case .image(let data) = ThumbnailRenderer.render(fileAt: image) else { Issue.record("图片文件应生成预览"); return }
+        #expect(NSImage(data: data)?.size.width ?? 0 > 0)
+        guard case .unavailable = ThumbnailRenderer.render(fileAt: fake) else { Issue.record("非图片内容不应生成预览"); return }
+        guard case .unavailable = ThumbnailRenderer.render(fileAt: directory.appendingPathComponent("missing.png")) else { Issue.record("缺失文件不应生成预览"); return }
+    }
     /// 两页不同尺寸的真实TIFF，用于确认只派生首页预览而保留所有原始页。
     private func multipageTIFF() throws -> Data {
         let output = NSMutableData()
@@ -122,7 +155,9 @@ struct ThumbnailPreviewTests {
             let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
             host.cacheDisplay(in: host.bounds, to: bitmap); rendered = bitmap
             text = try visibleText(bitmap)
-            if text.contains("无法生成预览") { break }
+            // 坏图可能先完成；同时等待有效图渲染结束，不能把异步加载中的另一张图判成回归，by AI.Coding。
+            if text.contains("无法生成预览"), !text.contains("正在加载预览"),
+               model.items.contains(where: { model.thumbnails.object(forKey: $0.id as NSString) != nil }) { break }
             try await Task.sleep(for: .milliseconds(20))
         } while ContinuousClock.now < deadline
         #expect(text.contains("无法生成预览") && text.contains("原始数据已保留"), "\(text)")

@@ -1,6 +1,8 @@
 // 跨模块的纯值契约，不携带系统对象，by AI.Coding。
 import Foundation
 import CryptoKit
+import ImageIO
+import UniformTypeIdentifiers
 public typealias ClipID = String
 public typealias Instant = Int64
 public let dayMS: Int64 = 86_400_000
@@ -101,6 +103,12 @@ public struct ClipboardPayload: Codable, Equatable, Sendable {
               let text = String(data: value.data, encoding: .utf8) else { return .text }
         return Self.webLink(text) != nil ? .url : .text
     }
+    /// 系统能解码的图片文件，只看扩展名不读文件；SVG等无法下采样的图片类型不算，by AI.Coding。
+    public static func isImageFile(_ path: String) -> Bool {
+        guard let type = UTType(filenameExtension: (path as NSString).pathExtension), type.conforms(to: .image) else { return false }
+        return decodableImageTypes.contains(type.identifier)
+    }
+    private static let decodableImageTypes = Set(CGImageSourceCopyTypeIdentifiers() as? [String] ?? [])
     /// 整段文本去首尾空白后是唯一的网址才返回；夹带空白或其他文字的段落仍是文本。
     /// 无协议时交给系统链接识别（按真实顶级域判断），"README.md"、"v0.3.22"等不会误判，结果补全为http。
     public static func webLink(_ text: String) -> URL? {
