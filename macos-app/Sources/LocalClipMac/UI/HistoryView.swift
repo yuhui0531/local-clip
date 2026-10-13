@@ -1,7 +1,7 @@
 // Paste 类横向底部卡片面板，真实数据驱动的原生界面，by AI.Coding。
 import AppKit
 import SwiftUI
-import VisionKit
+@preconcurrency import VisionKit
 import LocalClipCore
 public struct HistoryView: View {
     @ObservedObject var model: HistoryViewModel
