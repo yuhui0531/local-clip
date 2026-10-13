@@ -563,11 +563,11 @@ import LocalClipCore
         select(items[min(items.count - 1, max(0, current + delta))].id)
     }
     /// 按配置动作执行；输出状态不会写成目标已接收。
-    public func perform(_ format: OutputFormat? = nil, action: PasteAction? = nil) {
-        let ids = orderedSelection
+    public func perform(_ format: OutputFormat? = nil, action: PasteAction? = nil, transform: TextTransform? = nil, ids: [ClipID]? = nil) {
+        let ids = ids ?? orderedSelection
         guard !ids.isEmpty else { return }
         Task {
-            let result = await paste.perform(.init(ids: ids, format: format ?? settings.defaultFormat, action: action ?? settings.defaultAction, target: target))
+            let result = await paste.perform(.init(ids: ids, format: format ?? settings.defaultFormat, action: action ?? settings.defaultAction, target: target, transform: transform))
             showPasteResult(result)
             notifyPasteResult(result)
             await recordUse(ids, result)
@@ -1005,6 +1005,88 @@ import LocalClipCore
         guard let selectedID else { return }
         Task { do { let detail = try await store.detail(id: selectedID, at: clock.now()); if let urls = detail.payload.fileURLs { filePreview.show(urls, excludeFromSharing: settings.excludeFromSharing) } else { showingDetail = true; detailVisibilityChanged() } } catch { message = "预览不可用，记录已变化" } }
     }
+    /// 转换菜单按需读取所选内容并逐项判定，不适用的置灰而不隐藏，位置固定便于记忆；按住⌥切换为仅复制，by AI.Coding。
+    public func showTransformMenu(ids explicit: [ClipID]? = nil, atSelectedCard: Bool = false) {
+        let ids = explicit ?? orderedSelection
+        guard !ids.isEmpty else { return }
+        Task {
+            var records: [ClipboardPayload] = []
+            do { for id in ids { records.append(try await store.loadPayload(id: id, at: clock.now())) } }
+            catch { message = "转换不可用，记录已变化"; return }
+            let (available, reason) = await Task.detached { Self.transformAvailability(records) }.value
+            guard explicit != nil || ids == orderedSelection else { return }
+            let menu = NSMenu(); menu.autoenablesItems = false
+            let target = TransformMenuTarget { [weak self] transform, copyOnly in self?.perform(.plainText, action: copyOnly ? .copy : nil, transform: transform, ids: ids) }
+            if let reason { let item = NSMenuItem(title: reason, action: nil, keyEquivalent: ""); item.isEnabled = false; menu.addItem(item); menu.addItem(.separator()) }
+            var group = 0
+            for transform in TextTransform.allCases {
+                if transform.group != group { menu.addItem(.separator()); group = transform.group }
+                // 默认操作为直接粘贴时才提供⌥交替项；交替项必须紧跟主项。
+                for copyOnly in settings.defaultAction == .directPaste ? [false, true] : [false] {
+                    let item = NSMenuItem(title: transform.title + (copyOnly ? "（仅复制）" : ""), action: #selector(TransformMenuTarget.choose(_:)), keyEquivalent: "")
+                    item.target = target; item.representedObject = transform.rawValue; item.tag = copyOnly ? 1 : 0
+                    item.isEnabled = available.contains(transform)
+                    if copyOnly { item.isAlternate = true; item.keyEquivalentModifierMask = .option } else { item.keyEquivalentModifierMask = [] }
+                    menu.addItem(item)
+                }
+            }
+            // ⌘T在所选卡片左上角弹出；鼠标入口在指针处弹出。
+            if atSelectedCard, let view = HistoryDragBridge.DragView.view(for: ids[0]) {
+                menu.popUp(positioning: nil, at: NSPoint(x: 12, y: view.isFlipped ? 12 : view.bounds.height - 12), in: view)
+            } else { menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil) }
+            withExtendedLifetime(target) {}
+        }
+    }
+    /// 转换菜单的可用项与整体不可用原因；文件记录的纯文本只是路径，与图片一样不提供转换，by AI.Coding。
+    nonisolated static func transformAvailability(_ records: [ClipboardPayload]) -> (Set<TextTransform>, String?) {
+        guard !records.contains(where: \.hasFileReferences), let text = try? OutputComposer.combine(records, format: .plainText).plainText else { return ([], "所选内容不含文本，无法转换") }
+        guard text.utf8.count <= TextTransform.byteLimit else { return ([], "内容过大（超过 4 MiB），无法转换") }
+        return (Set(TextTransform.allCases.filter { $0.isApplicable(text) }), nil)
+    }
+    /// 单项记录另存为文件，沿用拖出的格式规则；富文本可改选纯文本、RTF或HTML，链接存为.webloc。文件引用本身就是文件，不提供此操作，by AI.Coding。
+    public func saveSelectedToFile() {
+        guard let selectedID else { return }
+        Task {
+            do {
+                let access = try await store.exportAccess(id: selectedID)
+                let summary = try await store.metadata(id: selectedID, at: clock.now()).summary
+                let items = try await Task.detached { try access.itemTypes() }.value
+                guard items.count == 1, let types = items.first, !types.contains(SupportedType.fileURL) else { message = "多项记录请拖到Finder，每项生成一个文件"; return }
+                var options: [(title: String, fileExtension: String, data: @Sendable () throws -> Data)] = []
+                if let plan = try await ContentExportProvider.plan(access: access, index: 0, types: types) {
+                    options.append(("自动（.\(plan.fileExtension)）", plan.fileExtension, { try ContentExportProvider.data(plan, access: access, index: 0, types: types) }))
+                    // 富文本另可选择其余格式；自动方案已覆盖的格式不重复列出。
+                    let rich = types.contains(SupportedType.rtf) || types.contains(SupportedType.html)
+                    if rich, case .original = plan.format {
+                        options.append(("纯文本（.txt）", "txt", { try ContentExportProvider.data(.init(fileType: SupportedType.string, fileExtension: "txt", format: .plain("txt")), access: access, index: 0, types: types) }))
+                    }
+                    for (type, ext, title) in [(SupportedType.rtf, "rtf", "RTF（.rtf）"), (SupportedType.html, "html", "HTML（.html）")] where types.contains(type) && plan.fileExtension != ext {
+                        options.append((title, ext, { try access.itemData(index: 0, type: type) }))
+                    }
+                } else if types.contains(SupportedType.url) {
+                    options.append(("链接（.webloc）", "webloc", {
+                        let link = String(decoding: try access.itemData(index: 0, type: SupportedType.url), as: UTF8.self)
+                        return try PropertyListSerialization.data(fromPropertyList: ["URL": link], format: .xml, options: 0)
+                    }))
+                }
+                guard !options.isEmpty else { message = "该记录没有可存储的内容"; return }
+                let panel = NSSavePanel()
+                panel.canCreateDirectories = true; panel.isExtensionHidden = false
+                panel.nameFieldStringValue = ContentInspector.fileName(base: ContentInspector.exportBaseName(title: summary.title, copiedAt: summary.lastCopiedAt), index: nil, fileExtension: options[0].fileExtension)
+                let picker = SaveFormatPicker(panel: panel, extensions: options.map(\.fileExtension))
+                if options.count > 1 {
+                    let popup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 220, height: 26))
+                    popup.addItems(withTitles: options.map(\.title)); popup.target = picker; popup.action = #selector(SaveFormatPicker.changed(_:))
+                    panel.accessoryView = popup
+                }
+                guard panel.runModal() == .OK, let url = panel.url else { return }
+                let chosen = options[(panel.accessoryView as? NSPopUpButton)?.indexOfSelectedItem ?? 0].data
+                withExtendedLifetime(picker) {}
+                // 用户已在保存面板确认覆盖；原子写入不留下半截文件。
+                try await Task.detached { try chosen().write(to: url, options: .atomic) }.value
+            } catch { message = "存储失败，记录已变化或目标不可写" }
+        }
+    }
     /// 用户明确选择单个对象再打开，混合记录不会自动打开所有资源。
     public func openSelected(reveal: Bool = false, withApplication: Bool = false) {
         guard let selectedID else { return }
@@ -1026,4 +1108,22 @@ import LocalClipCore
         }
     }
 
+}
+/// 切换格式时同步修改文件名扩展名，保存面板的覆盖确认针对最终文件名，by AI.Coding。
+private final class SaveFormatPicker: NSObject {
+    let panel: NSSavePanel
+    let extensions: [String]
+    init(panel: NSSavePanel, extensions: [String]) { self.panel = panel; self.extensions = extensions }
+    @MainActor @objc func changed(_ sender: NSPopUpButton) {
+        panel.nameFieldStringValue = (panel.nameFieldStringValue as NSString).deletingPathExtension + "." + extensions[sender.indexOfSelectedItem]
+    }
+}
+/// 转换菜单项的动作目标；菜单弹出期间由调用方持有，by AI.Coding。
+private final class TransformMenuTarget: NSObject {
+    let handler: @MainActor (TextTransform, Bool) -> Void
+    init(_ handler: @escaping @MainActor (TextTransform, Bool) -> Void) { self.handler = handler }
+    @MainActor @objc func choose(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let transform = TextTransform(rawValue: raw) else { return }
+        handler(transform, sender.tag == 1)
+    }
 }

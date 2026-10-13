@@ -28,4 +28,10 @@ public enum OutputComposer {
         // 系统多项消费由目标决定；输出保留完整有序项目。
         return .init(items)
     }
+    /// 转换只作用于本次输出：先按纯文本合并，再转换，只写纯文本表示，by AI.Coding。
+    public static func transform(_ payload: ClipboardPayload, _ transform: TextTransform, language: String?) throws -> ClipboardPayload {
+        guard let text = payload.plainText else { throw StoreError.corruptPayload }
+        let output = try transform.apply(text, language: language)
+        return .init([.init([Representation(SupportedType.string, Data(output.utf8))], plainText: output)])
+    }
 }

@@ -908,7 +908,7 @@ public actor HistoryStore: HistoryRepository {
     }
     /// 导出仅占用自有临时空间，拒绝超配额，不淘汰历史；10分钟内文件租约保留。
     public func writeExport(_ data: Data, id: ClipID, revision: Int64, fileExtension: String = "png") throws -> URL {
-        guard ["png", "tiff", "jpg"].contains(fileExtension) else { throw StoreError.invalidSettings }
+        guard ["png", "tiff", "jpg"].contains(fileExtension) || ContentInspector.textExtensions.contains(fileExtension) else { throw StoreError.invalidSettings }
         _ = try metadata(id: id, at: clock.now())
         guard Int64(data.count) <= 50 * MiB else { throw StoreError.stalePreview }
         let settings = try settings(), usage = try usage()

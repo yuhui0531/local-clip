@@ -378,8 +378,12 @@ private enum PreservationImages {
         let error: Error? = await withCheckedContinuation { continuation in
             delegate.filePromiseProvider(provider, writePromiseTo: destination) { continuation.resume(returning: $0) }
         }
-        #expect(error != nil)
-        if reason == "existing-file" { #expect(try Data(contentsOf: destination) == existing) }
+        // 同名文件不再导致失败：写为"received 2.tiff"，已有文件逐字节不变（PRD F15），by AI.Coding。
+        #expect((error == nil) == (reason == "existing-file"))
+        if reason == "existing-file" {
+            #expect(try Data(contentsOf: destination) == existing)
+            #expect(try Data(contentsOf: root.appendingPathComponent("received 2.tiff")) == payload.items[0].representations[0].data)
+        }
         else { #expect(!FileManager.default.fileExists(atPath: destination.path)) }
         if reason != "deleted" { #expect(try await store.loadPayload(id: id, at: now).canonicalData == payload.canonicalData) }
         if reason == "quota" { #expect(error as? StoreError == .quotaExceeded) }

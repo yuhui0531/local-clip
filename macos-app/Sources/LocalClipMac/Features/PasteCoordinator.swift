@@ -44,8 +44,15 @@ struct SmartPastePlan {
             let started = ContinuousClock.now
             // 目标分类延后到应用焦点恢复后；分类前始终保留原文件表示，by AI.Coding。
             let settings = try await store.settings()
-            let smartFiles = settings.smartCodeFilePaste && !records.isEmpty && records.allSatisfy { $0.fileURLs != nil }
-            let raw = try await Task.detached { try OutputComposer.combine(records, format: smartFiles ? .original : request.format) }.value
+            // 转换不与代码文件智能粘贴叠加；先按纯文本合并再转换，在关闭面板前完成，失败时面板保持打开，by AI.Coding。
+            if request.transform != nil, records.contains(where: \.hasFileReferences) { return .failed("文件记录无法转换") }
+            let smartFiles = request.transform == nil && settings.smartCodeFilePaste && !records.isEmpty && records.allSatisfy { $0.fileURLs != nil }
+            let combined = try await Task.detached { try OutputComposer.combine(records, format: request.transform != nil ? .plainText : smartFiles ? .original : request.format) }.value
+            let raw: ClipboardPayload
+            if let transform = request.transform {
+                let language = transform == .markdownCodeBlock ? await SyntaxHighlighter.shared.language(of: combined.plainText ?? "") : nil
+                raw = try await Task.detached { try OutputComposer.transform(combined, transform, language: language) }.value
+            } else { raw = combined }
             let smartPasteEligible = smartFiles && request.action == .directPaste && !copyFilesToFinder
                 && applications.permitted && request.target != nil
             var payload = raw
@@ -179,7 +186,8 @@ struct SmartPastePlan {
                 return safeFallback((applications.pasteFailureReason ?? "粘贴指令未发出") + "，请手动粘贴")
             }
             return .commandSent
-        } catch StoreError.corruptPayload { return .failed("所选内容包含无文本项目，不能纯文本输出；请使用原格式") }
+        } catch let error as TransformError { return .failed(error.message) }
+        catch StoreError.corruptPayload { return .failed(request.transform == nil ? "所选内容包含无文本项目，不能纯文本输出；请使用原格式" : "所选内容包含无文本项目，无法转换") }
         catch StoreError.notFound { return .failed("内容已删除或到期，请重新选择") }
         catch { return .failed("复制失败，请重试") }
     }

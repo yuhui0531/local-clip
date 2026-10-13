@@ -598,6 +598,8 @@ private struct ClipCard: View, Equatable {
         interactiveCard.contextMenu {
                 Button("重命名") { model.beginRename(item.id) }
                 Button("原格式复制") { if !model.selectedIDs.contains(item.id) { model.select(item.id) }; model.perform(.original, action: .copy) }
+                Button("转换后粘贴… · ⌘T") { if !model.selectedIDs.contains(item.id) { model.select(item.id) }; model.showTransformMenu() }
+                    .disabled(item.kind == .image || item.kind == .file)
                 Button(item.isFavorite ? "取消收藏" : "收藏") { model.change(.favorites(model.selectedIDs.contains(item.id) ? model.orderedSelection : [item.id], !item.isFavorite)) }
                 Menu("加入分类") {
                     ForEach(model.categories) { category in Button(category.name) { model.setCategory(item.id, categoryID: category.id, included: true) } }
@@ -611,6 +613,7 @@ private struct ClipCard: View, Equatable {
                 Button("详情") { model.select(item.id); DispatchQueue.main.async { model.showingDetail = true } }
                 Button("预览 · Space") { model.select(item.id); model.quickLook() }
                 Button("打开 · ⌘O") { model.select(item.id); model.openSelected() }
+                if item.kind != .file { Button("存储为文件…") { model.select(item.id); model.saveSelectedToFile() } }
                 if item.kind == .file { Button("在Finder中显示") { model.select(item.id); model.openSelected(reveal: true) }; Button("打开方式…") { model.select(item.id); model.openSelected(withApplication: true) } }
                 Divider(); Button("删除", role: .destructive) { model.change(.delete(model.selectedIDs.contains(item.id) ? model.orderedSelection : [item.id])) }
             }
@@ -727,6 +730,8 @@ struct ClipInspector: View {
                     Button(role: .destructive) { model.change(.delete([detail.summary.id])) } label: { Label("删除", systemImage: "trash").font(.system(size: 12)) }
                         .buttonStyle(.plain).foregroundStyle(.red)
                     Spacer()
+                    Button { model.showTransformMenu(ids: [detail.summary.id]) } label: { Label("转换", systemImage: "wand.and.stars") }
+                        .buttonStyle(ToolbarTabStyle(selected: true)).disabled(detail.payload.plainText == nil).help("转换后粘贴 · ⌘T")
                     // 默认输出格式为主按钮，放在最右侧，与面板 Return 的默认结果一致，by AI.Coding。
                     if model.settings.defaultFormat == .plainText { copyButton("原格式复制", .original, enabled: true); copyButton("纯文本复制", .plainText, enabled: detail.payload.plainText != nil) }
                     else { copyButton("纯文本复制", .plainText, enabled: detail.payload.plainText != nil); copyButton("原格式复制", .original, enabled: true) }

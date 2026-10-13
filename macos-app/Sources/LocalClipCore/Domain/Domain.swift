@@ -350,8 +350,10 @@ public struct PasteRequest: Sendable {
     public var format: OutputFormat
     public var action: PasteAction
     public var target: TargetToken?
-    public init(ids: [ClipID], format: OutputFormat = .original, action: PasteAction = .copy, target: TargetToken? = nil) {
-        self.ids = ids; self.format = format; self.action = action; self.target = target
+    /// 本次输出的文字转换；nil保持原有输出，by AI.Coding。
+    public var transform: TextTransform?
+    public init(ids: [ClipID], format: OutputFormat = .original, action: PasteAction = .copy, target: TargetToken? = nil, transform: TextTransform? = nil) {
+        self.ids = ids; self.format = format; self.action = action; self.target = target; self.transform = transform
     }
 }
 public struct WriteReceipt: Sendable, Equatable { public var count: Int; public var fingerprint: String; public var successful: Bool; public init(count: Int, fingerprint: String, successful: Bool) { self.count = count; self.fingerprint = fingerprint; self.successful = successful } }
