@@ -965,6 +965,26 @@ public actor HistoryStore: HistoryRepository {
         do { try data.write(to: file, options: .atomic); guard try self.usage().measuredTotal <= settings.quotaBytes else { throw StoreError.quotaExceeded }; return file }
         catch { try? FileManager.default.removeItem(at: file); throw error }
     }
+    /// 拖给只认路径目标的图片长期保留（目标可能只引用该路径，如Typora），按内容去重；
+    /// 不随10分钟租约回收，也不计入历史配额，by AI.Coding。
+    public func writeDragFile(_ data: Data, id: ClipID, fileName: String) throws -> URL {
+        _ = try metadata(id: id, at: clock.now())
+        guard !fileName.isEmpty, !fileName.contains("/"), !fileName.hasPrefix("."),
+              ["png", "tiff", "jpg"].contains(URL(fileURLWithPath: fileName).pathExtension), data.count <= 50 * MiB else { throw StoreError.invalidSettings }
+        let folder = strategy.root.appendingPathComponent("DragFiles/" + ContentFingerprint.hash(data), isDirectory: true)
+        let file = folder.appendingPathComponent(fileName)
+        if FileManager.default.fileExists(atPath: file.path) { return file }
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try data.write(to: file, options: .atomic)
+        return file
+    }
+    /// 拖出图片文件的实际占用，供设置页手动清理入口展示，by AI.Coding。
+    public func dragFilesBytes() throws -> Int64 { try CommitStrategy.bytes(strategy.root.appendingPathComponent("DragFiles")) }
+    /// 用户确认后整体删除；只引用这些路径的文档会失去图片，历史记录不受影响，by AI.Coding。
+    public func clearDragFiles() throws {
+        let directory = strategy.root.appendingPathComponent("DragFiles")
+        if FileManager.default.fileExists(atPath: directory.path) { try FileManager.default.removeItem(at: directory) }
+    }
     /// 仅清理本应用导出目录中过期文件；不碰原件，不提前回收交给目标的租约。
     public func cleanExports() throws {
         let directory = strategy.root.appendingPathComponent("Exports")

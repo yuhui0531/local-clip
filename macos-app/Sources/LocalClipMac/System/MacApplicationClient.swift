@@ -8,6 +8,8 @@ import LocalClipCore
     private var focusTarget: TargetToken?
     private var rememberedFocus: AXUIElement?
     private var rememberedTerminalContext: Bool?
+    /// 打开面板时取不到控件身份（如Electron未开放AX树）时退化为应用级目标，粘贴时按当前焦点核对，by AI.Coding。
+    private var focusFollowsTarget = false
     private let logger = Logger(subsystem: "local.localclip.dev", category: "Paste")
     public private(set) var pasteFailureReason: String?
     /// 仅用户开启阶段计时时采集总AX阶段耗时，不记录正文，by AI.Coding。
@@ -98,22 +100,39 @@ import LocalClipCore
     public func rememberFocus(for target: TargetToken?) {
         let began = ContinuousClock.now
         defer { if timingEnabled { StageTiming.record("ax_remember_focus", since: began, count: 1) } }
-        focusTarget = target; rememberedFocus = nil; rememberedTerminalContext = nil; pasteFailureReason = nil
+        focusTarget = target; rememberedFocus = nil; rememberedTerminalContext = nil; pasteFailureReason = nil; focusFollowsTarget = false
         guard let target, permitted, isFrontmost(target) else {
-            reject(permitted ? "未记住目标焦点，请在目标应用重新打开历史" : "当前LocalClip尚未获得辅助功能权限")
+            reject(permitted ? "未记住目标焦点" : "当前LocalClip尚未获得辅助功能权限")
             return
         }
-        // 不在捕获焦点时切换Electron的辅助模式：实际VS Code会重建AX控件身份，
+        // 已暴露焦点时不切换Electron的辅助模式：实际VS Code会重建AX控件身份，
         // 使原焦点检查失效。直接读取当前已暴露的编辑控件元数据，保持目标状态不变。
         rememberedFocus = focusedElement(in: target)
         if let rememberedFocus { rememberedTerminalContext = terminalContext(rememberedFocus) }
+        else {
+            // Electron默认不暴露AX树：仅在取不到焦点时开启，开启会重建控件身份，因此本次不保存旧身份，
+            // 改为粘贴时读取当前焦点；后续打开面板即可正常记住原控件，by AI.Coding。
+            focusFollowsTarget = true
+            let application = AXUIElementCreateApplication(target.pid)
+            // 与焦点查询同样限时，无响应应用不能卡住打开面板。
+            AXUIElementSetMessagingTimeout(application, 0.1)
+            AXUIElementSetAttributeValue(application, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+        }
         logger.notice("stage=remember_focus pid=\(target.pid) captured=\(self.rememberedFocus != nil)")
     }
     /// 核对原焦点即可；编辑器、文档、画布等由目标应用处理原生粘贴。
     public func isPasteFocusReady(_ target: TargetToken) -> Bool {
         let began = ContinuousClock.now
         defer { if timingEnabled { StageTiming.record("ax_focus_check", since: began, count: 1) } }
-        guard focusTarget == target, let rememberedFocus else { return reject("未记住目标焦点，请在目标应用重新打开历史") }
+        guard focusTarget == target else { return reject("未记住目标应用") }
+        if focusFollowsTarget, rememberedFocus == nil {
+            // 应用级目标：前台身份由调用方核对。首次读到的焦点即固定为本次目标，后续复查按严格身份比对，
+            // 读取文件期间焦点移到终端面板等也不会把正文发往新控件；一直读不到焦点时仅凭前台应用粘贴。
+            rememberedFocus = focusedElement(in: target)
+            guard let rememberedFocus else { pasteFailureReason = nil; return true }
+            rememberedTerminalContext = terminalContext(rememberedFocus)
+        }
+        guard let rememberedFocus else { return reject("未记住目标焦点") }
         guard let focused = focusedElement(in: target), CFEqual(rememberedFocus, focused) else { return reject("原目标焦点尚未恢复或已经改变") }
         let enabled = attribute(kAXEnabledAttribute, of: focused) as? Bool
         // 原生粘贴不要求文本角色/AXIsEditable/AXValue setter；这些条件会误拒自绘编辑器及非文本目标。

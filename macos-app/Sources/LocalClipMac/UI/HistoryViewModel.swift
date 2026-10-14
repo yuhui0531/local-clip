@@ -128,6 +128,8 @@ import LocalClipCore
         }
     }
     @Published public private(set) var usage: StorageUsage?
+    /// 拖出图片文件占用；不计入历史容量，单独展示与清理，by AI.Coding。
+    @Published public private(set) var dragFilesBytes: Int64?
     @Published public var target: TargetToken?
     @Published public var focusRequest = UUID()
     /// 所有详情入口共享隐藏条件；隐藏是视觉策略，不禁止普通复制，by AI.Coding。
@@ -346,8 +348,16 @@ import LocalClipCore
     }
     /// 所有空间发布复用同值检查；失败不伪造释放结果，by AI.Coding。
     private func refreshUsage() async {
-        do { assignIfChanged(\.usage, try await store.usage()) }
+        do { assignIfChanged(\.usage, try await store.usage()); assignIfChanged(\.dragFilesBytes, try await store.dragFilesBytes()) }
         catch { message = "空间计量失败" }
+    }
+    /// 手动清理拖出图片文件；失败时如实提示，计量以实际剩余为准，by AI.Coding。
+    public func clearDragFiles() {
+        Task {
+            do { try await store.clearDragFiles(); notice("已清理拖出图片文件") }
+            catch { message = "拖出图片文件清理未完成，请检查访问权限" }
+            await refreshUsage()
+        }
     }
     /// 更新输入立即作废旧queryID，防抖20ms给检索和绘制保留延迟预算。
     /// 输入防抖；点击筛选是一次性动作，不等防抖直接查询，by AI.Coding。

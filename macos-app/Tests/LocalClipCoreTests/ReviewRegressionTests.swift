@@ -33,6 +33,16 @@ struct ReviewStorageRegressionTests {
         #expect(try access.itemData(index: 0, type: SupportedType.string) == Data("drag-original".utf8))
         let file = try await store.writeExport(Data([1,2,3]), id: id, revision: access.revision)
         #expect(try Data(contentsOf: file) == Data([1,2,3]))
+        // 拖给只认路径目标的图片按内容去重长期保留；名称不能逃出目录或换扩展名。
+        let dragged = try await store.writeDragFile(Data([4]), id: id, fileName: "截图.png")
+        let again = try await store.writeDragFile(Data([4]), id: id, fileName: "截图.png")
+        #expect(dragged.lastPathComponent == "截图.png" && again == dragged)
+        #expect(try await store.dragFilesBytes() > 0)
+        try await store.clearDragFiles()
+        #expect(try await store.dragFilesBytes() == 0 && !FileManager.default.fileExists(atPath: dragged.path))
+        for bad in ["../x.png", ".x.png", "x.txt"] {
+            await #expect(throws: StoreError.invalidSettings) { try await store.writeDragFile(Data([4]), id: id, fileName: bad) }
+        }
         let deletion = try await store.preview(.delete([id])); _ = try await store.apply(deletion.token)
         #expect(throws: StoreError.notFound) { try access.itemData(index: 0, type: SupportedType.string) }
     }

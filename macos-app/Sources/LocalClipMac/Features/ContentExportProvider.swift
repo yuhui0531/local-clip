@@ -7,8 +7,12 @@ import LocalClipCore
 @MainActor final class ContentExportProvider {
     /// 内部令牌只供本进程分类；每个真实项目有独立公开提供者。图片与文字项提供文件承诺，链接与文件引用沿用系统原生拖放，by AI.Coding。
     static func writers(ids: [ClipID], store: HistoryStore, token: String, register: (ClipExportAccess) -> Void) async throws -> [any NSPasteboardWriting] {
-        var result: [any NSPasteboardWriting] = []
+        var result: [(any NSPasteboardWriting)?] = []
         var promises: [FilePromise] = []
+        var pending: [(slot: Int, promise: FilePromise, types: [String], eager: [String: Data])] = []
+        let smartCode = try await store.settings().smartCodeFilePaste
+        // 多选拖出时正文合计与智能粘贴同一上限，超出部分保持原文件拖放，不在拖动开始驻留大量正文。
+        var codeBytes = 0
         for id in ids {
             let access = try await store.exportAccess(id: id)
             register(access)
@@ -16,6 +20,20 @@ import LocalClipCore
             let base = ContentInspector.exportBaseName(title: summary.title, copiedAt: summary.lastCopiedAt)
             let types = try await Task.detached { try access.itemTypes() }.value
             for (index, values) in types.enumerated() {
+                // 开启代码文件智能粘贴时，代码文件只提供正文与文件承诺、不提供文件URL：
+                // 编辑器/IDE插入正文而不是打开文件，Finder按承诺复制原文件，by AI.Coding。
+                if smartCode, codeBytes < CodeFileReader.totalLimit, values.contains(SupportedType.fileURL),
+                   let code = await Task.detached(operation: { codeFile(access: access, index: index) }).value,
+                   codeBytes + code.text.utf8.count <= CodeFileReader.totalLimit {
+                    codeBytes += code.text.utf8.count
+                    let ext = code.url.pathExtension
+                    let plan = Plan(fileType: UTType(filenameExtension: ext)?.identifier ?? UTType.data.identifier, fileExtension: ext,
+                                    format: .original(type: SupportedType.fileURL, fileExtension: ext))
+                    let promise = FilePromise(access: access, index: index, types: values, store: store, plan: plan, base: base, sourceFile: code.url)
+                    promises.append(promise)
+                    pending.append((result.count, promise, [], [SupportedType.string: Data(code.text.utf8)])); result.append(nil)
+                    continue
+                }
                 guard let plan = try await plan(access: access, index: index, types: values) else {
                     result.append(ClipWriter(access: access, index: index, types: values, token: token)); continue
                 }
@@ -25,12 +43,27 @@ import LocalClipCore
                 // 图片保持原有延迟声明，不在拖动开始时读入大幅原图。
                 let eager = plan.isImage ? [:] : await Task.detached { Dictionary(uniqueKeysWithValues: publicTypes(values).compactMap { type in
                     (exportValue(access: access, index: index, types: values, token: token, type: .init(type)) as? Data).map { (type, $0) } }) }.value
-                result.append(FileWriter(access: access, index: index, types: values, token: token, eager: eager, owner: promise))
+                pending.append((result.count, promise, values, eager)); result.append(nil)
             }
         }
         // 一次拖出多个文件时按拖出顺序追加序号，同一秒复制的记录也不会同名。
         if promises.count > 1 { for (number, promise) in promises.enumerated() { promise.number = number + 1 } }
-        return result
+        for entry in pending {
+            var eager = entry.eager
+            let promise = entry.promise
+            // 只认文件路径的目标（Chromium/Electron等）不接收文件承诺，图片额外提供同名真实文件；
+            // Finder按该URL复制，结果与承诺一致。写入失败时仅保留承诺，by AI.Coding。
+            // ponytail: 拖出图片长期保留且不计配额，按内容去重；占用明显时再加清理入口。
+            if promise.plan.isImage {
+                let plan = promise.plan, access = promise.access, index = promise.index, types = promise.types
+                if let data = try? await Task.detached(operation: { try ContentExportProvider.data(plan, access: access, index: index, types: types) }).value,
+                   let url = try? await store.writeDragFile(data, id: access.id, fileName: promise.fileName) {
+                    eager[NSPasteboard.PasteboardType.fileURL.rawValue] = url.dataRepresentation
+                }
+            }
+            result[entry.slot] = FileWriter(access: promise.access, index: promise.index, types: entry.types, token: token, eager: eager, owner: promise)
+        }
+        return result.compactMap { $0 }
     }
     /// 单项导出方案：文件类型、扩展名与写出内容；nil表示交给系统原生处理（文件引用、链接）。
     struct Plan: Sendable {
@@ -82,6 +115,13 @@ import LocalClipCore
         }
     }
 }
+/// 可整份读出正文的代码文件引用；非代码、过大、二进制或已移动时返回nil，保持原文件拖放，by AI.Coding。
+private func codeFile(access: ClipExportAccess, index: Int) -> (url: URL, text: String)? {
+    guard let data = try? access.itemData(index: index, type: SupportedType.fileURL),
+          let url = PasteboardItemValue([.init(SupportedType.fileURL, data)]).fileURL,
+          let text = try? CodeFileReader.read([url]) else { return nil }
+    return (url, text)
+}
 /// 文字与链接的系统读取值；文件承诺写入者共用，保证拖进编辑器的内容与原有行为一致，by AI.Coding。
 private func exportValue(access: ClipExportAccess, index: Int, types: [String], token: String, type: NSPasteboard.PasteboardType) -> Any? {
     if type.rawValue == HistoryViewModel.categoryDragType { return Data(token.utf8) }
@@ -123,7 +163,10 @@ private final class ClipWriter: NSObject, NSPasteboardWriting {
         fileType = owner.plan.fileType
         delegate = owner
     }
-    override func writableTypes(for pasteboard: NSPasteboard) -> [NSPasteboard.PasteboardType] { super.writableTypes(for: pasteboard) + (publicTypes(types) + [HistoryViewModel.categoryDragType]).map { NSPasteboard.PasteboardType($0) } }
+    override func writableTypes(for pasteboard: NSPasteboard) -> [NSPasteboard.PasteboardType] {
+        let own = publicTypes(types) + [HistoryViewModel.categoryDragType]
+        return super.writableTypes(for: pasteboard) + (own + eager.keys.filter { !own.contains($0) }.sorted()).map { NSPasteboard.PasteboardType($0) }
+    }
     /// 文件承诺与正文保持原路径，内部分类身份在建立会话时即可读取，by AI.Coding。
     override func writingOptions(forType type: NSPasteboard.PasteboardType, pasteboard: NSPasteboard) -> NSPasteboard.WritingOptions {
         if type.rawValue == HistoryViewModel.categoryDragType || eager[type.rawValue] != nil { return [] }
@@ -143,10 +186,13 @@ private final class ClipWriter: NSObject, NSPasteboardWriting {
     let plan: ContentExportProvider.Plan
     let base: String
     var number: Int?
-    init(access: ClipExportAccess, index: Int, types: [String], store: HistoryStore, plan: ContentExportProvider.Plan, base: String) {
-        self.access = access; self.index = index; self.types = types; self.store = store; self.plan = plan; self.base = base
+    /// 代码文件承诺直接复制原文件，沿用原文件名，by AI.Coding。
+    let sourceFile: URL?
+    init(access: ClipExportAccess, index: Int, types: [String], store: HistoryStore, plan: ContentExportProvider.Plan, base: String, sourceFile: URL? = nil) {
+        self.access = access; self.index = index; self.types = types; self.store = store; self.plan = plan; self.base = base; self.sourceFile = sourceFile
     }
-    func filePromiseProvider(_ provider: NSFilePromiseProvider, fileNameForType fileType: String) -> String { ContentInspector.fileName(base: base, index: number, fileExtension: plan.fileExtension) }
+    var fileName: String { sourceFile?.lastPathComponent ?? ContentInspector.fileName(base: base, index: number, fileExtension: plan.fileExtension) }
+    func filePromiseProvider(_ provider: NSFilePromiseProvider, fileNameForType fileType: String) -> String { fileName }
     private final class CompletionBox: @unchecked Sendable {
         let callback: (Error?) -> Void
         init(_ callback: @escaping (Error?) -> Void) { self.callback = callback }
@@ -155,6 +201,15 @@ private final class ClipWriter: NSObject, NSPasteboardWriting {
     nonisolated func filePromiseProvider(_ provider: NSFilePromiseProvider, writePromiseTo url: URL, completionHandler: @escaping (Error?) -> Void) {
         let access = self.access, index = self.index, types = self.types, store = self.store, plan = self.plan
         let box = CompletionBox(completionHandler)
+        if let source = sourceFile {
+            do {
+                try access.checkValid()
+                guard let target = ContentInspector.availableURL(url, exists: { FileManager.default.fileExists(atPath: $0.path) }) else { throw CocoaError(.fileWriteFileExists) }
+                try FileManager.default.copyItem(at: source, to: target)
+                box.callback(nil)
+            } catch { box.callback(error) }
+            return
+        }
         Task {
             await ExportLeaseQueue.shared.run {
                 do {

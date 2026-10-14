@@ -368,4 +368,30 @@ struct CodePerformanceTests {
         #expect(MacApplicationClient.classifyTextMetadata(role: "AXWindow", subrole: "", editable: nil, selectedRangeSettable: false, bundleID: "com.apple.finder") == .unknown)
         #expect(MacApplicationClient.classifyTextMetadata(role: "AXWindow", subrole: "", editable: nil, selectedRangeSettable: false, bundleID: "local.unknown") == .unknown)
     }
+    /// 开关开启时拖出代码文件只给正文与原文件承诺，编辑器插入正文；关闭时保持文件URL，by AI.Coding。
+    @MainActor @Test func smartDragOffersCodeTextInsteadOfFileURL() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("main.swift"), text = "let answer = 42\n"
+        try Data(text.utf8).write(to: file)
+        let store = try HistoryStore(location: root.appendingPathComponent("store"))
+        let payload = ClipboardPayload([.init([.init(SupportedType.fileURL, Data(file.absoluteString.utf8))])])
+        guard case .inserted(let id) = try await store.ingest(.init(payload: payload), at: SystemClock().now()) else { Issue.record("Fixture rejected"); return }
+        let board = NSPasteboard(name: .init(UUID().uuidString)); defer { board.releaseGlobally() }
+        let off = try await ContentExportProvider.writers(ids: [id], store: store, token: "t", register: { _ in })
+        #expect(try #require(off.first).writableTypes(for: board).contains(.fileURL))
+        var settings = try await store.settings(); settings.smartCodeFilePaste = true; _ = try await store.updateCaptureSettings(settings)
+        let on = try await ContentExportProvider.writers(ids: [id], store: store, token: "t", register: { _ in })
+        let provider = try #require(on.first as? NSFilePromiseProvider), delegate = try #require(provider.delegate)
+        #expect(!provider.writableTypes(for: board).contains(.fileURL))
+        #expect(provider.pasteboardPropertyList(forType: .string) as? Data == Data(text.utf8))
+        #expect(delegate.filePromiseProvider(provider, fileNameForType: provider.fileType) == "main.swift")
+        let destination = root.appendingPathComponent("out").appendingPathComponent("main.swift")
+        try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let error: Error? = await withCheckedContinuation { continuation in
+            delegate.filePromiseProvider(provider, writePromiseTo: destination) { @Sendable in continuation.resume(returning: $0) }
+        }
+        #expect(error == nil && (try? Data(contentsOf: destination)) == Data(text.utf8))
+    }
 }

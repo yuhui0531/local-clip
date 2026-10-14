@@ -18,6 +18,7 @@ public struct SettingsView: View {
     @State private var quota = "500"
     @State private var recording = false
     @State private var recordingQueue = false
+    @State private var confirmingDragFiles = false
     @State private var monitor: Any?
     @State private var loginStatus = ""
     @State private var loginEnabled = false
@@ -137,7 +138,7 @@ public struct SettingsView: View {
                         }
                         Button("添加可识别的编辑器应用…", action: chooseSmartPasteEditor)
                     } header: { Text("代码") } footer: {
-                        Text("默认关闭。开启后，确认是文本编辑目标时粘贴代码文件正文；Finder、未知目标或读取失败仍保留原文件。代码片段语法高亮始终启用。多文件按顺序用换行分隔；每文件最多4MiB，合计8MiB。仅将所选应用未暴露文本控件的AXWindow视为编辑器；所选应用的窗口（包括其中未被识别为终端的终端面板）可能收到文件正文，终端应用及已标记的终端上下文仍被排除。默认没有应用获准。").settingsFootnote()
+                        Text("默认关闭。开启后，确认是文本编辑目标时粘贴代码文件正文；Finder、未知目标或读取失败仍保留原文件。拖出代码文件时提供正文，拖到编辑器插入代码，拖到Finder仍复制原文件。代码片段语法高亮始终启用。多文件按顺序用换行分隔；每文件最多4MiB，合计8MiB。仅将所选应用未暴露文本控件的AXWindow视为编辑器；所选应用的窗口（包括其中未被识别为终端的终端面板）可能收到文件正文，终端应用及已标记的终端上下文仍被排除。默认没有应用获准。").settingsFootnote()
                     }
                 }
                 if section == .privacy {
@@ -172,13 +173,23 @@ public struct SettingsView: View {
                             TextField("100–4096", text: $quota).labelsHidden().frame(width: 70).multilineTextAlignment(.trailing).onSubmit(applyQuota)
                             Button("应用", action: applyQuota).disabled(quota == String(model.settings.quotaBytes / MiB))
                         }
+                        LabeledContent("拖出图片文件") {
+                            Text(model.dragFilesBytes.map(HistoryViewModel.bytes) ?? "—").monospacedDigit().foregroundStyle(.secondary)
+                            Button("清理…") { confirmingDragFiles = true }.disabled((model.dragFilesBytes ?? 0) == 0)
+                        }
+                        .alert("清理拖出图片文件？", isPresented: $confirmingDragFiles) {
+                            Button("清理", role: .destructive) { model.clearDragFiles() }
+                            Button("取消", role: .cancel) {}
+                        } message: {
+                            Text("历史记录不受影响。只引用这些文件路径（未复制图片）的文档，例如Typora未设置复制图片时，将无法再显示对应图片。")
+                        }
                         HStack {
                             Button("清理已到期内容") { Task { await model.maintenance() } }
                             Spacer()
                             Button("清空普通历史…", role: .destructive) { model.change(.clearOrdinary) }
                         }
                     } footer: {
-                        Text("期限按最近有效用户复制起算；浏览和自身恢复不续期。收藏或任一自定义分类的记录不参与期限和自动淘汰，但计入容量。无法容纳新内容时保留旧历史，跳过新增。降低设置需预览确认。1MiB = 1,048,576 字节。").settingsFootnote()
+                        Text("拖出图片文件是拖进编辑器时提供的图片副本，长期保留以免文档图片失效，不计入容量，仅可手动清理。期限按最近有效用户复制起算；浏览和自身恢复不续期。收藏或任一自定义分类的记录不参与期限和自动淘汰，但计入容量。无法容纳新内容时保留旧历史，跳过新增。降低设置需预览确认。1MiB = 1,048,576 字节。").settingsFootnote()
                     }
                 }
                 if section == .advanced {
