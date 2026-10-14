@@ -72,7 +72,7 @@ struct BenchmarkTests {
     /// 正式优化构建服务层计时；界面防抖、绘制和系统轮询另行验收。
     @Test(.enabled(if: ProcessInfo.processInfo.environment["LOCALCLIP_BENCHMARK"] == "1"))
     func AC16_serviceBenchmark() async throws {
-        let output = URL(fileURLWithPath: ProcessInfo.processInfo.environment["LOCALCLIP_BENCHMARK_OUTPUT"]!)
+        let output = URL(fileURLWithPath: try #require(ProcessInfo.processInfo.environment["LOCALCLIP_BENCHMARK_OUTPUT"], "Required benchmark environment: LOCALCLIP_BENCHMARK_OUTPUT"))
         try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
         let root = output.appendingPathComponent("fixture-store")
         let manifest: [String:Any]

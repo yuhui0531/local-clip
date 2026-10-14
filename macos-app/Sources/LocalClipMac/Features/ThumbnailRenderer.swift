@@ -60,23 +60,25 @@ public enum TextFilePreview {
 }
 public actor DerivedContentService {
     private let store: HistoryStore
+    private let clock: any ClipClock
     private var requests: [ClipID: (UUID, Task<ThumbnailResult, Never>)] = [:]
-    public init(store: HistoryStore) { self.store = store }
+    /// 派生读取与调用方共用时钟；不改变缩略图缓存和持久化行为，by AI.Coding。
+    public init(store: HistoryStore, clock: any ClipClock = SystemClock()) { self.store = store; self.clock = clock }
     /// 相同可见项目共享正在生成的任务；不缓存失效 UI 图片。
     public func thumbnail(id: ClipID) async -> ThumbnailResult {
         if let existing = requests[id] { return await existing.1.value }
         let generation = UUID()
         let task = Task<ThumbnailResult, Never> {
             do {
-                if let cached = try await store.thumbnail(id: id, at: SystemClock().now()) { return .image(cached) }
+                if let cached = try await store.thumbnail(id: id, at: clock.now()) { return .image(cached) }
                 try Task.checkCancellation()
-                let detail = try await store.detail(id: id, at: SystemClock().now())
+                let detail = try await store.detail(id: id, at: clock.now())
                 let result = await Task.detached(priority: .utility) { ThumbnailRenderer.render(detail.payload) }.value
                 if Task.isCancelled { return .unavailable }
                 // 提交前复查存在和版本，不能把已删内容恢复成派生行。
                 if case .image(let data) = result { _ = try await store.cacheThumbnail(id: id, revision: detail.revision, data: data) }
                 // 生成后仅复查可见性，避免再读取/哈希一遍大图的全部原始表示。
-                _ = try await store.metadata(id: id, at: SystemClock().now())
+                _ = try await store.metadata(id: id, at: clock.now())
                 return result
             } catch { return .unavailable }
         }

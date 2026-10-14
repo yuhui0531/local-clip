@@ -130,7 +130,7 @@ final class TIFFFromPNGProvider: NSObject, NSPasteboardItemDataProvider, Sendabl
         let before = access.count
         guard let types = access.types else { return .outcome(.skipped(.accessUnavailable, before)) }
         if before != access.count { return .outcome(.skipped(.changedDuringRead, access.count)) }
-        if let reason = policy.rejection(source: .unknown, types: types) { return .outcome(.skipped(reason, before)) }
+        if let reason = policy.rejection(source: .unknown, types: types, at: clock.now()) { return .outcome(.skipped(reason, before)) }
         if policy.pauseWhenExcludedFrontmost, let id = NSWorkspace.shared.frontmostApplication?.bundleIdentifier, policy.excludedBundleIDs.contains(id) {
             return .outcome(.skipped(.excluded, before))
         }
@@ -155,7 +155,7 @@ final class TIFFFromPNGProvider: NSObject, NSPasteboardItemDataProvider, Sendabl
                 ?? FileManager.default.displayName(atPath: url.path).replacingOccurrences(of: ".app", with: "")
             }
         }
-        if let reason = policy.rejection(source: source, types: types) { return .outcome(.skipped(reason, before)) }
+        if let reason = policy.rejection(source: source, types: types, at: clock.now()) { return .outcome(.skipped(reason, before)) }
         return .read(.init(count: before, types: types, source: source, at: clock.now()))
     }
     /// 同步入口保留给假系统和独立命名板单元验证；生产轮询使用异步入口。

@@ -9,9 +9,9 @@ import LocalClipCore
     @Test(.enabled(if: ProcessInfo.processInfo.environment["LOCALCLIP_SYSTEM_BENCHMARK"] == "1"))
     func AC16_namedPasteboardStressAndIdle() async throws {
         let environment = ProcessInfo.processInfo.environment
-        let output = URL(fileURLWithPath: environment["LOCALCLIP_BENCHMARK_OUTPUT"]!)
+        let output = URL(fileURLWithPath: try #require(environment["LOCALCLIP_BENCHMARK_OUTPUT"], "Required benchmark environment: LOCALCLIP_BENCHMARK_OUTPUT"))
         try FileManager.default.createDirectory(at: output, withIntermediateDirectories:true)
-        let source = URL(fileURLWithPath:environment["LOCALCLIP_BENCHMARK_FIXTURE"]!)
+        let source = URL(fileURLWithPath:try #require(environment["LOCALCLIP_BENCHMARK_FIXTURE"], "Required benchmark environment: LOCALCLIP_BENCHMARK_FIXTURE"))
         let root = output.appendingPathComponent("working-store")
         try FileManager.default.createDirectory(at: root.appendingPathComponent("History"), withIntermediateDirectories:true)
         try FileManager.default.copyItem(at:source.appendingPathComponent("fixture-store/History/history.sqlite"),to:root.appendingPathComponent("History/history.sqlite"))

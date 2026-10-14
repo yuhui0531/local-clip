@@ -172,8 +172,8 @@ import LocalClipCore
     /// 同一10k/真实图像库比较固定50条和视口批次，计时仅到摘要返回，不宣称帧率，by AI.Coding。
     @Test(.enabled(if: ProcessInfo.processInfo.environment["LOCALCLIP_LOADING_BENCHMARK"] == "1"))
     func viewportLoadingBenchmark() async throws {
-        let output = URL(fileURLWithPath: ProcessInfo.processInfo.environment["LOCALCLIP_LOADING_OUTPUT"]!)
-        let source = URL(fileURLWithPath: ProcessInfo.processInfo.environment["LOCALCLIP_LOADING_FIXTURE"]!)
+        let output = URL(fileURLWithPath: try #require(ProcessInfo.processInfo.environment["LOCALCLIP_LOADING_OUTPUT"], "Required benchmark environment: LOCALCLIP_LOADING_OUTPUT"))
+        let source = URL(fileURLWithPath: try #require(ProcessInfo.processInfo.environment["LOCALCLIP_LOADING_FIXTURE"], "Required benchmark environment: LOCALCLIP_LOADING_FIXTURE"))
         try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
         let clone = output.appendingPathComponent("fixture-store")
         try FileManager.default.copyItem(at: source, to: clone)

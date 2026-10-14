@@ -697,7 +697,8 @@ import LocalClipCore
             if event.keyCode == 51 || event.keyCode == 117 {
                 // 搜索框即使为空也只处理文字编辑；切到结果区后才允许删除历史。
                 if editing { return event }
-                guard !event.isARepeat else { return nil }
+                // 隐藏内容时不盲删不可见记录，普通复制/粘贴契约保持，by AI.Coding。
+                guard !event.isARepeat, model.canDisplayContents else { return nil }
                 model.deleteSelected(); return nil
             }
             switch event.keyCode {

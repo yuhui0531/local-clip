@@ -135,9 +135,10 @@ import LocalClipCore
         let writers = try await ContentExportProvider.writers(ids: model.items.map(\.id), store: model.store, token: token, register: { accesses.append($0) })
         let board = NSPasteboard(name: .init("local.localclip.export-check." + UUID().uuidString))
         defer { board.releaseGlobally() }
-        guard board.writeObjects(writers), let image = writers.first(where: { $0 is NSFilePromiseProvider }) as? NSFilePromiseProvider,
+        guard board.writeObjects(writers), let imageWriter = writers.first(where: { ContentExportProvider.promiseProvider(for: $0)?.fileType == SupportedType.png }),
+              let image = ContentExportProvider.promiseProvider(for: imageWriter),
               image.fileType == SupportedType.png, image.delegate != nil,
-              let data = image.pasteboardPropertyList(forType: .init(SupportedType.png)) as? Data,
+              let data = imageWriter.pasteboardPropertyList(forType: .init(SupportedType.png)) as? Data,
               NSImage(data: data) != nil else { throw StoreError.ioFailure }
         let destination = output.appendingPathComponent("promise-received", isDirectory: true)
         try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)

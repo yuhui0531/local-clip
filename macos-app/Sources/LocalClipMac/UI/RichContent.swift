@@ -5,12 +5,17 @@ import Quartz
 import ImageIO
 import LocalClipCore
 public enum RichContent {
+    // 固定匹配器只编译一次，HTML循环仍使用完全相同的匹配规则，by AI.Coding。
+    private static let tokenPattern = try? NSRegularExpression(pattern: "(?s)<[^>]*>|[^<]+")
+    private static let hrefPattern = try? NSRegularExpression(pattern: "(?i)href\\s*=\\s*[\"']([^\"']+)[\"']")
+    private static let fontSizePattern = try? NSRegularExpression(pattern: "(?i)font-size\\s*:\\s*([0-9]+)(px|pt)")
+    private static let colorPattern = try? NSRegularExpression(pattern: "(?i)(?:color\\s*:\\s*|color=[\"']?)(#[0-9a-f]{6})")
     /// RTF使用原生解码；HTML仅处理本地样式文字，不调用Web或HTML导入器。
     public static func attributed(_ item: PasteboardItemValue) -> NSAttributedString {
         if let rtf = item.representations.first(where: { $0.type == SupportedType.rtf }), let value = NSAttributedString(rtf: rtf.data, documentAttributes: nil) { return value }
         guard let html = item.representations.first(where: { $0.type == SupportedType.html }), let source = String(data: html.data, encoding: .utf8) else { return NSAttributedString(string: item.plainText ?? "") }
         let safe = source.replacingOccurrences(of: "(?is)<(script|style|head)[^>]*>.*?</\\1>", with: "", options: .regularExpression)
-        guard let regex = try? NSRegularExpression(pattern: "(?s)<[^>]*>|[^<]+") else { return NSAttributedString(string: item.plainText ?? "") }
+        guard let regex = tokenPattern else { return NSAttributedString(string: item.plainText ?? "") }
         let result = NSMutableAttributedString(string: "")
         var stack: [(String, [NSAttributedString.Key: Any])] = []
         var attributes: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 14)]
@@ -30,10 +35,10 @@ public enum RichContent {
                     if tag == "u" { attributes[.underlineStyle] = NSUnderlineStyle.single.rawValue }
                     let font = attributes[.font] as? NSFont ?? .systemFont(ofSize: 14)
                     if !traits.isEmpty { attributes[.font] = NSFontManager.shared.convert(font, toHaveTrait: traits) }
-                    if tag == "a", let expression = try? NSRegularExpression(pattern: "(?i)href\\s*=\\s*[\"']([^\"']+)[\"']"), let match = expression.firstMatch(in: token, range: NSRange(token.startIndex...,in: token)), let range = Range(match.range(at:1),in: token), let url = URL(string: HTMLText.extract(String(token[range]))), ["http","https","mailto"].contains(url.scheme?.lowercased() ?? "") { attributes[.link] = url }
-                    if let expression = try? NSRegularExpression(pattern: "(?i)font-size\\s*:\\s*([0-9]+)(px|pt)"), let match = expression.firstMatch(in: token, range: NSRange(token.startIndex...,in: token)), let range = Range(match.range(at:1),in: token), let size = Double(token[range]), (6...96).contains(size) { attributes[.font] = NSFontManager.shared.convert(attributes[.font] as? NSFont ?? font, toSize: size) }
+                    if tag == "a", let expression = hrefPattern, let match = expression.firstMatch(in: token, range: NSRange(token.startIndex...,in: token)), let range = Range(match.range(at:1),in: token), let url = URL(string: HTMLText.extract(String(token[range]))), ["http","https","mailto"].contains(url.scheme?.lowercased() ?? "") { attributes[.link] = url }
+                    if let expression = fontSizePattern, let match = expression.firstMatch(in: token, range: NSRange(token.startIndex...,in: token)), let range = Range(match.range(at:1),in: token), let size = Double(token[range]), (6...96).contains(size) { attributes[.font] = NSFontManager.shared.convert(attributes[.font] as? NSFont ?? font, toSize: size) }
                     if tag == "code" || tag == "pre" { attributes[.font] = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular) }
-                    if let expression = try? NSRegularExpression(pattern: "(?i)(?:color\\s*:\\s*|color=[\"']?)(#[0-9a-f]{6})"), let color = expression.firstMatch(in: token, range: NSRange(token.startIndex..., in: token)), let r = Range(color.range(at: 1), in: token) { attributes[.foregroundColor] = colorValue(String(token[r])) }
+                    if let expression = colorPattern, let color = expression.firstMatch(in: token, range: NSRange(token.startIndex..., in: token)), let r = Range(color.range(at: 1), in: token) { attributes[.foregroundColor] = colorValue(String(token[r])) }
                 }
             } else {
                 let text = BasicTextDecoder.extract(.init(SupportedType.html, Data(token.utf8))) ?? token

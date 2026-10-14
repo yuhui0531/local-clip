@@ -333,7 +333,7 @@ private enum PreservationImages {
         if format == "paired" { payload.items[0].representations.append(.init(SupportedType.tiff, try PreservationImages.tiff(pages: 2))) }
         guard case .inserted(let id) = try await store.ingest(.init(payload: payload), at: now) else { Issue.record("Fixture rejected"); return }
         let writers = try await ContentExportProvider.writers(ids: [id], store: store, token: "test", register: { _ in })
-        let provider = try #require(writers.first as? NSFilePromiseProvider)
+        let provider = try #require(writers.first.flatMap { ContentExportProvider.promiseProvider(for: $0) })
         let delegate = try #require(provider.delegate)
         #expect(provider.fileType == type)
         let name = delegate.filePromiseProvider(provider, fileNameForType: provider.fileType)
@@ -358,7 +358,7 @@ private enum PreservationImages {
         guard case .inserted(let id) = try await store.ingest(.init(payload: payload), at: now) else { Issue.record("Fixture rejected"); return }
         var access: ClipExportAccess?
         let writers = try await ContentExportProvider.writers(ids: [id], store: store, token: "test", register: { access = $0 })
-        let provider = try #require(writers.first as? NSFilePromiseProvider), delegate = try #require(provider.delegate)
+        let provider = try #require(writers.first.flatMap { ContentExportProvider.promiseProvider(for: $0) }), delegate = try #require(provider.delegate)
         let destination = root.appendingPathComponent("received.tiff")
         let existing = Data("Do not overwrite".utf8)
         switch reason {
@@ -401,7 +401,7 @@ private enum PreservationImages {
         let payload = ClipboardPayload([.init([.init(SupportedType.tiff, data)])])
         guard case .inserted(let id) = try await store.ingest(.init(payload: payload), at: now) else { Issue.record("Fixture rejected"); return }
         let writers = try await ContentExportProvider.writers(ids: [id], store: store, token: "test", register: { _ in })
-        let provider = try #require(writers.first as? NSFilePromiseProvider), delegate = try #require(provider.delegate)
+        let provider = try #require(writers.first.flatMap { ContentExportProvider.promiseProvider(for: $0) }), delegate = try #require(provider.delegate)
         for attempt in 0..<2 {
             let destination = targets.appendingPathComponent("received-\(attempt).tiff")
             let error: Error? = await withCheckedContinuation { continuation in
@@ -432,7 +432,7 @@ private enum PreservationImages {
         }
         let writers = try await ContentExportProvider.writers(ids: ids, store: store, token: "test", register: { _ in })
         let promises = try writers.map { writer -> (NSFilePromiseProvider, any NSFilePromiseProviderDelegate) in
-            let provider = try #require(writer as? NSFilePromiseProvider)
+            let provider = try #require(ContentExportProvider.promiseProvider(for: writer))
             return (provider, try #require(provider.delegate))
         }
         // AppKit连续调用各承诺而不等待前一个完成回调；这里同样背靠背发起，再统一等待。

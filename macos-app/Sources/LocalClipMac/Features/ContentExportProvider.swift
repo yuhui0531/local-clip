@@ -3,20 +3,23 @@
 import UniformTypeIdentifiers
 import SwiftUI
 import LocalClipCore
+import Synchronization
 
 @MainActor final class ContentExportProvider {
     /// 内部令牌只供本进程分类；每个真实项目有独立公开提供者。图片与文字项提供文件承诺，链接与文件引用沿用系统原生拖放，by AI.Coding。
-    static func writers(ids: [ClipID], store: HistoryStore, token: String, register: (ClipExportAccess) -> Void) async throws -> [any NSPasteboardWriting] {
+    static func writers(ids: [ClipID], store: HistoryStore, token: String, register: (ClipExportAccess) -> Void, clock: any ClipClock = SystemClock(), registerSession: (ImageDragSession) -> Void = { _ in }) async throws -> [any NSPasteboardWriting] {
         var result: [(any NSPasteboardWriting)?] = []
         var promises: [FilePromise] = []
         var pending: [(slot: Int, promise: FilePromise, types: [String], eager: [String: Data])] = []
+        let imageSession = ImageDragSession()
+        registerSession(imageSession)
         let smartCode = try await store.settings().smartCodeFilePaste
         // 多选拖出时正文合计与智能粘贴同一上限，超出部分保持原文件拖放，不在拖动开始驻留大量正文。
         var codeBytes = 0
         for id in ids {
             let access = try await store.exportAccess(id: id)
             register(access)
-            let summary = try await store.metadata(id: id, at: SystemClock().now()).summary
+            let summary = try await store.metadata(id: id, at: clock.now()).summary
             let base = ContentInspector.exportBaseName(title: summary.title, copiedAt: summary.lastCopiedAt)
             let types = try await Task.detached { try access.itemTypes() }.value
             for (index, values) in types.enumerated() {
@@ -40,7 +43,7 @@ import LocalClipCore
                 let promise = FilePromise(access: access, index: index, types: values, store: store, plan: plan, base: base)
                 promises.append(promise)
                 // 文件承诺提供者不会回调延迟类型；文字类型在后台预读后立即提供，编辑器仍能插入文字，主线程不读库。
-                // 图片保持原有延迟声明，不在拖动开始时读入大幅原图。
+                // 图片原图和文件URL都按请求提供；起手只读取类型/名称，不碰原图BLOB。
                 let eager = plan.isImage ? [:] : await Task.detached { Dictionary(uniqueKeysWithValues: publicTypes(values).compactMap { type in
                     (exportValue(access: access, index: index, types: values, token: token, type: .init(type)) as? Data).map { (type, $0) } }) }.value
                 pending.append((result.count, promise, values, eager)); result.append(nil)
@@ -49,21 +52,27 @@ import LocalClipCore
         // 一次拖出多个文件时按拖出顺序追加序号，同一秒复制的记录也不会同名。
         if promises.count > 1 { for (number, promise) in promises.enumerated() { promise.number = number + 1 } }
         for entry in pending {
-            var eager = entry.eager
             let promise = entry.promise
-            // 只认文件路径的目标（Chromium/Electron等）不接收文件承诺，图片额外提供同名真实文件；
-            // Finder按该URL复制，结果与承诺一致。写入失败时仅保留承诺，by AI.Coding。
-            // ponytail: 拖出图片长期保留且不计配额，按内容去重；占用明显时再加清理入口。
-            if promise.plan.isImage {
-                let plan = promise.plan, access = promise.access, index = promise.index, types = promise.types
-                if let data = try? await Task.detached(operation: { try ContentExportProvider.data(plan, access: access, index: index, types: types) }).value,
-                   let url = try? await store.writeDragFile(data, id: access.id, fileName: promise.fileName) {
-                    eager[NSPasteboard.PasteboardType.fileURL.rawValue] = url.dataRepresentation
-                }
-            }
-            result[entry.slot] = FileWriter(access: promise.access, index: promise.index, types: entry.types, token: token, eager: eager, owner: promise)
+            let imageData = promise.plan.isImage ? ImageDataProvider(access: promise.access, index: promise.index, types: entry.types, token: token, session: imageSession, fileName: promise.fileName) : nil
+            // 拖动项必须保留原生provider身份；包装其元数据会丢失真实文件承诺回调，by AI.Coding。
+            result[entry.slot] = FileWriter(access: promise.access, index: promise.index, types: entry.types, token: token, eager: entry.eager, owner: promise, imageData: imageData)
         }
         return result.compactMap { $0 }
+    }
+    /// 返回同一项目实际持有的原生承诺提供者，供生产类型桥和既有承诺验证复用。
+    static func promiseProvider(for writer: any NSPasteboardWriting) -> NSFilePromiseProvider? {
+        writer as? NSFilePromiseProvider
+    }
+    /// 原生会话写好各项后，仅为原图/URL注册公开的延迟数据提供者；不接管承诺元数据，by AI.Coding。
+    static func installImageDataProviders(_ writers: [any NSPasteboardWriting], on board: NSPasteboard) throws {
+        guard writers.contains(where: { ($0 as? FileWriter)?.imageData != nil }) else { return }
+        guard let items = board.pasteboardItems, items.count == writers.count else { throw StoreError.ioFailure }
+        for (writer, item) in zip(writers, items) {
+            if let data = (writer as? FileWriter)?.imageData,
+               !item.setDataProvider(data, forTypes: (publicTypes(data.types) + [SupportedType.fileURL]).map { NSPasteboard.PasteboardType($0) }) {
+                throw StoreError.ioFailure
+            }
+        }
     }
     /// 单项导出方案：文件类型、扩展名与写出内容；nil表示交给系统原生处理（文件引用、链接）。
     struct Plan: Sendable {
@@ -115,6 +124,73 @@ import LocalClipCore
         }
     }
 }
+/// 同步跟踪延迟回调与会话结束；禁止取消后新建文件，外部接收后继续保留路径，by AI.Coding。
+final class ImageDragSession: Sendable {
+    private struct State {
+        var finished = false
+        var retain = false
+        var urls: [String: URL] = [:]
+        var created = Set<URL>()
+    }
+    private let state = Mutex(State())
+    /// 每项只兑现一次；锁覆盖创建/登记，结束会话不会漏掉跨线程的新建路径。
+    func fileURL(key: String, create: () throws -> (url: URL, created: Bool)) throws -> URL {
+        try state.withLock { state in
+            guard !state.finished || state.retain else { throw StoreError.notFound }
+            if let url = state.urls[key] { return url }
+            let file = try create()
+            state.urls[key] = file.url
+            if file.created && !state.finished { state.created.insert(file.url) }
+            return file.url
+        }
+    }
+    /// 返回唯一允许回收的本次新建路径；已接受的外部引用不会回收。
+    func finish(keepFiles: Bool) -> [URL] {
+        state.withLock { state in
+            guard !state.finished else { return [] }
+            state.finished = true; state.retain = keepFiles
+            let files = keepFiles ? [] : Array(state.created)
+            state.created.removeAll()
+            if !keepFiles { state.urls.removeAll() }
+            return files
+        }
+    }
+}
+/// 只提供原图与URL；原生文件承诺由同项的NSFilePromiseProvider独立兑现，by AI.Coding。
+private final class ImageDataProvider: NSObject, NSPasteboardItemDataProvider, Sendable {
+    private let access: ClipExportAccess
+    private let index: Int
+    let types: [String]
+    private let token: String
+    private let session: ImageDragSession
+    private let fileName: String
+    private let key = UUID().uuidString
+    init(access: ClipExportAccess, index: Int, types: [String], token: String, session: ImageDragSession, fileName: String) {
+        self.access = access; self.index = index; self.types = types; self.token = token
+        self.session = session; self.fileName = fileName
+    }
+    /// 当前项被索取时设置其数据；注册时不读载荷、不写图片文件。
+    func pasteboard(_ board: NSPasteboard?, item: NSPasteboardItem, provideDataForType type: NSPasteboard.PasteboardType) {
+        if let data = value(for: type) as? Data { item.setData(data, forType: type) }
+    }
+    /// 目标首次索取URL才读取/哈希/写出原图；无需等待主线程actor回调。
+    func value(for type: NSPasteboard.PasteboardType) -> Any? {
+        let value: Any?
+        if type == .fileURL {
+            value = [SupportedType.png, SupportedType.tiff, SupportedType.jpeg].first(where: types.contains).flatMap { imageType in
+                try? session.fileURL(key: key) { try access.materializeDragFile(index: index, type: imageType, fileName: fileName) }.dataRepresentation
+            }
+        } else {
+            value = exportValue(access: access, index: index, types: types, token: token, type: type)
+        }
+        #if DEBUG
+        // 原生目标拒绝时区分未请求、请求失败与解码失败；Release不编译诊断，by AI.Coding。
+        let id = access.id, type = type.rawValue, provided = value != nil, bytes = (value as? Data)?.count ?? -1, at = ProcessInfo.processInfo.systemUptime
+        Task { @MainActor in GUIAcceptanceProbe.exportRequest("image-read", id: id, type: type, provided: provided, bytes: bytes, at: at) }
+        #endif
+        return value
+    }
+}
 /// 可整份读出正文的代码文件引用；非代码、过大、二进制或已移动时返回nil，保持原文件拖放，by AI.Coding。
 private func codeFile(access: ClipExportAccess, index: Int) -> (url: URL, text: String)? {
     guard let data = try? access.itemData(index: index, type: SupportedType.fileURL),
@@ -150,13 +226,15 @@ private final class ClipWriter: NSObject, NSPasteboardWriting {
 /// 同一拖动项同时提供文件承诺与原有类型：Finder得到文件，编辑器仍插入文字或原格式，by AI.Coding。
 @MainActor private final class FileWriter: NSFilePromiseProvider {
     let owner: FilePromise
+    nonisolated let imageData: ImageDataProvider?
     nonisolated let access: ClipExportAccess
     nonisolated let index: Int
     nonisolated let types: [String]
     nonisolated let token: String
     nonisolated let eager: [String: Data]
-    init(access: ClipExportAccess, index: Int, types: [String], token: String, eager: [String: Data], owner: FilePromise) {
+    init(access: ClipExportAccess, index: Int, types: [String], token: String, eager: [String: Data], owner: FilePromise, imageData: ImageDataProvider?) {
         self.access = access; self.index = index; self.types = types; self.token = token; self.eager = eager; self.owner = owner
+        self.imageData = imageData
         // initWithFileType:delegate:会动态调用子类init；Swift合成的未实现init会直接trap。
         // 使用AppKit头文件标记的指定初始化器，然后设置文件类型与弱delegate；owner保持强引用。
         super.init()
@@ -164,16 +242,18 @@ private final class ClipWriter: NSObject, NSPasteboardWriting {
         delegate = owner
     }
     override func writableTypes(for pasteboard: NSPasteboard) -> [NSPasteboard.PasteboardType] {
-        let own = publicTypes(types) + [HistoryViewModel.categoryDragType]
+        let own = publicTypes(types) + [HistoryViewModel.categoryDragType] + (imageData == nil ? [] : [SupportedType.fileURL])
         return super.writableTypes(for: pasteboard) + (own + eager.keys.filter { !own.contains($0) }.sorted()).map { NSPasteboard.PasteboardType($0) }
     }
     /// 文件承诺与正文保持原路径，内部分类身份在建立会话时即可读取，by AI.Coding。
     override func writingOptions(forType type: NSPasteboard.PasteboardType, pasteboard: NSPasteboard) -> NSPasteboard.WritingOptions {
         if type.rawValue == HistoryViewModel.categoryDragType || eager[type.rawValue] != nil { return [] }
+        if type == .fileURL, imageData != nil { return .promised }
         return publicTypes(types).contains(type.rawValue) ? .promised : super.writingOptions(forType: type, pasteboard: pasteboard)
     }
     override func pasteboardPropertyList(forType type: NSPasteboard.PasteboardType) -> Any? {
         if let value = eager[type.rawValue] { return value }
+        if let imageData, type == .fileURL || publicTypes(types).contains(type.rawValue) { return imageData.value(for: type) }
         if type.rawValue == HistoryViewModel.categoryDragType || publicTypes(types).contains(type.rawValue) { return exportValue(access: access, index: index, types: types, token: token, type: type) }
         return super.pasteboardPropertyList(forType: type)
     }
@@ -200,6 +280,10 @@ private final class ClipWriter: NSObject, NSPasteboardWriting {
     /// 不依赖主线程：拖放期间主线程忙于拖拽界面，回主线程会推迟租约释放甚至卡住导出。
     nonisolated func filePromiseProvider(_ provider: NSFilePromiseProvider, writePromiseTo url: URL, completionHandler: @escaping (Error?) -> Void) {
         let access = self.access, index = self.index, types = self.types, store = self.store, plan = self.plan
+        #if DEBUG
+        let at = ProcessInfo.processInfo.systemUptime
+        Task { @MainActor in GUIAcceptanceProbe.exportRequest("native-promise-write", id: access.id, type: plan.fileType, provided: true, bytes: -1, at: at) }
+        #endif
         let box = CompletionBox(completionHandler)
         if let source = sourceFile {
             do {
@@ -268,6 +352,7 @@ struct HistoryDragBridge: NSViewRepresentable {
         private var preparing = false
         private var dragged = false
         private var nativeSessionActive = false
+        private var preparedWriters: [any NSPasteboardWriting] = []
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
         /// ⌘T转换菜单定位到所选卡片；只取仍在窗口中的卡片，by AI.Coding。
         static func view(for id: ClipID) -> NSView? { views.allObjects.first { $0.id == id && $0.window != nil } }
@@ -334,7 +419,9 @@ struct HistoryDragBridge: NSViewRepresentable {
             Task { @MainActor in
                 defer { self.preparing = false }
                 do {
-                    let writers = try await ContentExportProvider.writers(ids: ids, store: model.store, token: token, register: model.registerDragAccess)
+                    // 下一次准备先等上一轮回收，避免复用路径后被旧清理任务删除，by AI.Coding。
+                    await model.waitForDragCleanup()
+                    let writers = try await ContentExportProvider.writers(ids: ids, store: model.store, token: token, register: model.registerDragAccess, clock: model.previewClock, registerSession: model.registerDragSession)
                     guard Self.active === self, self.down === down, self.window != nil,
                           NSEvent.pressedMouseButtons & 1 != 0, !writers.isEmpty else { model.finishDrag(cancelled: true); return }
                     let values = writers.enumerated().map { index, writer in
@@ -342,6 +429,7 @@ struct HistoryDragBridge: NSViewRepresentable {
                         item.setDraggingFrame(frame.offsetBy(dx: CGFloat(index)*8, dy: CGFloat(index)*8), contents: image)
                         return item
                     }
+                    self.preparedWriters = writers
                     self.handPointerToNativeSession()
                     let session = self.beginDraggingSession(with: values, event: event, source: self)
                     session.animatesToStartingPositionsOnCancelOrFail = true
@@ -360,11 +448,15 @@ struct HistoryDragBridge: NSViewRepresentable {
         }
         func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation { .copy }
         func draggingSession(_ session: NSDraggingSession, willBeginAt screenPoint: NSPoint) {
+            // AppKit已写入真实原生promise项；在接收方读取前只补充公开的延迟类型回调，by AI.Coding。
+            do { try ContentExportProvider.installImageDataProviders(preparedWriters, on: session.draggingPasteboard) }
+            catch { model?.finishDrag(cancelled: true); model?.message = "拖出失败，无法注册图片输出" }
             #if DEBUG
             if let model { GUIAcceptanceProbe.event("native-session-started", model) }
             #endif
         }
         func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
+            preparedWriters.removeAll()
             nativeSessionActive = false; down = nil; pressedID = nil; Self.active = nil
             model?.finishDrag(cancelled: operation.isEmpty)
         }

@@ -111,6 +111,8 @@ public struct ClipboardPayload: Codable, Equatable, Sendable {
     private static let decodableImageTypes = Set(CGImageSourceCopyTypeIdentifiers() as? [String] ?? [])
     /// 整段文本去首尾空白后是唯一的网址才返回；夹带空白或其他文字的段落仍是文本。
     /// 无协议时交给系统链接识别（按真实顶级域判断），"README.md"、"v0.3.22"等不会误判，结果补全为http。
+    // 不可变链接检测器共用，匹配行为与完整范围校验保持不变，by AI.Coding。
+    private static let linkDetector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
     public static func webLink(_ text: String) -> URL? {
         let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty, value.utf8.count <= 8192, !value.contains(where: \.isWhitespace) else { return nil }
@@ -119,7 +121,7 @@ public struct ClipboardPayload: Codable, Equatable, Sendable {
             return url
         }
         let range = NSRange(value.startIndex..., in: value)
-        guard let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue),
+        guard let detector = linkDetector,
               let match = detector.firstMatch(in: value, range: range), match.range == range,
               let url = match.url, ["http", "https"].contains(url.scheme?.lowercased() ?? "") else { return nil }
         return url
@@ -251,9 +253,10 @@ public struct SettingsSnapshot: Codable, Equatable, Sendable {
               [UInt32(256),4096,2048,768].contains(quickModifiers), [UInt32(768),2304,6144].contains(boardModifiers) else { throw StoreError.invalidSettings }
     }
     /// 所有入库入口应用同一策略，旧配置快照不得穿透新暂停。
-    public func rejection(source: SourceAttribution, types: [[String]], revision: Int64? = nil) -> SkipReason? {
+    public func rejection(source: SourceAttribution, types: [[String]], revision: Int64? = nil, at: Instant = SystemClock().now()) -> SkipReason? {
         if types.contains(where: { !Set($0).isDisjoint(with: SupportedType.markers) }) { return .sensitive }
-        if !captureEnabled || (pauseUntil ?? 0) > SystemClock().now() { return .paused }
+        // 暂停判断使用采集/存储入口的时钟；默认值保持旧调用兼容，by AI.Coding。
+        if !captureEnabled || (pauseUntil ?? 0) > at { return .paused }
         if let id = source.bundleID, source.basis == "declared", excludedBundleIDs.contains(id) { return .excluded }
         return nil
     }

@@ -26,6 +26,13 @@ import LocalClipCore
     private static var completed = Set<UUID>()
     private static var trace: [[String: Any]] = []
     private static var pointers: [[String: Any]] = []
+    private static var exports: [[String: Any]] = []
+    /// LC-R01只记录隔离验收包的类型协商和输出结果，不记录载荷正文，by AI.Coding。
+    static func exportRequest(_ kind: String, id: String, type: String, provided: Bool, bytes: Int, at: Double) {
+        guard output != nil else { return }
+        exports.append(["kind": kind, "id": id, "type": type, "provided": provided, "bytes": bytes, "uptime": at])
+        write(exports, "drag-export-requests.json")
+    }
     static func pointer(_ event: NSEvent, id: String?, rectangles: [[String: String]]) {
         pointers.append(["type":event.type.rawValue,"point":NSStringFromPoint(event.locationInWindow),"buttons":NSEvent.pressedMouseButtons,"id":id ?? "","rectangles":rectangles])
         write(pointers, "native-pointer.json")

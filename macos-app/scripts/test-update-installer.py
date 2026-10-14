@@ -84,6 +84,15 @@ NSApplication.shared.run()
             target.parent.chmod(0o555)
         if mode == "snapshot-failure":
             (root / "Application Support/LocalClip-UpdateBackups").write_text("blocked snapshot destination")
+        if mode == "success":
+            # 只淘汰有成功标记的快照；失败或旧版无标记备份不能被顺带删除。
+            snapshots = root / "Application Support/LocalClip-UpdateBackups"
+            for name in [".LocalClip-update-old-success", ".LocalClip-update-failed-rescue"]:
+                folder = snapshots / name
+                folder.mkdir(parents=True)
+                (folder / "data").write_text("rescue-data")
+            (snapshots / ".LocalClip-update-old-success/update-succeeded").write_text("startup-confirmed")
+            shutil.copy2(BIN / "LocalClipUpdater", download / "LocalClipUpdater")
         parent = subprocess.Popen(["/bin/sleep", "60"])
         request = dict(target=target.as_uri(), downloadDirectory=download.as_uri(), parentPID=parent.pid, currentBuild=100)
         (download / "request.json").write_text(json.dumps(request))
@@ -104,6 +113,15 @@ NSApplication.shared.run()
             message = result.read_text()
             if mode == "success":
                 assert message.startswith("更新成功"), message
+                assert not list(target.parent.glob(".LocalClip-update-*"))
+                assert not archive.exists()
+                assert not (download / "LocalClipUpdater").exists()
+                snapshots = root / "Application Support/LocalClip-UpdateBackups"
+                assert not (snapshots / ".LocalClip-update-old-success").exists()
+                assert (snapshots / ".LocalClip-update-failed-rescue/data").read_text() == "rescue-data"
+                confirmed = list(snapshots.glob("*/update-succeeded"))
+                assert len(confirmed) == 1
+                assert (confirmed[0].parent / "data/history").read_text() == "existing-history"
             else:
                 assert message.startswith("更新失败"), message
                 assert "自动恢复失败" not in message, message

@@ -5,6 +5,8 @@ public struct TransformError: Error, Equatable, Sendable {
     public init(_ message: String) { self.message = message }
 }
 public enum TextTransform: String, CaseIterable, Sendable {
+    // 行号识别固定模式只编译一次；编译失败安全判为不适用，by AI.Coding。
+    private static let numberedPattern = try? NSRegularExpression(pattern: "^[ \\t]*(\\d{1,6})(?:[ \\t]?\\|[ \\t]?|:[ \\t]?|\\.[ \\t]|[ \\t])")
     case markdownCodeBlock, dedent, trimWhitespace, stripPrompt, stripLineNumbers
     case formatJSON, minifyJSON
     case quoteString, unquoteString, base64Encode, base64Decode, urlEncode, urlDecode
@@ -176,7 +178,7 @@ public enum TextTransform: String, CaseIterable, Sendable {
     /// 至少80%的非空行以严格递增的行号开头才判定为带行号代码；返回每行要去掉的字符数。
     /// 行号后只吃一个分隔空白，保留代码自身缩进，by AI.Coding。
     static func numberedPrefixes(_ lines: [Line]) -> [Int]? {
-        let pattern = try! NSRegularExpression(pattern: "^[ \\t]*(\\d{1,6})(?:[ \\t]?\\|[ \\t]?|:[ \\t]?|\\.[ \\t]|[ \\t])")
+        guard let pattern = numberedPattern else { return nil }
         var prefixes: [Int] = [], numbered = 0, nonEmpty = 0, previous = -1
         for line in lines {
             let value = line.content as NSString

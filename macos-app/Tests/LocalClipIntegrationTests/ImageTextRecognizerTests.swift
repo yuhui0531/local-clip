@@ -19,6 +19,20 @@ import Testing
     }
     private func payload(_ data: Data) -> ClipboardPayload { .init([.init([.init(SupportedType.png, data)])]) }
 
+    /// LC-R10：损坏首表示应尝试后续原图；Finder图片引用沿用同一识别链，by AI.Coding。
+    @Test func fallsBackToTIFFAndRecognizesFileReference() async throws {
+        let data = try Self.png(lines: ["LocalClip fallback 2026"])
+        let bitmap = try #require(NSBitmapImageRep(data: data))
+        let tiff = try #require(bitmap.representation(using: .tiff, properties: [:]))
+        let mixed = ClipboardPayload([.init([.init(SupportedType.png, Data("invalid".utf8)), .init(SupportedType.tiff, tiff), .init(SupportedType.string, Data("caption".utf8))])])
+        #expect(try await ImageTextRecognizer.recognize(mixed).joined().contains("2026"))
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".png")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try data.write(to: url)
+        let file = ClipboardPayload([.init([.init(SupportedType.fileURL, Data(url.absoluteString.utf8))])])
+        #expect(try await ImageTextRecognizer.recognize(file).joined().contains("2026"))
+    }
+
     /// AC1：中英混排按阅读顺序逐行返回，by AI.Coding。
     @Test func recognizesChineseAndEnglishInOrder() async throws {
         let lines = try await ImageTextRecognizer.recognize(payload(try Self.png(lines: ["Error: file not found 404", "你好，世界", "LocalClip 2026"])))

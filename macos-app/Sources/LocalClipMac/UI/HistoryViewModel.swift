@@ -134,6 +134,12 @@ import LocalClipCore
     @Published public var focusRequest = UUID()
     /// 所有详情入口共享隐藏条件；隐藏是视觉策略，不禁止普通复制，by AI.Coding。
     public var canDisplayContents: Bool { !settings.hideContents }
+    /// 卡片预览读取统一由ViewModel传递时间，不让视图直接选择真实时钟，by AI.Coding。
+    func previewDetail(id: ClipID) async throws -> ClipDetail { try await store.detail(id: id, at: clock.now()) }
+    /// 预览发布前仍复查持久可见性。
+    func previewMetadata(id: ClipID) async throws -> ClipMetadata { try await store.metadata(id: id, at: clock.now()) }
+    /// 只读取轻量字符数，不向视图暴露存储调用细节。
+    func previewCharacterCount(id: ClipID) async throws -> Int? { try await store.textCharacterCount(id: id, at: clock.now()) }
     @Published public var showingDetail = false {
         didSet { if showingDetail && !canDisplayContents { showingDetail = false } }
     }
@@ -186,6 +192,11 @@ import LocalClipCore
     @Published private var captureNotice: CaptureNotice?
     public nonisolated static let categoryDragType = "local.localclip.history-item"
     private var dragAccesses: [ClipExportAccess] = []
+    private var dragFileSessions: [ImageDragSession] = []
+    private var internalCategoryDrop = false
+    private var dragCleanup: Task<Void, Never>?
+    /// 导出元数据与预览共用注入时钟，by AI.Coding。
+    var previewClock: any ClipClock { clock }
     private var categoryDrag: (token: String, ids: [ClipID], expiresAt: Instant)?
     public var closePanel: (() -> Void)?
     public var openSettings: (() -> Void)?
@@ -804,8 +815,25 @@ import LocalClipCore
     }
     /// 开始拖动只生成短期ID令牌，正文由公开提供者按需读取。
     public func registerDragAccess(_ access: ClipExportAccess) { dragAccesses.append(access) }
+    /// 起手登记同步会话对象，不用异步URL回调，避免结束拖动时漏掉延迟创建的文件，by AI.Coding。
+    func registerDragSession(_ session: ImageDragSession) { dragFileSessions.append(session) }
+    /// 下次写入之前等待上一轮回收，防止同名路径复用竞争。
+    func waitForDragCleanup() async { await dragCleanup?.value }
+    /// 内部分类或取消只回收本次新建图片文件；失败可见，不能假报已释放。
+    private func finishDragFiles(keepFiles: Bool) {
+        let files = dragFileSessions.flatMap { $0.finish(keepFiles: keepFiles) }, previous = dragCleanup, store = store
+        dragFileSessions.removeAll()
+        guard !files.isEmpty else { return }
+        dragCleanup = Task { [weak self] in
+            await previous?.value
+            do { try await store.removeDragFiles(files) }
+            catch { self?.message = "部分拖出临时文件未能清理，可在存储设置中查看" }
+        }
+    }
+    /// 结束拖动保持既有选择恢复；取消/内部归类释放新建文件，外部引用继续保留。
     public func finishDrag(cancelled: Bool) {
         if cancelled { for access in dragAccesses { access.cancel() }; categoryDrag = nil }
+        finishDragFiles(keepFiles: !cancelled && !internalCategoryDrop)
         let wasDragging = dragActive
         dragAccesses.removeAll(); draggedIDs = []; dragActive = false
         // 手势内冻结来源；释放后按原顺序选择最近存活记录，不能保留已删除的ID/详情，by AI.Coding。
@@ -831,6 +859,7 @@ import LocalClipCore
         #endif
     }
     public func prepareDrag(_ clipID: ClipID) -> String {
+        internalCategoryDrop = false
         if !selectedIDs.contains(clipID) { select(clipID) }
         dragSelection = (items.map(\.id), items.firstIndex { $0.id == selectedID } ?? 0)
         let token = UUID().uuidString
@@ -855,6 +884,8 @@ import LocalClipCore
     public func dropIntoCategory(_ token: String, categoryID: String) -> Bool {
         guard canDropIntoCategory(token, categoryID: categoryID), let drag = categoryDrag else { return false }
         categoryDrag = nil
+        internalCategoryDrop = true
+        finishDragFiles(keepFiles: false)
         change(.category(drag.ids, categoryID, true))
         return true
     }

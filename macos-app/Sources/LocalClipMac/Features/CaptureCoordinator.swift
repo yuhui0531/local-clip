@@ -145,7 +145,7 @@ import LocalClipCore
                 for _ in 0..<3 {
                     let persisted = try await store.settings()
                     guard epoch == captureEpoch, !pausePending else { break }
-                    if let reason = persisted.rejection(source: snapshot.source, types: snapshot.payload.items.map(\.declaredTypes)) {
+                    if let reason = persisted.rejection(source: snapshot.source, types: snapshot.payload.items.map(\.declaredTypes), at: clock.now()) {
                         result = .skipped(reason); break
                     }
                     snapshot.policyRevision = persisted.revision

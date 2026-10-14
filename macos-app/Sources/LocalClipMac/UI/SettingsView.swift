@@ -146,6 +146,14 @@ public struct SettingsView: View {
                         Toggle("隐藏历史内容", isOn: setting(\.hideContents))
                         Toggle("限制系统窗口共享读取", isOn: setting(\.excludeFromSharing))
                         Toggle("排除应用位于前台时停止监控", isOn: setting(\.pauseWhenExcludedFrontmost))
+                        // 保留声明来源契约，将普通应用的排除前提放在列表旁，by AI.Coding。
+                        if !model.settings.excludedBundleIDs.isEmpty && !model.settings.pauseWhenExcludedFrontmost {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Label("多数应用不声明剪贴板来源。要停止记录所选应用，请开启“排除应用位于前台时停止监控”。", systemImage: "exclamationmark.triangle.fill")
+                                    .foregroundStyle(.orange).font(.caption).fixedSize(horizontal: false, vertical: true)
+                                Button("开启前台时停止监控") { model.updateSettings { $0.pauseWhenExcludedFrontmost = true } }
+                            }
+                        }
                         ForEach(model.settings.excludedBundleIDs.sorted(), id: \.self) { id in
                             BundleRow(id: id) { model.updateSettings { $0.excludedBundleIDs.remove(id) } }
                         }

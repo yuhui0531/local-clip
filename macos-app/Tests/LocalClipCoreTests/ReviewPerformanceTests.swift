@@ -6,7 +6,7 @@ struct ReviewPerformanceTests {
     /// 延迟至少500ms测捕获后的首个字面查询，并保留提交、冷首查及热查的完整样本，by AI.Coding。
     @Test(.enabled(if: ProcessInfo.processInfo.environment["LOCALCLIP_R02_WARMUP_BENCHMARK"] == "1"))
     func pageCacheWarmupBenchmark() async throws {
-        let output = URL(fileURLWithPath: ProcessInfo.processInfo.environment["LOCALCLIP_REVIEW_OUTPUT"]!)
+        let output = URL(fileURLWithPath: try #require(ProcessInfo.processInfo.environment["LOCALCLIP_REVIEW_OUTPUT"], "Required benchmark environment: LOCALCLIP_REVIEW_OUTPUT"))
         try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
         let root = output.appendingPathComponent("fixture-store")
         let manifest = try BenchmarkGenerator.seed(root, output: output)
@@ -50,7 +50,7 @@ struct ReviewPerformanceTests {
     /// 固定v2数据集上测已预热前缀扩展的服务延迟，原样保留每个样本，by AI.Coding。
     @Test(.enabled(if: ProcessInfo.processInfo.environment["LOCALCLIP_SEARCH_NARROW_BENCHMARK"] == "1"))
     func warmExtendedLiteralSearch() async throws {
-        let output = URL(fileURLWithPath: ProcessInfo.processInfo.environment["LOCALCLIP_REVIEW_OUTPUT"]!)
+        let output = URL(fileURLWithPath: try #require(ProcessInfo.processInfo.environment["LOCALCLIP_REVIEW_OUTPUT"], "Required benchmark environment: LOCALCLIP_REVIEW_OUTPUT"))
         try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
         let root = output.appendingPathComponent("fixture-store")
         let manifest = try BenchmarkGenerator.seed(root, output: output)
@@ -86,7 +86,7 @@ struct ReviewPerformanceTests {
     /// 固定真实编码图像给隔离GUI包，生成成本不算粘贴延迟，by AI.Coding。
     @Test(.enabled(if: ProcessInfo.processInfo.environment["LOCALCLIP_GUI_FIXTURES"] == "1"))
     func prepareGUIFixtures() throws {
-        let output = URL(fileURLWithPath: ProcessInfo.processInfo.environment["LOCALCLIP_REVIEW_OUTPUT"]!)
+        let output = URL(fileURLWithPath: try #require(ProcessInfo.processInfo.environment["LOCALCLIP_REVIEW_OUTPUT"], "Required benchmark environment: LOCALCLIP_REVIEW_OUTPUT"))
         try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
         _ = try BenchmarkGenerator.seed(output.appendingPathComponent("fixture-store"), output: output)
         var manifest: [[String:Any]] = []
@@ -101,7 +101,7 @@ struct ReviewPerformanceTests {
     /// 同记录数、四种正文体积测量小写入；初始化/校验不混入提交样本，by AI.Coding。
     @Test(.enabled(if: ProcessInfo.processInfo.environment["LOCALCLIP_SCALING_BENCHMARK"] == "1"))
     func writeScaling() async throws {
-        let output = URL(fileURLWithPath: ProcessInfo.processInfo.environment["LOCALCLIP_REVIEW_OUTPUT"]!)
+        let output = URL(fileURLWithPath: try #require(ProcessInfo.processInfo.environment["LOCALCLIP_REVIEW_OUTPUT"], "Required benchmark environment: LOCALCLIP_REVIEW_OUTPUT"))
         try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
         var curves: [[String: Any]] = []
         for target in [10, 100, 226, 480] {
@@ -140,7 +140,7 @@ struct ReviewPerformanceTests {
     }
     @Test(.enabled(if: ProcessInfo.processInfo.environment["LOCALCLIP_REVIEW_BENCHMARK"] == "1"))
     func coldWarmAndPostQuotaSearch() async throws {
-        let output = URL(fileURLWithPath: ProcessInfo.processInfo.environment["LOCALCLIP_REVIEW_OUTPUT"]!)
+        let output = URL(fileURLWithPath: try #require(ProcessInfo.processInfo.environment["LOCALCLIP_REVIEW_OUTPUT"], "Required benchmark environment: LOCALCLIP_REVIEW_OUTPUT"))
         try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
         let root = output.appendingPathComponent("fixture-store")
         _ = try BenchmarkGenerator.seed(root, output: output)

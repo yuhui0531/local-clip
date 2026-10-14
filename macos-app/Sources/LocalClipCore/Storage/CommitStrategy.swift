@@ -31,15 +31,22 @@ final class CommitStrategy {
         return result
     }
     /// 实际文件长度，包括目录下 SQLite 日志、派生和垃圾，不假装失败为零。
-    static func bytes(_ directory: URL) throws -> Int64 {
+    static func bytes(_ directory: URL, countHardLinksOnce: Bool = false) throws -> Int64 {
         guard FileManager.default.fileExists(atPath: directory.path) else { return 0 }
         var enumerationError: Error?
         let keys:Set<URLResourceKey> = [.isRegularFileKey,.fileSizeKey,.fileAllocatedSizeKey,.totalFileAllocatedSizeKey]
         guard let iterator = FileManager.default.enumerator(at: directory, includingPropertiesForKeys: Array(keys), options: [], errorHandler: { _, error in enumerationError = error; return false }) else { throw StoreError.ioFailure }
         var total: Int64 = 0
+        var fileIdentities = Set<String>()
         for case let file as URL in iterator {
             let values = try file.resourceValues(forKeys: keys)
             if values.isRegularFile == true {
+                // 仅拖出目录按硬链接身份去重；历史/配额计量沿用原规则，by AI.Coding。
+                if countHardLinksOnce {
+                    let attributes = try FileManager.default.attributesOfItem(atPath: file.path)
+                    guard let device = attributes[.systemNumber] as? NSNumber, let inode = attributes[.systemFileNumber] as? NSNumber else { throw StoreError.ioFailure }
+                    if !fileIdentities.insert("\(device.uint64Value):\(inode.uint64Value)").inserted { continue }
+                }
                 guard let size = values.fileSize, let allocated = values.totalFileAllocatedSize ?? values.fileAllocatedSize else { throw StoreError.ioFailure }
                 total += Int64(max(size,allocated))
             }

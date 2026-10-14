@@ -11,7 +11,7 @@ import Testing
         return id
     }
     private func promise(_ writer: any NSPasteboardWriting) throws -> (NSFilePromiseProvider, any NSFilePromiseProviderDelegate) {
-        let provider = try #require(writer as? NSFilePromiseProvider)
+        let provider = try #require(ContentExportProvider.promiseProvider(for: writer))
         return (provider, try #require(provider.delegate))
     }
     private func write(_ promise: (NSFilePromiseProvider, any NSFilePromiseProviderDelegate), to url: URL) async -> Error? {

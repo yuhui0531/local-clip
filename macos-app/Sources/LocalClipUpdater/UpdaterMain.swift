@@ -70,7 +70,9 @@ import LocalClipUpdateKit
             }
             // 回执必须携带本次预期构建号，单纯启动进程不算更新成功。
             guard try String(contentsOf: receipt, encoding: .utf8) == String(manifest.build) else { throw UpdateFailure.invalid("新版本启动回执不匹配") }
-            try Data("更新成功；旧应用：\(candidate.path)；数据快照：\(backup.path)".utf8).write(to: root.appendingPathComponent("result.txt"), options: .atomic)
+            try Data("更新成功；数据快照：\(backup.path)".utf8).write(to: root.appendingPathComponent("result.txt"), options: .atomic)
+            // 成功结果发布后才清理；清理失败不能触发回滚或覆盖正在使用的新数据，by AI.Coding。
+            cleanupSuccessfulUpdate(workspace: workspace, backup: backup, download: root, archive: manifest.archive)
         } catch {
             var message = "更新失败：\(error.localizedDescription)"
             // 新进程必须真正停止后才恢复快照，禁止与其数据库写入并发。
@@ -97,6 +99,32 @@ import LocalClipUpdateKit
             storeLock?.release()
             // 先写失败结果再启动旧版，使其第一次读取状态就能提示恢复情况。
             if shouldRelaunchOld, let target = request?.target { _ = try? await launch(target, arguments: []) }
+        }
+    }
+
+    /// 仅清理本次工作区/下载大文件及带成功标记的旧快照；失败和旧版无标记快照保留救援能力，by AI.Coding。
+    private static func cleanupSuccessfulUpdate(workspace: URL, backup: URL, download: URL, archive: String) {
+        let fm = FileManager.default
+        var failures: [String] = []
+        func remove(_ url: URL) {
+            guard fm.fileExists(atPath: url.path) else { return }
+            do { try fm.removeItem(at: url) }
+            catch { failures.append(url.lastPathComponent) }
+        }
+        remove(workspace)
+        remove(download.appendingPathComponent(archive))
+        remove(download.appendingPathComponent("LocalClipUpdater"))
+        do {
+            try Data("startup-confirmed".utf8).write(to: backup.appendingPathComponent("update-succeeded"), options: .atomic)
+            // 枚举URL可能没有目录尾斜杠，按规范路径比较以免误删本次快照。
+            for old in try fm.contentsOfDirectory(at: backup.deletingLastPathComponent(), includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey]) where old.standardizedFileURL.path != backup.standardizedFileURL.path && old.lastPathComponent.hasPrefix(".LocalClip-update-") {
+                let values = try old.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+                if values.isDirectory == true, values.isSymbolicLink != true,
+                   (try? String(contentsOf: old.appendingPathComponent("update-succeeded"), encoding: .utf8)) == "startup-confirmed" { remove(old) }
+            }
+        } catch { failures.append("备份清理") }
+        if !failures.isEmpty {
+            try? Data("更新成功；部分临时文件未清理：\(failures.joined(separator: "、"))；数据快照：\(backup.path)".utf8).write(to: download.appendingPathComponent("result.txt"), options: .atomic)
         }
     }
 

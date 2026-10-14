@@ -8,15 +8,9 @@ public enum ImageTextRecognizer {
     /// 与缩略图解码同一上限，超大原图不解码。
     static let pixelLimit = 40_000_000
     public struct Failure: Error, Equatable { public let message: String }
-    /// 按原始表示优先级取第一张图；识别结果按Vision阅读顺序逐行连接。
+    /// 尝试所有原始表示与图片文件引用；识别结果按Vision阅读顺序逐行连接。
     public static func recognize(_ payload: ClipboardPayload) async throws -> [String] {
-        guard let data = [SupportedType.png, SupportedType.tiff, SupportedType.jpeg].lazy.compactMap({ type in
-            payload.items.lazy.compactMap { $0.representations.first { $0.type == type }?.data }.first }).first else { throw Failure(message: "所选内容不含图片") }
-        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
-              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
-              let width = properties[kCGImagePropertyPixelWidth] as? Int, let height = properties[kCGImagePropertyPixelHeight] as? Int else { throw Failure(message: "图片无法解码") }
-        guard width > 0, height > 0, width <= pixelLimit / height else { throw Failure(message: "图片超过 4000 万像素，无法识别") }
-        guard let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else { throw Failure(message: "图片无法解码") }
+        let image = try decode(payload)
         let box = RequestBox()
         try await withTaskCancellationHandler {
             try await Task.detached { try VNImageRequestHandler(cgImage: image).perform([box.request]) }.value
@@ -25,6 +19,32 @@ public enum ImageTextRecognizer {
         let lines = (box.request.results ?? []).compactMap { $0.topCandidates(1).first?.string }.filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
         guard !lines.isEmpty else { throw Failure(message: "未识别到文字") }
         return lines
+    }
+    /// 单次只解码一个候选；损坏或超限表示不遮蔽后续有效图，禁用ImageIO全局缓存，by AI.Coding。
+    private static func decode(_ payload: ClipboardPayload) throws -> CGImage {
+        let options = [kCGImageSourceShouldCache: false] as CFDictionary
+        var found = false, exceeded = false
+        func image(_ source: CGImageSource?) -> CGImage? {
+            guard let source,
+                  let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+                  let width = properties[kCGImagePropertyPixelWidth] as? Int,
+                  let height = properties[kCGImagePropertyPixelHeight] as? Int, width > 0, height > 0 else { return nil }
+            guard width <= pixelLimit / height else { exceeded = true; return nil }
+            return CGImageSourceCreateImageAtIndex(source, 0, options)
+        }
+        for type in [SupportedType.png, SupportedType.tiff, SupportedType.jpeg] {
+            for item in payload.items {
+                for representation in item.representations where representation.type == type {
+                    found = true
+                    if let value = image(CGImageSourceCreateWithData(representation.data as CFData, options)) { return value }
+                }
+            }
+        }
+        for url in payload.fileURLs ?? [] where ClipboardPayload.isImageFile(url.path) {
+            found = true
+            if let value = image(CGImageSourceCreateWithURL(url as CFURL, options)) { return value }
+        }
+        throw Failure(message: exceeded ? "图片超过 4000 万像素，无法识别" : found ? "图片无法解码" : "所选内容不含图片")
     }
     /// VNRequest不是Sendable；只在后台perform后于同一任务读取结果。
     private final class RequestBox: @unchecked Sendable {

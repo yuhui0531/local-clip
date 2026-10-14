@@ -77,11 +77,12 @@ public struct HistoryView: View {
                 Divider().opacity(0.5)
                 HStack(spacing: 12) {
                     Circle().fill(model.status == "正常" ? Color.green : model.capture.capacityBlocked ? Color.red : Color.orange).frame(width: 6, height: 6)
-                    Text(model.message.isEmpty ? Self.statusLabel(model.status) : model.message).font(.system(size: 11, weight: .medium)).lineLimit(1)
+                    // 暂停状态不被通用保存提示遮蔽，错误消息仍照常显示，by AI.Coding。
+                    Text(model.message.isEmpty || (model.recordingPaused && model.message == "设置已保存") ? Self.statusLabel(model.status) : model.message).font(.system(size: 11, weight: .medium)).lineLimit(1)
                         .foregroundStyle(model.message.isEmpty ? Color.secondary : Color.primary)
                         .help(model.ignoreDescription)
                     // 暂停时就地提供恢复入口，不必去找工具栏或菜单，by AI.Coding。
-                    if model.recordingPaused && model.message.isEmpty {
+                    if model.recordingPaused {
                         Button("开始监控") { model.resumeRecording() }.buttonStyle(.link).font(.system(size: 11))
                     }
                     HistoryListStatistics(footer: model.listState.footerState)
@@ -349,21 +350,21 @@ private struct HistorySelectionActions: View {
             let selected = value.selectedItem
             if compact {
                 Menu {
-                    Section("分类") { categoryItems(value) }
+                    Section("分类") { categoryItems(value) }.disabled(!model.canDisplayContents)
                     Button(selected?.isFavorite == true ? "取消收藏" : "收藏") {
                         if let selected { model.change(.favorites(model.orderedSelection, !selected.isFavorite)) }
-                    }.disabled(selected == nil)
+                    }.disabled(selected == nil || !model.canDisplayContents)
                     Button("纯文本复制") { model.perform(.plainText, action: .copy) }
                         .disabled(value.selectedMetadata?.hasTextRepresentations != true || selected == nil)
                 } label: { Label("更多", systemImage: "ellipsis.circle") }
                     .menuStyle(.borderlessButton).fixedSize().disabled(selected == nil)
             } else {
                 Menu { categoryItems(value, divided: true) } label: { Label("分类", systemImage: "folder") }
-                    .menuStyle(.borderlessButton).fixedSize().disabled(selected == nil || value.selectedMetadata?.summary.id != selected?.id)
-                Button { if let selected { model.change(.favorites(model.orderedSelection, !selected.isFavorite)) } } label: { Image(systemName: selected?.isFavorite == true ? "star.fill" : "star").foregroundStyle(selected?.isFavorite == true ? Color.orange : Color.secondary).frame(width: 18) }.buttonStyle(.plain).help("收藏/取消收藏").accessibilityLabel(selected?.isFavorite == true ? "取消收藏" : "收藏")
+                    .menuStyle(.borderlessButton).fixedSize().disabled(selected == nil || !model.canDisplayContents || value.selectedMetadata?.summary.id != selected?.id)
+                Button { if let selected { model.change(.favorites(model.orderedSelection, !selected.isFavorite)) } } label: { Image(systemName: selected?.isFavorite == true ? "star.fill" : "star").foregroundStyle(selected?.isFavorite == true ? Color.orange : Color.secondary).frame(width: 18) }.buttonStyle(.plain).help("收藏/取消收藏").accessibilityLabel(selected?.isFavorite == true ? "取消收藏" : "收藏").disabled(!model.canDisplayContents)
             }
             Button { model.showingDetail.toggle() } label: { if compact { Image(systemName: "info.circle") } else { Label("详情", systemImage: "info.circle") } }.buttonStyle(.plain)
-                .accessibilityLabel("详情").help("详情 · ⌘I")
+                .accessibilityLabel("详情").help("详情 · ⌘I").disabled(!model.canDisplayContents)
             Divider().frame(height: 20)
             if !compact {
                 Button { model.perform(.plainText, action: .copy) } label: { Label("纯文本复制", systemImage: "doc.plaintext") }
@@ -502,6 +503,11 @@ private struct ClipCard: View, Equatable {
             && (lhs.item.kind != .file || lhs.previewGeneration == rhs.previewGeneration)
     }
     private var code: Bool { item.kind == .text && detectedLanguage != nil }
+    /// 代码上限12.5pt，普通文本沿用原字号与紧凑布局，by AI.Coding。
+    private var previewFontSize: CGFloat {
+        let size: CGFloat = tiny ? 10 : height < 200 ? 12 : height < 260 ? 13 : 15
+        return detectedLanguage == nil ? size : min(size, 12.5)
+    }
     /// 卡片合并辅助功能子元素后仍朗读预览状态；隐藏内容时不泄露状态或正文。
     private var accessibilityDescription: String {
         let title = "\(item.title ?? HistoryView.kindName(item.kind))，\(item.source.name)"
@@ -576,6 +582,7 @@ private struct ClipCard: View, Equatable {
                 }.frame(width: iconSize, height: iconSize).help(sourceDescription)
             }.foregroundStyle(.primary).padding(.leading, tiny ? 8 : 14).padding(.trailing, tiny ? 6 : 10)
                 .frame(height: headerHeight).background(tint.opacity(0.13))
+                .help("双击标题栏重命名卡片")
                 // 整个彩色标题栏双击均重命名，时间/图标/留白不能误发粘贴，by AI.Coding。
                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(item.id)) } action: { headerRect = $0 }
             // 正文独占剩余区域；长文件名和多行文字只能在正文内截断，不挤掉标题和底栏。
@@ -656,11 +663,10 @@ private struct ClipCard: View, Equatable {
     /// 菜单独立展开，避免单个SwiftUI泛型表达式超出编译器推断范围，by AI.Coding。
     private var menuCard: some View {
         interactiveCard.contextMenu {
-                Button("重命名") { model.beginRename(item.id) }
                 Button("原格式复制") { if !model.selectedIDs.contains(item.id) { model.select(item.id) }; model.perform(.original, action: .copy) }
                 Button("转换后粘贴… · ⌘T") { if !model.selectedIDs.contains(item.id) { model.select(item.id) }; model.showTransformMenu() }
                     .disabled(item.kind == .image || item.kind == .file)
-                if item.kind == .image { Button("复制图中文字") { model.copyImageText(id: item.id) }.disabled(hidden) }
+                if item.kind == .image || item.kind == .mixed || isImageFile { Button("复制图中文字") { model.copyImageText(id: item.id) }.disabled(hidden) }
                 // 多选时才出现；换行沿用原有合并（含原格式），其余只输出纯文本；含图片时整组置灰，by AI.Coding。
                 if model.selectedIDs.count > 1 && model.selectedIDs.contains(item.id) {
                     let blocked = model.items.contains { model.selectedIDs.contains($0.id) && ($0.kind == .image || $0.kind == .mixed) }
@@ -672,15 +678,19 @@ private struct ClipCard: View, Equatable {
                     Button("加入粘贴队列") { model.startPasteQueue(model.orderedSelection) }
                         .help("每按一次 \(HotKeyService.label(model.settings.queueShortcut)) 依次粘贴下一项")
                 }
+                // 输出、整理、检视各自分组，保留全部已有菜单项，by AI.Coding。
+                Divider()
+                Button("重命名") { model.beginRename(item.id) }
                 Button(item.isFavorite ? "取消收藏" : "收藏") { model.change(.favorites(model.selectedIDs.contains(item.id) ? model.orderedSelection : [item.id], !item.isFavorite)) }
                 Menu("加入分类") {
                     ForEach(model.categories) { category in Button(category.name) { model.setCategory(item.id, categoryID: category.id, included: true) } }
                     Divider(); Button("新建分类…") { model.editCategory() }
                 }
                 if let categoryID { Button("从当前分类移除") { model.setCategory(item.id, categoryID: categoryID, included: false) } }
+                if categoryID != nil { Button("向前移动") { model.select(item.id); model.moveSelected(-1) }; Button("向后移动") { model.select(item.id); model.moveSelected(1) } }
+                Divider()
                 Button("在历史中定位 · ⌘G") { model.select(item.id); model.jumpToHistory() }
                 Menu("在分类中定位") { ForEach(categories) { category in Button(category.name) { model.select(item.id); model.jumpToHistory(category: category.id) } } }
-                if categoryID != nil { Button("向前移动") { model.select(item.id); model.moveSelected(-1) }; Button("向后移动") { model.select(item.id); model.moveSelected(1) } }
                 // 选择变化会关闭旧详情；等选择生效后再打开，避免刚打开即被关闭。
                 Button("详情") { model.select(item.id); DispatchQueue.main.async { model.showingDetail = true } }
                 Button("预览 · Space") { model.select(item.id); model.quickLook() }
@@ -703,7 +713,7 @@ private struct ClipCard: View, Equatable {
                 // 外部文件每次进入视口/重开面板先验证身份；慢卷期间只显示占位，by AI.Coding。
                 if item.kind == .file {
                     checkedFileGeneration = nil
-                    let urls = try? await model.store.detail(id: item.id, at: SystemClock().now()).payload.fileURLs
+                    let urls = try? await model.previewDetail(id: item.id).payload.fileURLs
                     let version = await Task.detached(priority: .utility) { urls.flatMap(FileReferencePreviewVersion.read) }.value
                     guard !Task.isCancelled, model.contains(item.id) else { return }
                     if !model.validateFilePreview(id: item.id, version: version) {
@@ -714,15 +724,15 @@ private struct ClipCard: View, Equatable {
                 }
                 // 只为实际出现的文字卡片统计全文，计数缓存不随选中状态重算。
                 if [.text, .url, .richText].contains(item.kind), displayedCharacterCount == nil {
-                    let count = try? await model.store.textCharacterCount(id: item.id, at: SystemClock().now())
+                    let count = try? await model.previewCharacterCount(id: item.id)
                     guard !Task.isCancelled, model.contains(item.id),
-                          (try? await model.store.metadata(id: item.id, at: SystemClock().now())) != nil else { return }
+                          (try? await model.previewMetadata(id: item.id)) != nil else { return }
                     guard !Task.isCancelled, model.contains(item.id) else { return }
                     characterCount = count
                     if let count { model.characterCounts.setObject(count as NSNumber, forKey: item.id as NSString) }
                 }
                 if textFilePaths != nil, cachedFileText == nil, fileText == nil, !fileTextFailed {
-                    let urls = try? await model.store.detail(id: item.id, at: SystemClock().now()).payload.fileURLs
+                    let urls = try? await model.previewDetail(id: item.id).payload.fileURLs
                     var text: String?
                     if let urls, urls.allSatisfy({ TextFilePreview.isCandidate($0.path) }), let url = urls.first {
                         text = await Task.detached(priority: .utility) { TextFilePreview.read(url) }.value
@@ -746,7 +756,7 @@ private struct ClipCard: View, Equatable {
                 thumbnailState = .loading
                 let result: ThumbnailResult
                 if isImageFile {
-                    guard let urls = try? await model.store.detail(id: item.id, at: SystemClock().now()).payload.fileURLs,
+                    guard let urls = try? await model.previewDetail(id: item.id).payload.fileURLs,
                           urls.allSatisfy({ ClipboardPayload.isImageFile($0.path) }), let url = urls.first else { thumbnailState = .failed; return }
                     model.fileCounts.setObject(urls.count as NSNumber, forKey: item.id as NSString)
                     result = await Task.detached(priority: .utility) { ThumbnailRenderer.render(fileAt: url) }.value
@@ -754,7 +764,7 @@ private struct ClipCard: View, Equatable {
                     result = await model.derived.thumbnail(id: item.id)
                 }
                 guard !Task.isCancelled, model.contains(item.id) else { return }
-                do { _ = try await model.store.metadata(id: item.id, at: SystemClock().now()) }
+                do { _ = try await model.previewMetadata(id: item.id) }
                 catch {
                     if !Task.isCancelled, model.contains(item.id) { thumbnailState = .failed }
                     return
@@ -789,7 +799,7 @@ private struct ClipCard: View, Equatable {
             }
         } else if let text = displayedFileText, let paths = textFilePaths {
             VStack(spacing: 0) {
-                SyntaxText(text: text, size: tiny ? 10 : height < 200 ? 12 : height < 260 ? 13 : 15, spacing: tiny ? 0 : 3, onLanguage: { detectedLanguage = $0 })
+                SyntaxText(text: text, size: previewFontSize, spacing: tiny ? 0 : 3, onLanguage: { detectedLanguage = $0 })
                     .lineSpacing(tiny ? 0 : 3).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).clipped()
                     .padding(.horizontal, tiny ? 6 : height < 200 ? 10 : 14).padding(.top, tiny ? 3 : 10).padding(.bottom, tiny ? 0 : 4)
                 if !tiny {
@@ -822,7 +832,7 @@ private struct ClipCard: View, Equatable {
             VStack(alignment: .leading, spacing: 10) { Image(systemName: "link").font(.system(size: 22, weight: .light)).foregroundStyle(tint); Text(ClipboardPayload.webLink(item.preview)?.host ?? "链接").font(.system(size: 15, weight: .semibold, design: .rounded)).lineLimit(1); Text(item.context).font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary).lineLimit(4); Spacer(minLength: 0) }.padding(14)
         } else {
             // 卡片正文自动高亮代码，普通内容保持原有排版，by AI.Coding。
-            SyntaxText(text: item.context, size: tiny ? 10 : height < 200 ? 12 : height < 260 ? 13 : 15, spacing: tiny ? 0 : 3, onLanguage: { detectedLanguage = $0 })
+            SyntaxText(text: item.context, size: previewFontSize, spacing: tiny ? 0 : 3, onLanguage: { detectedLanguage = $0 })
                 .lineSpacing(tiny ? 0 : 3).frame(maxWidth: .infinity, alignment: .topLeading)
                 .padding(.horizontal, tiny ? 6 : height < 200 ? 10 : 14).padding(.top, tiny ? 3 : 10).padding(.bottom, tiny ? 0 : 4)
         }
@@ -876,10 +886,13 @@ struct ClipInspector: View {
                     Button(role: .destructive) { model.change(.delete([detail.summary.id])) } label: { Label("删除", systemImage: "trash").font(.system(size: 12)) }
                         .buttonStyle(.plain).foregroundStyle(.red)
                     Spacer()
-                    if detail.summary.kind == .image {
+                    let hasOCR = detail.summary.kind == .image || detail.summary.kind == .mixed || detail.payload.fileURLs?.contains(where: { ClipboardPayload.isImageFile($0.path) }) == true
+                    if hasOCR {
                         Button { model.copyImageText(id: detail.summary.id, fromDetail: true) } label: { Label("复制图中文字", systemImage: "text.viewfinder") }
-                            .buttonStyle(ToolbarTabStyle(selected: true)).disabled(model.settings.hideContents || model.image == nil).help("识别图片中的文字并复制")
-                    } else {
+                            .buttonStyle(ToolbarTabStyle(selected: true)).disabled(model.settings.hideContents).help("识别图片中的文字并复制")
+                    }
+                    // 混合记录新增OCR后仍保留原有文字转换入口，不能用else丢掉已有功能，by AI.Coding。
+                    if detail.summary.kind != .image && (!hasOCR || detail.payload.plainText != nil) {
                         Button { model.showTransformMenu(ids: [detail.summary.id]) } label: { Label("转换", systemImage: "wand.and.stars") }
                             .buttonStyle(ToolbarTabStyle(selected: true)).disabled(detail.payload.plainText == nil).help("转换后粘贴 · ⌘T")
                     }
@@ -920,7 +933,11 @@ struct ClipInspector: View {
                     }
                 }
                 if urls.count > 4 { Text("另有 \(urls.count - 4) 个文件").font(.caption).foregroundStyle(.secondary) }
-                if let text { SyntaxDetailPreview(content: text).frame(height: 180) }
+                if let text {
+                    // 依据原生文本排版测量折行高度，长文仍保留滚动与有界预览，by AI.Coding。
+                    let measured = text.boundingRect(with: CGSize(width: 444, height: CGFloat.greatestFiniteMagnitude), options: [.usesLineFragmentOrigin, .usesFontLeading]).height
+                    SyntaxDetailPreview(content: text).frame(height: min(200, max(52, ceil(measured) + 20)))
+                }
             }.padding(10).frame(maxWidth: .infinity, alignment: .leading)
                 .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 10))
                 .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.primary.opacity(0.06)))
@@ -975,6 +992,7 @@ private struct FilterStrip: View {
 // 筛选按来源/日期/分类分组，与设置同一原生分组表单样式，by AI.Coding。
 struct FilterEditor: View {
     @ObservedObject var model: HistoryViewModel
+    @State private var contentHeight: CGFloat = 320
     var body: some View {
         VStack(spacing: 0) {
             Form {
@@ -998,7 +1016,13 @@ struct FilterEditor: View {
                         ForEach(model.categories) { category in Toggle(category.name, isOn: Binding(get: { model.activeCategories.contains(category.id) }, set: { included in var values = model.activeCategories; if included { values.insert(category.id) } else { values.remove(category.id) }; model.selectCategories(values) })) }
                     }
                 }
-            }.formStyle(.grouped).frame(height: min(440, 230 + CGFloat(model.categories.count) * 32))
+            }.formStyle(.grouped)
+                // 使用真实表单高度；大量分类保留滚动条，不挤压底部按钮，by AI.Coding。
+                .onScrollGeometryChange(for: CGFloat.self) { $0.contentSize.height } action: { _, height in
+                    if height > 0 { contentHeight = height }
+                }
+                .scrollIndicators(.visible)
+                .frame(height: min(460, max(contentHeight, model.categories.isEmpty ? 300 : 320 + CGFloat(model.categories.count) * 36)))
             Divider()
             HStack { Button("清除筛选") { model.clearHistoryFilters() }; Spacer(); Button("完成") { model.showingFilters = false; model.focusResults?() } }
                 .padding(.horizontal, 20).padding(.vertical, 12)
@@ -1089,7 +1113,10 @@ private struct InspectionSection: View {
                         GridRow {
                             VStack(alignment: .leading, spacing: 3) {
                                 Text(row.label).foregroundStyle(.secondary)
-                                Text(row.value).font(.system(size: 11, design: .monospaced)).lineLimit(14).textSelection(.enabled)
+                                // 跨列文字按完整自然高度排版，避免Grid将JSON压成首行，by AI.Coding。
+                                Text(row.value).font(.system(size: 11, design: .monospaced)).lineLimit(14)
+                                    .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
                             }.gridCellColumns(2)
                         }
                     } else {

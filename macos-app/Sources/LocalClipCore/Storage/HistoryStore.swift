@@ -30,6 +30,10 @@ public actor HistoryStore: HistoryRepository {
     var listeners: [UUID: AsyncStream<HistoryEvent>.Continuation] = [:]
     var previews: [UUID: ChangePreview] = [:]
     var unavailable = false
+    // 仅在同步入库操作内部复用配置；操作结束即释放，不缓存跨调用的持久状态，by AI.Coding。
+    private var operationSettings: SettingsSnapshot?
+    // finalize闭包结果保持actor隔离；同步事务无await，失败时统一清空，by AI.Coding。
+    private var mutationRemovedIDs = Set<ClipID>()
     // 仅缓存有限数量的字符统计，不保留正文；记录ID／指纹和可见性仍每次复查。
     private var characterCounts: [ClipID: (hash: String, count: Int)] = [:]
     private var searchCandidateCache: SearchCandidateCache?
@@ -57,7 +61,9 @@ public actor HistoryStore: HistoryRepository {
     private func requireAvailable() throws { if unavailable { throw StoreError.postCommitUnavailable } }
     /// 返回当前持久配置。
     public func settings() throws -> SettingsSnapshot {
-        try requireAvailable(); return try strategy.read { try Schema.readSettings($0) }
+        try requireAvailable()
+        if let operationSettings { return operationSettings }
+        return try strategy.read { try Schema.readSettings($0) }
     }
     /// 名称只更新轻量元数据，原始表示与采集策略版本保持不变，by AI.Coding。
     public func renameClip(id: ClipID, title: String) throws {
@@ -120,6 +126,8 @@ public actor HistoryStore: HistoryRepository {
     /// 临时触发器捕获所有级联删除，只查本次失去引用的digest，by AI.Coding。
     private func trackBlobRemovals(_ db: SQLiteConnection) throws {
         try db.exec("CREATE TEMP TABLE removed_blob_refs(digest TEXT PRIMARY KEY); CREATE TEMP TRIGGER track_removed_blob_refs AFTER DELETE ON main.representations BEGIN INSERT OR IGNORE INTO removed_blob_refs VALUES(old.blobDigest); END;")
+        // 同一连接记录实际删除ID，覆盖级联/期限/配额淘汰，不扫描所有缓存ID。
+        try db.exec("CREATE TEMP TABLE removed_clips(id TEXT PRIMARY KEY); CREATE TEMP TRIGGER track_removed_clips AFTER DELETE ON main.clips BEGIN INSERT OR IGNORE INTO removed_clips VALUES(old.id); END;")
     }
     /// 共享BLOB只有最后引用消失才删除，不扫描未变更记录；名称随记录行级联删除。
     private func garbageCollect(_ db: SQLiteConnection) throws {
@@ -150,37 +158,43 @@ public actor HistoryStore: HistoryRepository {
         let timing = (try? settings().timingEnabled) == true
         defer { if timing { StageTiming.record("storage_commit", since: started, count: 1) } }
         let textIndexWasComplete = noMissingTextContentRevision != nil
+        var committedRevision: Int64 = 0
+        mutationRemovedIDs.removeAll()
+        defer { mutationRemovedIDs.removeAll() }
         do {
             try strategy.commit(quota: quota, allowOverQuota: allowOverQuota, estimatedGrowth: growth, finalize: { db, pending in
                 if trim {
                     try self.fitCandidate(db, pending: pending, quota: quota, protectedID: protectedID, allowOverQuota: allowOverQuota)
                 }
+                // finalize在配额淘汰之后执行；结果只在commit成功后发布到内存。
+                self.mutationRemovedIDs = Set(try db.rows("SELECT id FROM removed_clips").map { $0.text("id") })
             }) { db in
                 try trackBlobRemovals(db)
                 try body(db)
                 try garbageCollect(db)
                 try db.run("UPDATE store_meta SET storeRevision=storeRevision+1,lastOperationID=? WHERE singletonID=1", [.text(operation)])
+                committedRevision = try self.revision(db)
             }
         } catch StoreError.postCommitUnavailable {
             unavailable = true; publish(.unavailable(.postCommitUnavailable)); throw StoreError.postCommitUnavailable
         }
-        let revision = try strategy.read { try self.revision($0) }
+        let revision = committedRevision
+        let removedIDs = mutationRemovedIDs
         if textIndexWasComplete { noMissingTextContentRevision = revision }
         // 删除后立即释放内存派生正文，不能等下一次访问才回收。
-        let cachedIDs = Set(thumbnailOrder).union(characterCounts.keys)
-        if !cachedIDs.isEmpty {
-            let parameters = cachedIDs.map(SQLValue.text), placeholders = cachedIDs.map { _ in "?" }.joined(separator: ",")
-            let liveIDs = try strategy.read { Set(try $0.rows("SELECT id FROM clips WHERE id IN(" + placeholders + ")", parameters).map { $0.text("id") }) }
-            for id in thumbnailOrder where !liveIDs.contains(id) { thumbnailBytes -= thumbnailCache.removeValue(forKey: id)?.count ?? 0 }
-            thumbnailOrder.removeAll { !liveIDs.contains($0) }
-            characterCounts = characterCounts.filter { liveIDs.contains($0.key) }
+        if !removedIDs.isEmpty {
+            for id in thumbnailOrder where removedIDs.contains(id) { thumbnailBytes -= thumbnailCache.removeValue(forKey: id)?.count ?? 0 }
+            thumbnailOrder.removeAll { removedIDs.contains($0) }
+            for id in removedIDs { characterCounts[id] = nil }
         }
         publish(.changed(revision))
     }
     /// 入库前再复查持久化策略；敏感内容从未进入正文、预览或索引。
     public func ingest(_ snapshot: ClipboardSnapshot, at: Instant) throws -> IngestResult {
         let settings = try settings()
-        if let rejection = settings.rejection(source: snapshot.source, types: snapshot.payload.items.map(\.declaredTypes)) { return .skipped(rejection) }
+        operationSettings = settings
+        defer { operationSettings = nil }
+        if let rejection = settings.rejection(source: snapshot.source, types: snapshot.payload.items.map(\.declaredTypes), at: at) { return .skipped(rejection) }
         guard snapshot.policyRevision == settings.revision else { throw StoreError.policyChanged }
         // 身份与容量按全部原始表示计算；超限整体拒绝，不能删减表示后入库。
         let payload = snapshot.payload
@@ -950,7 +964,7 @@ public actor HistoryStore: HistoryRepository {
     public func exportAccess(id: ClipID) throws -> ClipExportAccess {
         let metadata = try metadata(id: id, at: clock.now())
         let types = try strategy.read { try $0.rows("SELECT DISTINCT type FROM representations WHERE clipID=? ORDER BY type", [.text(id)]).map { $0.text("type") } }
-        return ClipExportAccess(database: strategy.databaseURL, id: id, revision: metadata.revision, types: types, contentHash: try strategy.read { try $0.scalarText("SELECT contentHash FROM clips WHERE id=?", [.text(id)]) })
+        return ClipExportAccess(database: strategy.databaseURL, id: id, revision: metadata.revision, types: types, contentHash: try strategy.read { try $0.scalarText("SELECT contentHash FROM clips WHERE id=?", [.text(id)]) }, clock: clock)
     }
     /// 导出仅占用自有临时空间，拒绝超配额，不淘汰历史；10分钟内文件租约保留。
     public func writeExport(_ data: Data, id: ClipID, revision: Int64, fileExtension: String = "png") throws -> URL {
@@ -968,18 +982,17 @@ public actor HistoryStore: HistoryRepository {
     /// 拖给只认路径目标的图片长期保留（目标可能只引用该路径，如Typora），按内容去重；
     /// 不随10分钟租约回收，也不计入历史配额，by AI.Coding。
     public func writeDragFile(_ data: Data, id: ClipID, fileName: String) throws -> URL {
-        _ = try metadata(id: id, at: clock.now())
-        guard !fileName.isEmpty, !fileName.contains("/"), !fileName.hasPrefix("."),
-              ["png", "tiff", "jpg"].contains(URL(fileURLWithPath: fileName).pathExtension), data.count <= 50 * MiB else { throw StoreError.invalidSettings }
-        let folder = strategy.root.appendingPathComponent("DragFiles/" + ContentFingerprint.hash(data), isDirectory: true)
-        let file = folder.appendingPathComponent(fileName)
-        if FileManager.default.fileExists(atPath: file.path) { return file }
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        try data.write(to: file, options: .atomic)
-        return file
+        try writeTrackedDragFile(data, id: id, fileName: fileName).url
     }
+    /// 区分本次新建与已被外部引用的文件，取消/内部归类只允许回收新建路径，by AI.Coding。
+    public func writeTrackedDragFile(_ data: Data, id: ClipID, fileName: String) throws -> (url: URL, created: Bool) {
+        _ = try metadata(id: id, at: clock.now())
+        return try DragFileStorage.write(data, root: strategy.root, fileName: fileName)
+    }
+    /// 仅删除本次新建路径，沿用统一输出目录边界检查，by AI.Coding。
+    public func removeDragFiles(_ files: [URL]) throws { try DragFileStorage.remove(files, root: strategy.root) }
     /// 拖出图片文件的实际占用，供设置页手动清理入口展示，by AI.Coding。
-    public func dragFilesBytes() throws -> Int64 { try CommitStrategy.bytes(strategy.root.appendingPathComponent("DragFiles")) }
+    public func dragFilesBytes() throws -> Int64 { try CommitStrategy.bytes(strategy.root.appendingPathComponent("DragFiles"), countHardLinksOnce: true) }
     /// 用户确认后整体删除；只引用这些路径的文档会失去图片，历史记录不受影响，by AI.Coding。
     public func clearDragFiles() throws {
         let directory = strategy.root.appendingPathComponent("DragFiles")
