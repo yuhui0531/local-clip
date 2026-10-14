@@ -341,7 +341,7 @@ private enum PreservationImages {
         #expect(name.hasSuffix("." + suffix))
         let destination = root.appendingPathComponent(name)
         let error: Error? = await withCheckedContinuation { continuation in
-            delegate.filePromiseProvider(provider, writePromiseTo: destination) { error in continuation.resume(returning: error) }
+            delegate.filePromiseProvider(provider, writePromiseTo: destination) { @Sendable error in continuation.resume(returning: error) }
         }
         #expect(error == nil)
         #expect(try Data(contentsOf: destination) == data)
@@ -372,7 +372,7 @@ private enum PreservationImages {
         default: try existing.write(to: destination)
         }
         let error: Error? = await withCheckedContinuation { continuation in
-            delegate.filePromiseProvider(provider, writePromiseTo: destination) { continuation.resume(returning: $0) }
+            delegate.filePromiseProvider(provider, writePromiseTo: destination) { @Sendable in continuation.resume(returning: $0) }
         }
         // 同名文件不再导致失败：写为"received 2.tiff"，已有文件逐字节不变（PRD F15），by AI.Coding。
         #expect((error == nil) == (reason == "existing-file"))
@@ -405,7 +405,7 @@ private enum PreservationImages {
         for attempt in 0..<2 {
             let destination = targets.appendingPathComponent("received-\(attempt).tiff")
             let error: Error? = await withCheckedContinuation { continuation in
-                delegate.filePromiseProvider(provider, writePromiseTo: destination) { continuation.resume(returning: $0) }
+                delegate.filePromiseProvider(provider, writePromiseTo: destination) { @Sendable in continuation.resume(returning: $0) }
             }
             #expect(error == nil, "attempt \(attempt)")
             #expect((try? Data(contentsOf: destination)) == data, "attempt \(attempt)")
@@ -444,7 +444,7 @@ private enum PreservationImages {
         }
         let results = Results()
         for (index, promise) in promises.enumerated() {
-            promise.1.filePromiseProvider(promise.0, writePromiseTo: targets.appendingPathComponent("received-\(index).tiff")) { results.set(index, $0) }
+            promise.1.filePromiseProvider(promise.0, writePromiseTo: targets.appendingPathComponent("received-\(index).tiff")) { @Sendable in results.set(index, $0) }
         }
         let deadline = ContinuousClock.now + .seconds(30)
         // 模拟拖放期间繁忙的主线程：反复阻塞40ms，只短暂让出。导出不得依赖主线程推进或释放租约。

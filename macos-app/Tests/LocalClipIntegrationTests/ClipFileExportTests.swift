@@ -15,7 +15,7 @@ import Testing
         return (provider, try #require(provider.delegate))
     }
     private func write(_ promise: (NSFilePromiseProvider, any NSFilePromiseProviderDelegate), to url: URL) async -> Error? {
-        await withCheckedContinuation { continuation in promise.1.filePromiseProvider(promise.0, writePromiseTo: url) { continuation.resume(returning: $0) } }
+        await withCheckedContinuation { continuation in promise.1.filePromiseProvider(promise.0, writePromiseTo: url) { @Sendable in continuation.resume(returning: $0) } }
     }
     private static func rtf(_ text: String, font: NSFont) -> Data {
         let value = NSAttributedString(string: text, attributes: [.font: font])
