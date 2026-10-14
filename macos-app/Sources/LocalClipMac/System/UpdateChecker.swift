@@ -71,7 +71,8 @@ import LocalClipUpdateKit
         }
     }
 
-    public func check(manual: Bool) async {
+    /// found在确认有签名更新包、开始下载前回调，让手动入口不必等下载完成即可告知用户。
+    public func check(manual: Bool, found: ((Release) -> Void)? = nil) async {
         guard !checking, staged == nil, phase != .installing else { return }
         checking = true; manualResult = nil
         // 按尝试而非成功限频；离线或服务错误不能让每分钟维护都重试，手动检查仍可立即重试。
@@ -98,6 +99,7 @@ import LocalClipUpdateKit
                     return
                 }
                 phase = .downloading; backgroundDownload = !manual; onChange?()
+                found?(release)
                 let task = Task { try await prepareUpdate(assets, release.version) }
                 downloadTask = task
                 do {

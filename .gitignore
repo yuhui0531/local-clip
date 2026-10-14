@@ -84,3 +84,4 @@ debug-log*
 changes/active/*
 # 过程证据（测试日志、性能样本、验收截图）只保留在本地，不进入仓库
 macos-app/evidence/
+macos-app/docs/reviews/

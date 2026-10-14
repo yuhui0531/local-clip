@@ -221,10 +221,73 @@ import LocalClipCore
             update.image = NSImage(systemSymbolName: "arrow.down.circle", accessibilityDescription: nil)
         }
         menu.addItem(.separator())
+        // 菜单栏应用没有应用菜单，关于与手动检查更新放在状态菜单，by AI.Coding。
+        let about = menu.addItem(withTitle: "关于 LocalClip", action: #selector(showAbout), keyEquivalent: ""); about.target = self
+        about.image = NSImage(systemSymbolName: "info.circle", accessibilityDescription: nil)
+        let check = menu.addItem(withTitle: "", action: #selector(checkForUpdates), keyEquivalent: ""); check.target = self
+        updateCheckItem(check)
+        menu.addItem(.separator())
         // 菜单栏非激活窗口不依赖外部应用的响应链，by AI.Coding。
         let quit = menu.addItem(withTitle: "退出 LocalClip", action: #selector(quitApplication(_:)), keyEquivalent: "q")
         quit.target = self
+        // 检查中项需真实置灰，不能被自动启用覆盖。
+        menu.autoenablesItems = false
         menu.delegate = self; return menu
+    }
+    private func updateCheckItem(_ item: NSMenuItem) {
+        let updates = UpdateChecker.shared
+        item.title = updates.phase == .downloading ? "正在下载更新…" : updates.checking ? "正在检查更新…" : "检查更新…"
+        item.isEnabled = !updates.checking && updates.phase != .installing
+    }
+    @objc private func showAbout() {
+        NSApp.activate(ignoringOtherApps: true)
+        NSApp.orderFrontStandardAboutPanel(nil)
+    }
+    /// 用户显式触发，结果用模态弹框告知；设置页按钮仍在页内显示结果，二者共用同一检查流程，by AI.Coding。
+    @objc private func checkForUpdates() {
+        Task { [weak self] in
+            let updates = UpdateChecker.shared
+            // 发现新版本即告知并转入后台下载；下载结果等首个弹框关闭后再弹，避免模态叠加。
+            var foundAlert: Task<Void, Never>?
+            await updates.check(manual: true) { release in
+                foundAlert = Task { @MainActor in
+                    let alert = NSAlert()
+                    alert.messageText = "发现新版本 \(release.version)"
+                    alert.informativeText = "当前版本 \(UpdateChecker.currentVersion)。正在后台下载并验签，完成后会提示安装并重启。"
+                    alert.addButton(withTitle: "好"); alert.addButton(withTitle: "查看发布页")
+                    NSApp.activate(ignoringOtherApps: true)
+                    if alert.runModal() == .alertSecondButtonReturn { NSWorkspace.shared.open(release.page) }
+                }
+            }
+            await foundAlert?.value
+            let alert = NSAlert()
+            var primary: (() -> Void)?
+            if let release = updates.available {
+                switch updates.phase {
+                case .ready:
+                    alert.messageText = "LocalClip \(release.version) 已下载"
+                    alert.informativeText = "安装后自动重启，历史与设置会保留。"
+                    alert.addButton(withTitle: "安装并重启"); alert.addButton(withTitle: "稍后")
+                    primary = { Task { await updates.installAndRestart() } }
+                case .manualOnly:
+                    alert.messageText = "发现新版本 \(release.version)"
+                    alert.informativeText = "此版本尚未提供签名更新包，请从发布页手动安装。"
+                    alert.addButton(withTitle: "查看发布页"); alert.addButton(withTitle: "稍后")
+                    primary = { NSWorkspace.shared.open(release.page) }
+                case let .failed(message):
+                    alert.alertStyle = .warning; alert.messageText = "更新下载失败"; alert.informativeText = message
+                default: return
+                }
+            } else if let result = updates.manualResult {
+                let latest = result == "已是最新版本"
+                alert.alertStyle = latest ? .informational : .warning
+                alert.messageText = latest ? "LocalClip 已是最新版本" : "检查更新失败"
+                alert.informativeText = latest ? "当前版本 \(UpdateChecker.currentVersion)。" : "请检查网络连接后重试。"
+            } else { return }
+            self?.updateMenu()
+            NSApp.activate(ignoringOtherApps: true)
+            if alert.runModal() == .alertFirstButtonReturn { primary?() }
+        }
     }
     /// 菜单与设置共享唯一显式安装入口，下载中只展示设置状态，by AI.Coding。
     @objc private func openUpdate() {
@@ -653,6 +716,7 @@ extension AppDelegate: NSMenuDelegate {
     public func menuNeedsUpdate(_ menu: NSMenu) {
         menu.items.first?.title = statusMenuTitle
         if menu.items.count > 2 { updateCaptureItem(menu.items[2]) }
+        if let check = menu.items.first(where: { $0.action == #selector(checkForUpdates) }) { updateCheckItem(check) }
     }
 }
 
