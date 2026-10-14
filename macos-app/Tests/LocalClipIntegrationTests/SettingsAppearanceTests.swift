@@ -49,7 +49,7 @@ import Testing
         }
     }
 
-    /// 实际NSWindow关闭通知证明取消命令和失焦关闭生效，返回焦点撤销待关闭任务。
+    /// 实际NSWindow关闭通知证明失焦保留、显式取消关闭，by AI.Coding。
     @Test func settingsWindowCancellationAndFocus() async throws {
         _ = NSApplication.shared
         let window = SettingsWindow(contentRect: .init(x: 0, y: 0, width: 100, height: 100), styleMask: .titled, backing: .buffered, defer: true)
@@ -59,14 +59,14 @@ import Testing
             MainActor.assumeIsolated { closed = true }
         }
         defer { NotificationCenter.default.removeObserver(observer) }
-        window.windowDidResignKey(.init(name: NSWindow.didResignKeyNotification, object: window))
-        window.windowDidBecomeKey(.init(name: NSWindow.didBecomeKeyNotification, object: window))
+        window.resignKey()
         try await Task.sleep(for: .milliseconds(250))
         #expect(!closed)
-        window.windowDidResignKey(.init(name: NSWindow.didResignKeyNotification, object: window))
-        // 关闭在150ms延迟任务中执行；整套测试并发时调度可能更晚，轮询到期限而非固定等待，by AI.Coding。
-        let deadline = ContinuousClock.now + .seconds(3)
-        while !closed, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(20)) }
+        window.becomeKey(); window.resignKey()
+        try await Task.sleep(for: .milliseconds(250))
+        #expect(!closed)
+        // LC-012：失焦保留设置上下文；显式取消才发出关闭通知，by AI.Coding。
+        window.cancelOperation(nil)
         #expect(closed)
         let escapeWindow = SettingsWindow(contentRect: .init(x: 0, y: 0, width: 100, height: 100), styleMask: .titled, backing: .buffered, defer: true)
         escapeWindow.isReleasedWhenClosed = false

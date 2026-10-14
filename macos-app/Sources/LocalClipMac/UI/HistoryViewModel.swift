@@ -14,6 +14,18 @@ import LocalClipCore
     /// 文本文件引用的开头内容。
     let fileTexts: NSCache<NSString, NSString> = { let value = NSCache<NSString, NSString>(); value.countLimit = 200; return value }()
     let thumbnails = ThumbnailMemoryCache()
+    private var filePreviewVersions: [ClipID: FileReferencePreviewVersion] = [:]
+    /// 已由后台取回文件版本后才允许缓存命中；未知/变更身份清除旧正文，by AI.Coding。
+    func validateFilePreview(id: ClipID, version: FileReferencePreviewVersion?) -> Bool {
+        let unchanged = version != nil && filePreviewVersions[id] == version
+        if !unchanged {
+            fileTexts.removeObject(forKey: id as NSString); fileCounts.removeObject(forKey: id as NSString)
+            thumbnails.removeObject(forKey: id as NSString)
+        }
+        if filePreviewVersions.count >= 200 { filePreviewVersions.removeAll() }
+        filePreviewVersions[id] = version
+        return unchanged
+    }
     private var visibleThumbnailIDs: Set<ClipID> = []
     private var thumbnailCleanup: Task<Void, Never>?
     var thumbnailCleanupDelay: Duration = .seconds(30)
@@ -89,7 +101,7 @@ import LocalClipCore
         if let notice = paste.smartPasteNotice { message = result.message + "；" + notice; return }
         switch result {
         case .copied: notice("已复制")
-        case .commandSent: notice("已粘贴")
+        case .commandSent: notice(result.message)
         case .filesCopied(let text): notice(text)
         case .fallback, .failed: message = result.message
         }
@@ -106,11 +118,25 @@ import LocalClipCore
     private var started = false
     private var paging: Task<Void, Never>?
     private var pendingPageNavigation: (selection: ClipID?, extend: Bool)?
-    @Published public private(set) var settings = SettingsSnapshot()
+    @Published public private(set) var settings = SettingsSnapshot() {
+        didSet {
+            // 所有设置来源共用隐藏撤销边界，不能只覆盖设置窗口入口，by AI.Coding。
+            if settings.hideContents && !oldValue.hideContents {
+                showingDetail = false; invalidateDetail(); imageTextTask?.cancel(); imageTextGeneration = UUID()
+                if message == "正在识别图中文字…" { message = "" }
+            }
+        }
+    }
     @Published public private(set) var usage: StorageUsage?
     @Published public var target: TargetToken?
     @Published public var focusRequest = UUID()
-    @Published public var showingDetail = false
+    /// 所有详情入口共享隐藏条件；隐藏是视觉策略，不禁止普通复制，by AI.Coding。
+    public var canDisplayContents: Bool { !settings.hideContents }
+    @Published public var showingDetail = false {
+        didSet { if showingDetail && !canDisplayContents { showingDetail = false } }
+    }
+    private var contentGeneration = UUID()
+    private var quickLookTask: Task<Void, Never>?
     @Published public var showingCategoryEditor = false
     @Published public private(set) var categoryBeingEdited: ClipCategory?
     @Published public var categoryDraft = ""
@@ -126,7 +152,6 @@ import LocalClipCore
     #endif
     private var detailID = UUID()
     private var cursor: SearchCursor? { get { listState[\.cursor] } set { listState[\.cursor] = newValue } }
-    private var pageRevision: Int64 = 0
     private var searching: Task<Void, Never>?
     private var queryPending = false
     private var activeSearchSignature: String?
@@ -430,7 +455,7 @@ import LocalClipCore
                         scrollRestoration = .init(offset: 0)
                         listState[\.scrollEpoch] += 1
                     }
-                    items = visible; cursor = window.cursor; pageRevision = page.revision; loading = false
+                    items = visible; cursor = window.cursor; loading = false
                     if preserveWindow {
                         selectedIDs.formIntersection(Set(items.map(\.id)))
                         if let selectedID, contains(selectedID) { select(selectedID, preserveSelection: true) }
@@ -546,7 +571,7 @@ import LocalClipCore
         if showingDetail { loadDetail() } else { invalidateDetail() }
     }
     private func loadDetail() {
-        guard let id = selectedID, !pendingDeletion.contains(id) else { return }
+        guard canDisplayContents, let id = selectedID, !pendingDeletion.contains(id) else { return }
         if detail?.summary.id == id { return }
         invalidateDetail(); detailLoading = true
         let generation = detailID
@@ -554,21 +579,21 @@ import LocalClipCore
             guard let self else { return }
             do {
                 let detail = try await store.detail(id: id, at: clock.now())
-                guard !Task.isCancelled, generation == detailID, selectedID == id, showingDetail else { return }
+                guard !Task.isCancelled, generation == detailID, canDisplayContents, selectedID == id, showingDetail else { return }
                 guard isVisible(detail.summary) else { revalidateVisibleContent(); return }
                 let rich = await Task.detached { () -> AttributedString in
                     let result = NSMutableAttributedString(string: "")
                     for (index, item) in detail.payload.items.enumerated() { if index > 0 { result.append(NSAttributedString(string: "\n")) }; result.append(RichContent.attributed(item)) }
                     return AttributedString(result)
                 }.value
-                guard !Task.isCancelled, generation == detailID, selectedID == id else { return }
+                guard !Task.isCancelled, generation == detailID, canDisplayContents, selectedID == id else { return }
                 let latest = try await store.metadata(id: id, at: clock.now())
-                guard generation == detailID, selectedID == id, isVisible(latest.summary), !pendingDeletion.contains(id) else { return }
+                guard generation == detailID, canDisplayContents, selectedID == id, isVisible(latest.summary), !pendingDeletion.contains(id) else { return }
                 self.detail = detail; detailLoading = false; richPreview = NSAttributedString(rich)
                 if detail.summary.kind == .image || detail.summary.kind == .mixed {
                     let bytes = await Task.detached { RichContent.fullImage(detail.payload) }.value
                     let metadata = try await store.metadata(id: id, at: clock.now())
-                    guard !Task.isCancelled, generation == detailID, selectedID == id, isVisible(metadata.summary) else { return }
+                    guard !Task.isCancelled, generation == detailID, canDisplayContents, selectedID == id, isVisible(metadata.summary) else { return }
                     image = bytes.flatMap(NSImage.init(data:))
                     if image == nil { previewMessage = "原图预览不可用或超过40MP；原始格式仍保留" }
 
@@ -584,6 +609,7 @@ import LocalClipCore
     /// 数据变更先使已展示派生内容失效。
     private func invalidateDetail() {
         detailing?.cancel(); detailing = nil; detailID = UUID()
+        quickLookTask?.cancel(); quickLookTask = nil; contentGeneration = UUID(); filePreview.close()
         if detail != nil { detail = nil }; if image != nil { image = nil }; if richPreview != nil { richPreview = nil }
         if !previewMessage.isEmpty { previewMessage = "" }; if detailLoading { detailLoading = false }
     }
@@ -874,11 +900,22 @@ import LocalClipCore
             }
             let previous = settings
             if next.shortcut != previous.shortcut, registerShortcut?(next.shortcut) != true { capture.updatePolicy(previous); message = "快捷键注册冲突，菜单栏仍可使用"; return }
+            let previousQueueShortcut = activeQueueShortcut
+            let replacingQueueShortcut = pasteQueueActive && next.queueShortcut != previous.queueShortcut
+            if replacingQueueShortcut, registerQueueShortcut?(next.queueShortcut) != true {
+                if next.shortcut != previous.shortcut { _ = registerShortcut?(previous.shortcut) }
+                capture.updatePolicy(previous); message = "队列快捷键注册冲突，保留原快捷键"; return
+            }
+            if replacingQueueShortcut { activeQueueShortcut = next.queueShortcut; pendingQueueShortcut = next.queueShortcut }
+            defer { pendingQueueShortcut = nil }
             do {
                 settings = try await store.updateCaptureSettings(next); capture.updatePolicy(settings); settingsChanged?()
-                if settings.hideContents { showingDetail = false; invalidateDetail(); filePreview.close() }
                 notice("设置已保存")
             } catch {
+                if replacingQueueShortcut, pasteQueueActive, activeQueueShortcut == next.queueShortcut, let previousQueueShortcut {
+                    if registerQueueShortcut?(previousQueueShortcut) == true { activeQueueShortcut = previousQueueShortcut }
+                    else { stopPasteQueue() }
+                }
                 if next.shortcut != previous.shortcut { _ = registerShortcut?(previous.shortcut) }
                 do {
                     let persisted = try await store.settings()
@@ -1051,7 +1088,7 @@ import LocalClipCore
                 var next: SearchCursor?; var found: [ClipSummary] = []
                 repeat {
                     let page = try await store.search(SearchRequest(cursor: next, queryID: generation, categoryIDs: activeCategories))
-                    guard !Task.isCancelled, generation == queryID else { return }; found += page.items; next = page.next; pageRevision = page.revision
+                    guard !Task.isCancelled, generation == queryID else { return }; found += page.items; next = page.next
                 } while !found.contains(where: { $0.id == wanted }) && next != nil
                 guard found.contains(where: { $0.id == wanted }) else { message = "记录已删除、到期或离开分类"; return }
                 listState.update { items = found.filter(isVisible); cursor = next; loading = false; select(wanted) }
@@ -1060,32 +1097,54 @@ import LocalClipCore
             catch { if generation == queryID { message = "无法定位：记录已变化" } }
         }
     }
-    /// Space按需预览文件；其他格式使用详情，不提前读取正文。
+    /// Space按需预览；读取前后复查展示策略、选择与请求身份，by AI.Coding。
     public func quickLook() {
-        guard let selectedID else { return }
-        Task { do { let detail = try await store.detail(id: selectedID, at: clock.now()); if let urls = detail.payload.fileURLs { filePreview.show(urls, excludeFromSharing: settings.excludeFromSharing) } else { showingDetail = true; detailVisibilityChanged() } } catch { message = "预览不可用，记录已变化" } }
+        guard canDisplayContents, let selectedID else { return }
+        quickLookTask?.cancel()
+        let generation = contentGeneration
+        quickLookTask = Task {
+            do {
+                let detail = try await store.detail(id: selectedID, at: clock.now())
+                let latest = try await store.metadata(id: selectedID, at: clock.now())
+                let currentSettings = try await store.settings()
+                guard !Task.isCancelled, generation == contentGeneration, canDisplayContents,
+                      !currentSettings.hideContents, self.selectedID == selectedID, isVisible(latest.summary) else { return }
+                if let urls = detail.payload.fileURLs { filePreview.show(urls, excludeFromSharing: settings.excludeFromSharing) }
+                else { showingDetail = true; detailVisibilityChanged() }
+            } catch { if !Task.isCancelled && generation == contentGeneration { message = "预览不可用，记录已变化" } }
+        }
     }
     // MARK: F19 连续粘贴队列：只存在内存里，按选择顺序每按一次快捷键粘贴下一项，by AI.Coding。
     @Published public private(set) var pasteQueue: [ClipID] = []
     @Published public private(set) var pasteQueuePosition = 0
     private var pasteQueueBusy = false
+    private var pasteQueueGeneration = UUID()
+    private var pasteQueueTask: Task<Void, Never>?
+    private var activeQueueShortcut: Shortcut?
+    private var pendingQueueShortcut: Shortcut?
     private var pasteQueueIdle: Task<Void, Never>?
     public var pasteQueueActive: Bool { pasteQueuePosition < pasteQueue.count }
     public var pasteQueueStatus: String? {
-        pasteQueueActive ? "粘贴队列 \(pasteQueuePosition)/\(pasteQueue.count) · \(HotKeyService.label(settings.queueShortcut)) 粘贴下一项" : nil
+        pasteQueueActive ? "粘贴队列 \(pasteQueuePosition)/\(pasteQueue.count) · \(HotKeyService.label(activeQueueShortcut ?? settings.queueShortcut)) 粘贴下一项" : nil
     }
     /// 新队列替换旧队列；快捷键注册失败（冲突）则不启动，by AI.Coding。
     public func startPasteQueue(_ ids: [ClipID]) {
         guard ids.count >= 2 else { return }
-        guard registerQueueShortcut?(settings.queueShortcut) == true else {
+        let shortcut = pendingQueueShortcut ?? settings.queueShortcut
+        guard registerQueueShortcut?(shortcut) == true else {
             message = "队列快捷键 \(HotKeyService.label(settings.queueShortcut)) 注册冲突，请在设置 › 粘贴中更换"; showPasteFeedback?(message, true); return
         }
+        pasteQueueTask?.cancel(); pasteQueueTask = nil; pasteQueueGeneration = UUID(); pasteQueueBusy = false
+        activeQueueShortcut = shortcut
         pasteQueue = ids; pasteQueuePosition = 0; touchPasteQueue()
         closePanel?()
-        showPasteFeedback?("已加入粘贴队列 0/\(ids.count) · \(HotKeyService.label(settings.queueShortcut)) 粘贴下一项", false)
+        showPasteFeedback?("已加入粘贴队列 0/\(ids.count) · \(HotKeyService.label(shortcut)) 粘贴下一项", false)
         pasteQueueChanged?()
     }
+    /// 停止使尚未发布的请求失效；不能撤回已发出的系统命令，by AI.Coding。
     public func stopPasteQueue() {
+        pasteQueueTask?.cancel(); pasteQueueTask = nil; pasteQueueGeneration = UUID(); pasteQueueBusy = false
+        activeQueueShortcut = nil
         guard !pasteQueue.isEmpty else { return }
         pasteQueue = []; pasteQueuePosition = 0; pasteQueueIdle?.cancel(); pasteQueueIdle = nil
         unregisterQueueShortcut?(); pasteQueueChanged?()
@@ -1105,64 +1164,85 @@ import LocalClipCore
         guard pasteQueueActive, !pasteQueueBusy else { return }
         guard let target else { showPasteFeedback?("请先切换到要粘贴的应用", true); return }
         pasteQueueBusy = true; touchPasteQueue()
-        Task { [weak self] in
+        let generation = pasteQueueGeneration, ids = pasteQueue
+        pasteQueueTask = Task { [weak self] in
             guard let self else { return }
-            defer { pasteQueueBusy = false }
+            defer { if generation == pasteQueueGeneration { pasteQueueBusy = false; pasteQueueTask = nil } }
             let deadline = ContinuousClock.now + .milliseconds(500)
-            while modifiersHeld(), ContinuousClock.now < deadline { try? await Task.sleep(for: .milliseconds(10)) }
+            while modifiersHeld(), ContinuousClock.now < deadline {
+                do { try await Task.sleep(for: .milliseconds(10)) } catch { return }
+                guard generation == pasteQueueGeneration else { return }
+            }
+            guard !Task.isCancelled, generation == pasteQueueGeneration else { return }
             let held = modifiersHeld()
             var skipped: [Int] = [], shown = false
-            while pasteQueueActive {
-                let index = pasteQueuePosition, id = pasteQueue[index]
-                pasteQueuePosition += 1
+            while pasteQueuePosition < ids.count {
+                let index = pasteQueuePosition, id = ids[index]
                 let result = await paste.perform(.init(ids: [id], format: settings.defaultFormat, action: held ? .copy : settings.defaultAction, target: target))
-                if result == .failed("内容已删除或到期，请重新选择") { skipped.append(index + 1); continue }
+                guard !Task.isCancelled, generation == pasteQueueGeneration else { return }
+                if result == .failed("内容已删除或到期，请重新选择") { pasteQueuePosition += 1; skipped.append(index + 1); continue }
+                // 明确失败可重试；复制回退已有完整剪贴板，沿用推进语义。
+                if case .failed = result { } else { pasteQueuePosition += 1 }
                 await recordUse([id], result)
-                let progress = "\(pasteQueuePosition)/\(pasteQueue.count)"
+                guard !Task.isCancelled, generation == pasteQueueGeneration else { return }
+                let progress = "\(pasteQueuePosition)/\(ids.count)"
                 let skippedText = skipped.isEmpty ? "" : "（第 \(skipped.map(String.init).joined(separator: "、")) 项已不存在，已跳过）"
                 switch result {
-                case .commandSent: showPasteFeedback?("已粘贴 \(progress)" + skippedText, false)
+                case .commandSent: showPasteFeedback?(result.message + " \(progress)" + skippedText, false)
                 case .copied: showPasteFeedback?((held ? "修饰键未松开，已复制 \(progress)，请手动粘贴" : "已复制 \(progress)") + skippedText, held)
                 default: showPasteFeedback?(result.message + "（\(progress)）" + skippedText, true)
                 }
                 shown = true; break
             }
-            // 剩余各项都已删除时，只提示跳过。
             if !shown, !skipped.isEmpty { showPasteFeedback?("第 \(skipped.map(String.init).joined(separator: "、")) 项已不存在，已跳过", true) }
             if !pasteQueueActive { stopPasteQueue() } else { pasteQueueChanged?() }
         }
     }
-    private var imageTextTask: Task<Void, Never>?
+    // 内部只读任务句柄让并发回归等待真实完成，不用固定sleep猜测识别时序。
+    private(set) var imageTextTask: Task<Void, Never>?
     private var imageTextFromDetail = false
+    private var imageTextGeneration = UUID()
+    /// 可控识别边界用于验证延迟完成；生产仍使用本地Vision识别，by AI.Coding。
+    var recognizeImageText: @Sendable (ClipboardPayload) async throws -> [String] = { try await ImageTextRecognizer.recognize($0) }
     /// 复制图中文字：只在用户点击时识别原图，只复制不粘贴（识别可能超过1秒）；隐藏内容时不提供，by AI.Coding。
     public func copyImageText(id: ClipID, fromDetail: Bool = false) {
-        guard !settings.hideContents else { return }
-        imageTextTask?.cancel(); imageTextFromDetail = fromDetail
+        guard canDisplayContents else { return }
+        imageTextTask?.cancel(); imageTextFromDetail = fromDetail; imageTextGeneration = UUID()
+        let generation = imageTextGeneration, clipboardCount = paste.clipboardChangeCount
         notice("正在识别图中文字…")
         imageTextTask = Task { [weak self] in
             guard let self else { return }
             do {
                 let payload = try await store.loadPayload(id: id, at: clock.now())
-                let lines = try await ImageTextRecognizer.recognize(payload)
+                let lines = try await recognizeImageText(payload)
+                let metadata = try await store.metadata(id: id, at: clock.now())
+                let currentSettings = try await store.settings()
                 try Task.checkCancellation()
-                let result = paste.copyText(lines.joined(separator: "\n"))
+                guard generation == imageTextGeneration, canDisplayContents,
+                      !currentSettings.hideContents, isVisible(metadata.summary) else { return }
+                let result = paste.copyText(lines.joined(separator: "\n"), expectedChangeCount: clipboardCount)
                 let text = result == .copied ? "已复制图中文字（\(lines.count) 行）" : result.message
                 notice(text); showPasteFeedback?(text, result != .copied)
-            } catch is CancellationError { if message == "正在识别图中文字…" { message = "" } }
-            catch let error as ImageTextRecognizer.Failure { message = error.message; showPasteFeedback?(error.message, true) }
-            catch { message = "识别失败，记录已变化"; showPasteFeedback?(message, true) }
+            } catch is CancellationError { if generation == imageTextGeneration, message == "正在识别图中文字…" { message = "" } }
+            catch let error as ImageTextRecognizer.Failure { if generation == imageTextGeneration && canDisplayContents { message = error.message; showPasteFeedback?(error.message, true) } }
+            catch { if generation == imageTextGeneration && canDisplayContents { message = "识别失败，记录已变化"; showPasteFeedback?(message, true) } }
         }
     }
     /// 转换菜单按需读取所选内容并逐项判定，不适用的置灰而不隐藏，位置固定便于记忆；按住⌥切换为仅复制，by AI.Coding。
     public func showTransformMenu(ids explicit: [ClipID]? = nil, atSelectedCard: Bool = false) {
         let ids = explicit ?? orderedSelection
-        guard !ids.isEmpty else { return }
+        guard canDisplayContents, !ids.isEmpty else { return }
+        let visibility = contentGeneration
         Task {
             var records: [ClipboardPayload] = []
-            do { for id in ids { records.append(try await store.loadPayload(id: id, at: clock.now())) } }
+            do {
+                try await OutputBudget.preflight(ids, store: store, at: clock.now(), transform: true)
+                for id in ids { try Task.checkCancellation(); records.append(try await store.loadPayload(id: id, at: clock.now())) }
+            } catch is OutputBudget { message = OutputBudget.message; return }
+            catch let error as TransformError { message = error.message; return }
             catch { message = "转换不可用，记录已变化"; return }
             let (available, reason) = await Task.detached { Self.transformAvailability(records) }.value
-            guard explicit != nil || ids == orderedSelection else { return }
+            guard canDisplayContents, visibility == contentGeneration, explicit != nil || ids == orderedSelection else { return }
             let menu = NSMenu(); menu.autoenablesItems = false
             let target = TransformMenuTarget { [weak self] transform, copyOnly in self?.perform(.plainText, action: copyOnly ? .copy : nil, transform: transform, ids: ids) }
             if let reason { let item = NSMenuItem(title: reason, action: nil, keyEquivalent: ""); item.isEnabled = false; menu.addItem(item); menu.addItem(.separator()) }
@@ -1239,10 +1319,12 @@ import LocalClipCore
     }
     /// 用户明确选择单个对象再打开，混合记录不会自动打开所有资源。
     public func openSelected(reveal: Bool = false, withApplication: Bool = false) {
-        guard let selectedID else { return }
+        guard canDisplayContents, let selectedID else { return }
+        let visibility = contentGeneration
         Task {
             do {
                 let value = try await store.detail(id: selectedID, at: clock.now())
+                guard canDisplayContents, visibility == contentGeneration, self.selectedID == selectedID else { return }
                 let declared = value.payload.items.flatMap { $0.representations }.filter { $0.type == SupportedType.url }.compactMap { String(data: $0.data, encoding: .utf8).flatMap(URL.init(string:)) }.filter { ["http","https","mailto"].contains($0.scheme?.lowercased() ?? "") }
                 // 纯文本网址没有public.url表示，按同一识别规则回退，by AI.Coding。
                 let urls = value.payload.fileURLs ?? (declared.isEmpty && value.payload.kind == .url ? value.payload.plainText.flatMap(ClipboardPayload.webLink).map { [$0] } ?? [] : declared)

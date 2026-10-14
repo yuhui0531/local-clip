@@ -5,12 +5,15 @@ public enum OutputComposer {
     /// 文字按记录与项目顺序组合；混合内容保留每项，不能丢弃非文本内容。
     public static func combine(_ records: [ClipboardPayload], format: OutputFormat, join: JoinStyle = .newline) throws -> ClipboardPayload {
         guard !records.isEmpty else { throw StoreError.notFound }
+        try OutputBudget.validate(records)
         // 换行以外的合并方式只输出纯文本，每条记录为一个元素；任一记录无纯文本即拒绝，不静默丢项，by AI.Coding。
         if join != .newline {
             let values = records.map(\.plainText)
             guard values.allSatisfy({ $0 != nil }) else { throw StoreError.corruptPayload }
             let text = join.join(values.compactMap { $0 })
-            return .init([.init([Representation(SupportedType.string, Data(text.utf8))], plainText: text)])
+            let result = ClipboardPayload([.init([Representation(SupportedType.string, Data(text.utf8))], plainText: text)])
+            try OutputBudget.validate([result])
+            return result
         }
         let items = records.flatMap(\.items)
         guard format != .plainText || items.allSatisfy({ $0.plainText != nil }) else { throw StoreError.corruptPayload }
@@ -22,6 +25,7 @@ public enum OutputComposer {
             if format == .original {
                 let attributed = NSMutableAttributedString(string: "")
                 for (index, item) in items.enumerated() {
+                    try Task.checkCancellation()
                     if index > 0 { attributed.append(NSAttributedString(string: "\n")) }
                     attributed.append(RichContent.attributed(item))
                 }
@@ -30,7 +34,9 @@ public enum OutputComposer {
                 let html = try attributed.data(from: range, documentAttributes: [.documentType: NSAttributedString.DocumentType.html])
                 representations.append(.init(SupportedType.html, html))
             }
-            return .init([.init(representations, plainText: plain)])
+            let result = ClipboardPayload([.init(representations, plainText: plain)])
+            try OutputBudget.validate([result])
+            return result
         }
         // 系统多项消费由目标决定；输出保留完整有序项目。
         return .init(items)
@@ -39,6 +45,8 @@ public enum OutputComposer {
     public static func transform(_ payload: ClipboardPayload, _ transform: TextTransform, language: String?) throws -> ClipboardPayload {
         guard let text = payload.plainText else { throw StoreError.corruptPayload }
         let output = try transform.apply(text, language: language)
-        return .init([.init([Representation(SupportedType.string, Data(output.utf8))], plainText: output)])
+        let result = ClipboardPayload([.init([Representation(SupportedType.string, Data(output.utf8))], plainText: output)])
+        try OutputBudget.validate([result])
+        return result
     }
 }

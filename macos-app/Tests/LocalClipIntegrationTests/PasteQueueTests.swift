@@ -30,6 +30,25 @@ import Testing
     }
     private func clipboard(_ raw: RawBoard) -> String? { raw.items.first?[SupportedType.string].map { String(decoding: $0, as: UTF8.self) } }
 
+    /// LC-008：等待修饰键期间替换队列，旧任务不能发布新队列内容或推进位置。
+    @Test func replacedQueueRejectsOldGeneration() async throws {
+        let h = try await harness(); defer { h.model.stopPasteQueue(); try? FileManager.default.removeItem(at: h.root) }
+        var held = true
+        h.model.startPasteQueue(h.ids)
+        h.model.pasteQueueNext(target: h.apps.remembered) { held }
+        try await Task.sleep(for: .milliseconds(30))
+        h.model.stopPasteQueue()
+        h.model.startPasteQueue(Array(h.ids.reversed()))
+        held = false
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(h.apps.events == 0)
+        #expect(h.model.pasteQueuePosition == 0)
+        #expect(clipboard(h.raw) == nil)
+        h.model.pasteQueueNext(target: h.apps.remembered) { false }
+        try await until(h) { h.apps.events == 1 }
+        #expect(clipboard(h.raw) == "third")
+    }
+
     /// 按选择顺序逐项粘贴，处理中再按忽略；用完自动结束并注销快捷键，by AI.Coding。
     @Test func pastesInOrderAndEnds() async throws {
         let h = try await harness(); defer { try? FileManager.default.removeItem(at: h.root) }
@@ -43,7 +62,7 @@ import Testing
             #expect(clipboard(h.raw) == text)
         }
         try await until(h) { !h.model.pasteQueueActive && h.recorder.unregistered == 1 }
-        #expect(h.recorder.feedback.last?.0 == "已粘贴 3/3")
+        #expect(h.recorder.feedback.last?.0 == "已发送粘贴指令 3/3")
         #expect(try await h.store.search(.init()).items.count == 3)
     }
 
@@ -61,7 +80,7 @@ import Testing
         _ = try await h.store.apply(h.store.preview(.delete([h.ids[1]])).token)
         h.model.pasteQueueNext(target: h.apps.remembered) { false }
         try await until(h) { h.recorder.feedback.count == 4 }
-        #expect(clipboard(h.raw) == "third" && h.recorder.feedback.last?.0 == "已粘贴 3/3（第 2 项已不存在，已跳过）")
+        #expect(clipboard(h.raw) == "third" && h.recorder.feedback.last?.0 == "已发送粘贴指令 3/3（第 2 项已不存在，已跳过）")
         try await until(h) { !h.model.pasteQueueActive }
     }
 
@@ -75,5 +94,35 @@ import Testing
         #expect(!h.model.pasteQueueActive && h.recorder.registered == 0)
         h.model.startPasteQueue(h.ids); h.model.stopPasteQueue()
         #expect(!h.model.pasteQueueActive && h.recorder.unregistered == 1 && h.model.pasteQueueStatus == nil)
+    }
+
+    /// LC-008：写入失败保留当前位置，重试不会跳过该项。
+    @Test func failedWriteKeepsQueuePosition() async throws {
+        let h = try await harness(); defer { h.model.stopPasteQueue(); try? FileManager.default.removeItem(at: h.root) }
+        h.model.startPasteQueue(h.ids); h.raw.writeOK = false
+        h.model.pasteQueueNext(target: h.apps.remembered) { false }
+        try await until(h) { h.recorder.feedback.count == 2 }
+        #expect(h.model.pasteQueuePosition == 0 && h.apps.events == 0)
+        h.raw.writeOK = true
+        h.model.pasteQueueNext(target: h.apps.remembered) { false }
+        try await until(h) { h.apps.events == 1 }
+        #expect(clipboard(h.raw) == "first")
+    }
+
+    /// LC-009：活动队列快捷键替换成功才持久化；冲突时保持旧配置和提示。
+    @Test func activeQueueShortcutCommitAndConflict() async throws {
+        let h = try await harness(); defer { h.model.stopPasteQueue(); h.model.capture.stop(); try? FileManager.default.removeItem(at: h.root) }
+        try await h.model.start(); h.model.capture.stop()
+        h.model.startPasteQueue(h.ids)
+        let previous = h.model.settings.queueShortcut
+        var proposed = previous; proposed.keyCode = previous.keyCode == 8 ? 9 : 8
+        h.model.updateSettings { $0.queueShortcut = proposed }
+        try await until(h) { h.model.settings.queueShortcut == proposed }
+        #expect(h.model.pasteQueueStatus?.contains(HotKeyService.label(proposed)) == true)
+        h.model.registerQueueShortcut = { _ in false }
+        h.model.updateSettings { $0.queueShortcut = previous }
+        try await until(h) { h.model.message.contains("队列快捷键注册冲突") }
+        #expect(h.model.settings.queueShortcut == proposed)
+        #expect(try await h.store.settings().queueShortcut == proposed)
     }
 }

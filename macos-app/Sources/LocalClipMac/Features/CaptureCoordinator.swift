@@ -156,7 +156,9 @@ import LocalClipCore
                 guard let result else { ignored(epoch == captureEpoch ? .busy : .paused); continue }
                 switch result {
                 case .inserted, .deduplicated:
-                    setState("正常"); if policy.captureSounds { NSSound(named: "Pop")?.play() }; onCommit?()
+                    // 只为新内容出声；虚拟机/远程桌面同步会反复写回相同内容，去重命中不响，by AI.Coding。
+                    if case .inserted = result, policy.captureSounds { NSSound(named: "Pop")?.play() }
+                    setState("正常"); onCommit?()
                     do { _ = try await store.expire(at: clock.now()) }
                     catch { setState("已记录；期限清理失败，未报告释放") }
                 case .skipped(let reason): ignored(reason)

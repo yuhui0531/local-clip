@@ -1,4 +1,4 @@
-# LocalClip 0.3.30（构建52）
+# LocalClip 0.3.31（构建53）
 
 Current delivery: every clipboard kind supports an optional persistent display name. Double-click the coloured header or use 重命名 in its context menu; Enter saves, Esc cancels, clearing restores the default. Body double-click retains its existing paste behaviour. The full-history tab says 剪贴板. Names preserve content, ordering, copy identity, selection, categories and favourites; they are stored in `clips.title` (schema v4; other schema versions are refused, no migration) and are searchable. Current storage, interaction defaults and performance baseline: [architecture](docs/architecture.md). Independent source review has no actionable findings. Debug/Release have zero failures. Repeated-search overhead is 23.60 ms (limit 60 ms); initial-cycle overhead is 69.73 ms and remains a concern. Details and user-owned physical checks: [review fixes and evidence](docs/review-fixes-r01-r12.md).
 
@@ -201,3 +201,7 @@ rtk proxy open -n /Users/ronny/VscodeProjects/rea/macos-app/dist/LocalClip.app -
 拖拽不读取完整正文/图片/文件，也不恢复general剪贴板。使用声明的内部拖放类型和本进程可见的短期随机令牌，拖拽预览只显示“加入分类”；外部文本/文件不能当作历史记录导入。载入令牌后再确认当前记录、目标分类与令牌有效性；SQLite写入再次检查期限/存在性，已删除/到期的记录不能被拖拽恢复。重复加入不会产生重复归属。没有schema升级或兼容代码。
 
 本轮Release构建及严格签名检查通过，未启动应用或运行自动功能、真实GUI、SQLite故障或性能测试，实际拖拽手势与点击/滚动配合由用户自测。
+
+## Current schema and release gates
+
+Schema remains v4. See [schema compatibility and recovery](docs/schema-recovery-contract.md) before replacing application/data versions. See [native release gates](docs/native-release-gates.md) for the separate protocol, GUI, permission and performance evidence requirements.

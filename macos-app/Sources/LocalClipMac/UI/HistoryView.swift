@@ -53,19 +53,20 @@ public struct HistoryView: View {
                         let filtering = model.sourceFilter != nil || model.dateFilterEnabled
                         ToolbarIconButton(symbol: filtering ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle", tint: filtering ? .accentColor : nil, help: "筛选") { model.showingFilters.toggle() }
                             .popover(isPresented: $model.showingFilters) { FilterEditor(model: model) }
-                        // 暂停时图标转为醒目的恢复入口，状态与动作一眼可辨，by AI.Coding。
-                        let recording = !model.recordingPaused
-                        ToolbarIconButton(symbol: recording ? "pause.circle" : "play.circle.fill", tint: recording ? nil : .orange, help: recording ? "暂停记录" : "恢复记录", action: model.toggleRecording)
+                        // 监控开关收进更多菜单，停止状态由底栏状态与“开始监控”入口提示，by AI.Coding。
                         Menu {
+                            Button(model.recordingPaused ? "开始监控" : "停止监控", action: model.toggleRecording)
+                            Divider()
                             Button(model.settings.hideContents ? "显示内容" : "隐藏内容") { model.updateSettings { $0.hideContents.toggle() } }
                             Button("撤销删除 · ⌘Z") { model.undoDeletion() }.disabled(!model.canUndoDeletion)
                             Divider()
                             Button("设置… · ⌘,") { model.openSettings?() }
                             Button("清空普通历史…", role: .destructive) { model.change(.clearOrdinary) }
                             Divider(); Button("退出 LocalClip") { model.quitApplication?() }.keyboardShortcut("q", modifiers: .command)
-                        } label: { Image(systemName: "ellipsis.circle").font(.system(size: 17)).foregroundStyle(Color.primary.opacity(0.72)) }
-                            .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().frame(width: 28, height: 28).help("更多").accessibilityLabel("更多")
-                        ToolbarIconButton(symbol: model.pinned ? "pin.fill" : "pin", tint: model.pinned ? .accentColor : nil, help: model.pinned ? "取消置顶" : "置顶（失焦不隐藏）", label: model.pinned ? "取消置顶" : "置顶") { model.pinned.toggle(); model.panelInteractionChanged?() }
+                        } label: { Image(systemName: "ellipsis.circle").font(.system(size: 17)).foregroundStyle(Color.primary.opacity(0.72)).frame(width: 28, height: 28).contentShape(Circle()) }
+                            // borderlessButton 由 AppKit 按自身尺寸绘制图标，改用 SwiftUI 渲染标签以与相邻按钮同尺寸，by AI.Coding。
+                            .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize().help("更多").accessibilityLabel("更多")
+                        ToolbarIconButton(symbol: model.pinned ? "pin.circle.fill" : "pin.circle", tint: model.pinned ? .accentColor : nil, help: model.pinned ? "取消置顶" : "置顶（失焦不隐藏）", label: model.pinned ? "取消置顶" : "置顶") { model.pinned.toggle(); model.panelInteractionChanged?() }
                         ToolbarIconButton(symbol: "xmark.circle", help: "关闭 · Esc") { model.closePanel?() }
                     }
                 }.padding(.horizontal, 24).frame(height: toolbarHeight)
@@ -81,7 +82,7 @@ public struct HistoryView: View {
                         .help(model.ignoreDescription)
                     // 暂停时就地提供恢复入口，不必去找工具栏或菜单，by AI.Coding。
                     if model.recordingPaused && model.message.isEmpty {
-                        Button("恢复记录") { model.resumeRecording() }.buttonStyle(.link).font(.system(size: 11))
+                        Button("开始监控") { model.resumeRecording() }.buttonStyle(.link).font(.system(size: 11))
                     }
                     HistoryListStatistics(footer: model.listState.footerState)
                     Spacer()
@@ -189,7 +190,7 @@ public struct HistoryView: View {
     }
     /// 采集状态改用面向用户的说法，内部状态值保持不变。
     static func statusLabel(_ state: String) -> String {
-        switch state { case "正常": "正在记录"; case "用户暂停": "已暂停记录"; case "定时暂停": "已定时暂停"; case "容量已满": "容量已满，新内容未记录"; default: state }
+        switch state { case "正常": "正在监控"; case "用户暂停": "已停止监控"; case "定时暂停": "已定时停止监控"; case "正在暂停": "正在停止监控"; case "容量已满": "容量已满，新内容未记录"; default: state }
     }
     /// 类型名称与新增文件筛选保持一致。
     public static func kindName(_ kind: ClipKind) -> String { switch kind { case .text: "文本"; case .url: "链接"; case .richText: "富文本"; case .image: "图片"; case .file: "文件"; case .mixed: "混合" } }
@@ -262,7 +263,7 @@ private struct HistoryScroller: View {
             ScrollView(.horizontal) {
                 LazyHStack(spacing: 16) {
                     ForEach(Array(strip.model.items.enumerated()), id: \.element.id) { index, item in
-                        ClipCard(item: item, index: index, selected: strip.model.selectedIDs.contains(item.id), dragging: strip.draggedIDs.contains(item.id), editing: strip.renamingID == item.id, hidden: strip.hideContents, quickModifiers: strip.model.settings.quickModifiers, height: strip.cardHeight, categoryID: strip.categoryID, categories: strip.categories, target: strip.target, model: strip.model).equatable().id(item.id)
+                        ClipCard(item: item, index: index, selected: strip.model.selectedIDs.contains(item.id), dragging: strip.draggedIDs.contains(item.id), editing: strip.renamingID == item.id, hidden: strip.hideContents, quickModifiers: strip.model.settings.quickModifiers, height: strip.cardHeight, categoryID: strip.categoryID, categories: strip.categories, target: strip.target, model: strip.model, previewGeneration: strip.focusRequest).equatable().id(item.id)
                             // 详情贴着所选卡片弹出，而不是远在底栏右侧的按钮，by AI.Coding。
                             .popover(isPresented: Binding(get: { strip.showingDetail && strip.model.selectedID == item.id }, set: { if !$0 { strip.model.showingDetail = false } }), arrowEdge: .top) {
                                 ClipInspector(model: strip.model).frame(width: 520)
@@ -319,7 +320,7 @@ private struct HistoryEmptyState: View {
                         Button("查看剪贴板") { model.selectKind(nil) }
                     }
                     if model.recordingPaused {
-                        Button("恢复记录") { model.resumeRecording() }
+                        Button("开始监控") { model.resumeRecording() }
                     }
                 }.buttonStyle(.bordered).controlSize(.small)
             }
@@ -449,12 +450,16 @@ private struct ClipCard: View, Equatable {
     let categories: [ClipCategory]
     let target: TargetToken?
     let model: HistoryViewModel
+    let previewGeneration: UUID
+    @State private var checkedFileGeneration: UUID?
+    @State private var fileVersion: FileReferencePreviewVersion?
     @State private var characterCount: Int?
     @State private var fileText: String?
     @State private var fileTextFailed = false
     @State private var thumbnailState: ThumbnailPreviewState = .loading
     /// 离屏会丢弃解码状态；缓存命中时直接显示，不经过加载占位，by AI.Coding。
     private var displayedThumbnail: ThumbnailPreviewState {
+        if item.kind == .file, checkedFileGeneration != previewGeneration { return .loading }
         if case .loading = thumbnailState, let image = model.thumbnails.object(forKey: item.id as NSString) { return .ready(image) }
         return thumbnailState
     }
@@ -472,8 +477,8 @@ private struct ClipCard: View, Equatable {
     /// 全部为文本文件时显示第一个文件的开头内容；读取失败退回文件样式，by AI.Coding。
     private var textFilePaths: (first: String, count: Int?)? { filePaths(TextFilePreview.isCandidate) }
     /// 缓存中的空串表示已确认不是文本，不再重复读取。
-    private var cachedFileText: String? { model.fileTexts.object(forKey: item.id as NSString).map(String.init) }
-    private var displayedFileText: String? { fileText ?? cachedFileText.flatMap { $0.isEmpty ? nil : $0 } }
+    private var cachedFileText: String? { checkedFileGeneration == previewGeneration ? model.fileTexts.object(forKey: item.id as NSString).map(String.init) : nil }
+    private var displayedFileText: String? { checkedFileGeneration == previewGeneration ? fileText ?? cachedFileText.flatMap { $0.isEmpty ? nil : $0 } : nil }
     /// 第一个文件名加总数，预览文本截断且尚未读取时写“多个”。
     private func fileCaption(_ paths: (first: String, count: Int?), unit: String) -> String {
         let more = (model.fileCounts.object(forKey: item.id as NSString)?.intValue ?? paths.count).map { $0 > 1 ? " 等\($0)\(unit)" : "" } ?? " 等多\(unit)"
@@ -494,6 +499,7 @@ private struct ClipCard: View, Equatable {
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.item == rhs.item && lhs.index == rhs.index && lhs.selected == rhs.selected && lhs.dragging == rhs.dragging && lhs.editing == rhs.editing && lhs.hidden == rhs.hidden && lhs.quickModifiers == rhs.quickModifiers && lhs.height == rhs.height
             && lhs.categoryID == rhs.categoryID && lhs.categories == rhs.categories && lhs.target == rhs.target
+            && (lhs.item.kind != .file || lhs.previewGeneration == rhs.previewGeneration)
     }
     private var code: Bool { item.kind == .text && detectedLanguage != nil }
     /// 卡片合并辅助功能子元素后仍朗读预览状态；隐藏内容时不泄露状态或正文。
@@ -690,10 +696,22 @@ private struct ClipCard: View, Equatable {
             .onScrollVisibilityChange(threshold: 0.01) { visible in
                 isOnscreen = visible
                 model.thumbnailVisibilityChanged(id: item.id, visible: visible)
-                if !visible { model.cancelRename(id: item.id); thumbnailState = .loading; Task { await model.derived.cancel(id: item.id) } }
+                if !visible { if item.kind == .file { checkedFileGeneration = nil }; model.cancelRename(id: item.id); thumbnailState = .loading; Task { await model.derived.cancel(id: item.id) } }
             }
-            .task(id: isOnscreen) {
+            .task(id: [String(isOnscreen), item.kind == .file ? previewGeneration.uuidString : "immutable"]) {
                 guard isOnscreen else { return }
+                // 外部文件每次进入视口/重开面板先验证身份；慢卷期间只显示占位，by AI.Coding。
+                if item.kind == .file {
+                    checkedFileGeneration = nil
+                    let urls = try? await model.store.detail(id: item.id, at: SystemClock().now()).payload.fileURLs
+                    let version = await Task.detached(priority: .utility) { urls.flatMap(FileReferencePreviewVersion.read) }.value
+                    guard !Task.isCancelled, model.contains(item.id) else { return }
+                    if !model.validateFilePreview(id: item.id, version: version) {
+                        fileText = nil; fileTextFailed = false; thumbnailState = .loading
+                    }
+                    fileVersion = version; checkedFileGeneration = previewGeneration
+                    guard version != nil else { fileTextFailed = true; thumbnailState = .failed; return }
+                }
                 // 只为实际出现的文字卡片统计全文，计数缓存不随选中状态重算。
                 if [.text, .url, .richText].contains(item.kind), displayedCharacterCount == nil {
                     let count = try? await model.store.textCharacterCount(id: item.id, at: SystemClock().now())
@@ -715,6 +733,9 @@ private struct ClipCard: View, Equatable {
                         if urls != nil { model.fileTexts.setObject("", forKey: item.id as NSString) }
                         return
                     }
+                    guard let version = fileVersion,
+                          await Task.detached(priority: .utility, operation: { version.isCurrent() }).value,
+                          !Task.isCancelled else { fileText = nil; fileTextFailed = true; return }
                     fileText = text
                     model.fileTexts.setObject(text as NSString, forKey: item.id as NSString)
                     model.fileCounts.setObject(urls.count as NSNumber, forKey: item.id as NSString)
@@ -739,6 +760,11 @@ private struct ClipCard: View, Equatable {
                     return
                 }
                 guard !Task.isCancelled, model.contains(item.id) else { return }
+                if isImageFile {
+                    guard let version = fileVersion,
+                          await Task.detached(priority: .utility, operation: { version.isCurrent() }).value,
+                          !Task.isCancelled else { thumbnailState = .failed; return }
+                }
                 thumbnailState = ThumbnailPreviewState(result)
                 if let image = thumbnailState.image, case .image(let data) = result {
                     model.thumbnails.setObject(image, forKey: item.id as NSString, encodedBytes: data.count)

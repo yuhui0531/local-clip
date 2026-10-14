@@ -10,6 +10,8 @@ import LocalClipCore
     private var rememberedTerminalContext: Bool?
     private let logger = Logger(subsystem: "local.localclip.dev", category: "Paste")
     public private(set) var pasteFailureReason: String?
+    /// 仅用户开启阶段计时时采集总AX阶段耗时，不记录正文，by AI.Coding。
+    public var timingEnabled = false
     public init() {}
     /// 只为智能文件转换分类，不收紧原生粘贴焦点检查；不读取输入框正文，by AI.Coding。
     public func pasteTargetKind(_ target: TargetToken) -> PasteTargetKind {
@@ -94,6 +96,8 @@ import LocalClipCore
     public func isFrontmost(_ target: TargetToken) -> Bool { isAlive(target) && NSWorkspace.shared.frontmostApplication?.processIdentifier == target.pid }
     /// 打开面板前只记住目标焦点身份，不读取控件内容；无授权时保留复制回退。
     public func rememberFocus(for target: TargetToken?) {
+        let began = ContinuousClock.now
+        defer { if timingEnabled { StageTiming.record("ax_remember_focus", since: began, count: 1) } }
         focusTarget = target; rememberedFocus = nil; rememberedTerminalContext = nil; pasteFailureReason = nil
         guard let target, permitted, isFrontmost(target) else {
             reject(permitted ? "未记住目标焦点，请在目标应用重新打开历史" : "当前LocalClip尚未获得辅助功能权限")
@@ -107,6 +111,8 @@ import LocalClipCore
     }
     /// 核对原焦点即可；编辑器、文档、画布等由目标应用处理原生粘贴。
     public func isPasteFocusReady(_ target: TargetToken) -> Bool {
+        let began = ContinuousClock.now
+        defer { if timingEnabled { StageTiming.record("ax_focus_check", since: began, count: 1) } }
         guard focusTarget == target, let rememberedFocus else { return reject("未记住目标焦点，请在目标应用重新打开历史") }
         guard let focused = focusedElement(in: target), CFEqual(rememberedFocus, focused) else { return reject("原目标焦点尚未恢复或已经改变") }
         let enabled = attribute(kAXEnabledAttribute, of: focused) as? Bool

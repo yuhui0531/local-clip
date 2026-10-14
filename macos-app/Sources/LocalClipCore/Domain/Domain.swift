@@ -286,6 +286,9 @@ public struct ClipMetadata: Equatable, Sendable {
     public var categoryIDs: Set<String>
     public var hasTextRepresentations: Bool
     public var revision: Int64
+    /// 输出预检仅读字节计数与类型，不读取正文，by AI.Coding。
+    public var outputByteCount: Int64 = 0
+    public var hasFileReferences: Bool = false
 }
 // 用户分类是SQLite元数据，可重命名，归属与内容格式身份分离，by AI.Coding。
 public struct ClipCategory: Identifiable, Equatable, Sendable {
@@ -340,6 +343,10 @@ public struct ChangePreview: Sendable {
     public var estimatedReclaimBytes: Int64
     public var requiresConfirmation: Bool
     public var message: String
+    /// 删除预览的保护数量与撤销能力；其他操作无撤销估算，by AI.Coding。
+    public var protectedCount: Int = 0
+    public var canUndo: Bool? = nil
+    public var undoUnavailableReason: String? = nil
 }
 public struct ChangeResult: Sendable { public var removed: Int; public var reclaimedBytes: Int64; public var revision: Int64 }
 public struct StorageUsage: Equatable, Sendable {

@@ -202,34 +202,38 @@ import LocalClipCore
     /// 菜单构造不创建系统状态项，退出路由可在无窗口测试中验证，by AI.Coding。
     func makeStatusMenu() -> NSMenu {
         let menu = NSMenu()
-        // 原生分区标题显示面向用户的状态；各项配 SF Symbols，与面板用词一致，by AI.Coding。
-        menu.addItem(.sectionHeader(title: statusMenuTitle))
-        let show = menu.addItem(withTitle: "打开历史", action: #selector(showHistory), keyEquivalent: ""); show.target = self
-        show.image = NSImage(systemSymbolName: "square.on.square", accessibilityDescription: nil)
-        if let model, model.pasteQueueActive {
-            let queue = menu.addItem(withTitle: "结束粘贴队列（\(model.pasteQueuePosition)/\(model.pasteQueue.count)）", action: #selector(stopPasteQueue), keyEquivalent: ""); queue.target = self
-            queue.image = NSImage(systemSymbolName: "list.number", accessibilityDescription: nil)
-        }
-        let pause = menu.addItem(withTitle: "", action: #selector(toggleCapture), keyEquivalent: ""); pause.target = self
-        updateCaptureItem(pause)
-        let settings = menu.addItem(withTitle: "设置…", action: #selector(showSettings), keyEquivalent: ","); settings.target = self
-        settings.image = NSImage(systemSymbolName: "gearshape", accessibilityDescription: nil)
-        // 有新版本时只在菜单里多一项，不弹窗打扰，by AI.Coding。
+        // 参照应用菜单：关于与更新在最前，设置其次，状态与常用操作居中，退出最后；每项均配 SF Symbols，by AI.Coding。
+        let about = menu.addItem(withTitle: "关于 LocalClip", action: #selector(showAbout), keyEquivalent: ""); about.target = self
+        about.image = NSImage(systemSymbolName: "info.circle", accessibilityDescription: nil)
+        // 有新版本时更新项占据检查更新的位置，不额外加项，by AI.Coding。
         if let release = UpdateChecker.shared.available {
             let title = UpdateChecker.shared.phase == .ready ? "安装并重启 · \(release.version)…" : "更新 \(release.version)…"
             let update = menu.addItem(withTitle: title, action: #selector(openUpdate), keyEquivalent: ""); update.target = self
             update.image = NSImage(systemSymbolName: "arrow.down.circle", accessibilityDescription: nil)
+        } else {
+            let check = menu.addItem(withTitle: "", action: #selector(checkForUpdates), keyEquivalent: ""); check.target = self
+            check.image = NSImage(systemSymbolName: "arrow.triangle.2.circlepath", accessibilityDescription: nil)
+            updateCheckItem(check)
         }
         menu.addItem(.separator())
-        // 菜单栏应用没有应用菜单，关于与手动检查更新放在状态菜单，by AI.Coding。
-        let about = menu.addItem(withTitle: "关于 LocalClip", action: #selector(showAbout), keyEquivalent: ""); about.target = self
-        about.image = NSImage(systemSymbolName: "info.circle", accessibilityDescription: nil)
-        let check = menu.addItem(withTitle: "", action: #selector(checkForUpdates), keyEquivalent: ""); check.target = self
-        updateCheckItem(check)
+        let settings = menu.addItem(withTitle: "设置…", action: #selector(showSettings), keyEquivalent: ","); settings.target = self
+        settings.image = NSImage(systemSymbolName: "gearshape", accessibilityDescription: nil)
+        menu.addItem(.separator())
+        // 原生分区标题显示面向用户的状态，与面板用词一致，by AI.Coding。
+        menu.addItem(.sectionHeader(title: statusMenuTitle))
+        let show = menu.addItem(withTitle: "打开历史", action: #selector(showHistory), keyEquivalent: ""); show.target = self
+        show.image = NSImage(systemSymbolName: "square.on.square", accessibilityDescription: nil)
+        let pause = menu.addItem(withTitle: "", action: #selector(toggleCapture), keyEquivalent: ""); pause.target = self
+        updateCaptureItem(pause)
+        if let model, model.pasteQueueActive {
+            let queue = menu.addItem(withTitle: "结束粘贴队列（\(model.pasteQueuePosition)/\(model.pasteQueue.count)）", action: #selector(stopPasteQueue), keyEquivalent: ""); queue.target = self
+            queue.image = NSImage(systemSymbolName: "list.number", accessibilityDescription: nil)
+        }
         menu.addItem(.separator())
         // 菜单栏非激活窗口不依赖外部应用的响应链，by AI.Coding。
         let quit = menu.addItem(withTitle: "退出 LocalClip", action: #selector(quitApplication(_:)), keyEquivalent: "q")
         quit.target = self
+        quit.image = NSImage(systemSymbolName: "power", accessibilityDescription: nil)
         // 检查中项需真实置灰，不能被自动启用覆盖。
         menu.autoenablesItems = false
         menu.delegate = self; return menu
@@ -305,7 +309,7 @@ import LocalClipCore
     private var statusMenuTitle: String { "LocalClip · " + HistoryView.statusLabel(model?.capture.state ?? "准备中") }
     private func updateCaptureItem(_ item: NSMenuItem) {
         let paused = model?.recordingPaused == true
-        item.title = paused ? "恢复记录" : "暂停记录"
+        item.title = paused ? "开始监控" : "停止监控"
         item.image = NSImage(systemSymbolName: paused ? "play.circle" : "pause.circle", accessibilityDescription: nil)
     }
     /// 队列快捷键在其他应用中按下：以当前前台应用为目标，先记住其焦点再粘贴；面板在前台时不粘贴到自身，by AI.Coding。
@@ -326,6 +330,10 @@ import LocalClipCore
     /// 记住外部目标后展示面板，铺满当前显示器底边，禁止拖动和缩放。
     @objc public func showHistory() {
         guard let model else { return }
+        let began = ContinuousClock.now
+        applications.timingEnabled = model.settings.timingEnabled
+        // 这里测到窗口提交而非首帧；首帧继续由GUI探针记录，by AI.Coding。
+        defer { if model.settings.timingEnabled { StageTiming.record("show_history_submitted", since: began, count: 1) } }
         focusState.ownedInteraction()
         focusDismissal?.cancel(); model.showingDetail = false; model.showingCategoryEditor = false
         if let target = applications.target() {
@@ -477,6 +485,12 @@ import LocalClipCore
     static func routesHistoryShortcuts(_ eventWindow: NSWindow?, panel: NSWindow,
                                       confirming: Bool, hasModal: Bool) -> Bool {
         !confirming && !hasModal && (eventWindow === panel || (eventWindow == nil && panel.isKeyWindow))
+    }
+    /// Space/Return/方向键由已聚焦的原生控件处理；结果响应者和搜索编辑器保留历史导航。
+    /// 不依赖SwiftUI内部控件类名，也不查询其他应用的AX树，by AI.Coding。
+    static func preservesFocusedControlKeys(_ event: NSEvent, firstResponder: NSResponder?, resultsResponder: NSResponder) -> Bool {
+        guard let firstResponder, firstResponder !== resultsResponder, !(firstResponder is NSTextView) else { return false }
+        return event.modifierFlags.intersection([.command, .control, .option]).isEmpty
     }
     /// 粘贴回退显示短暂非激活提示，不让关闭历史面板隐藏失败原因。
     private func showPasteFeedback(_ message: String, failed: Bool) {
@@ -634,6 +648,7 @@ import LocalClipCore
             if event.keyCode == 53 {
                 if model.showingCategoryEditor { model.showingCategoryEditor = false }
                 else if model.showingFilters { model.showingFilters = false }
+                else if model.showingDetail { model.showingDetail = false }
                 else { self.dismissHistory() }
                 return nil
             }
@@ -643,7 +658,9 @@ import LocalClipCore
             if flags == [.command], event.keyCode == 3 {
                 model.focusRequest = UUID(); return nil
             }
-            if event.keyCode == 48 { model.focusResults?(); return nil }
+            // Tab/Shift-Tab和已聚焦控件的激活键交给原生焦点链，避免Space误开预览、Return误粘贴。
+            if event.keyCode == 48 { return event }
+            if Self.preservesFocusedControlKeys(event, firstResponder: panel.firstResponder, resultsResponder: panel) { return event }
             if flags == [.shift], [UInt16(36),76].contains(event.keyCode) { model.perform(.plainText, action: .directPaste); return nil }
             let carbon = (flags.contains(.command) ? UInt32(cmdKey) : 0) | (flags.contains(.option) ? UInt32(optionKey) : 0) | (flags.contains(.control) ? UInt32(controlKey) : 0) | (flags.contains(.shift) ? UInt32(shiftKey) : 0)
             if carbon == model.settings.boardModifiers {
@@ -665,7 +682,7 @@ import LocalClipCore
                 case 5: model.jumpToHistory(); return nil
                 case 31: model.openSelected(); return nil
                 // ⌘I 是macOS“显示简介”的通用快捷键，在所选卡片上方切换详情，by AI.Coding。
-                case 34: if model.selectedID != nil { model.showingDetail.toggle() }; return nil
+                case 34: if model.canDisplayContents, model.selectedID != nil { model.showingDetail.toggle() }; return nil
                 // ⌘T在所选卡片处弹出转换菜单，Esc只关闭菜单，by AI.Coding。
                 case 17: model.showTransformMenu(atSelectedCard: true); return nil
                 default: return event
@@ -714,8 +731,9 @@ import LocalClipCore
 extension AppDelegate: NSMenuDelegate {
     /// 打开菜单时反映真实状态，而不是创建时的开关值。
     public func menuNeedsUpdate(_ menu: NSMenu) {
-        menu.items.first?.title = statusMenuTitle
-        if menu.items.count > 2 { updateCaptureItem(menu.items[2]) }
+        menu.items.first(where: \.isSectionHeader)?.title = statusMenuTitle
+        // 可选队列/更新项不会改变采集动作身份，by AI.Coding。
+        if let capture = menu.items.first(where: { $0.action == #selector(toggleCapture) }) { updateCaptureItem(capture) }
         if let check = menu.items.first(where: { $0.action == #selector(checkForUpdates) }) { updateCheckItem(check) }
     }
 }

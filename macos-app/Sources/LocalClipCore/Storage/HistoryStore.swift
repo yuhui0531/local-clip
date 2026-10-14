@@ -46,7 +46,7 @@ public actor HistoryStore: HistoryRepository {
         if FileManager.default.fileExists(atPath: strategy.databaseURL.path) {
             // 读写打开让SQLite回滚崩溃遗留的热日志；只读取版本，高版本库不被修改。
             let db = try SQLiteConnection(strategy.databaseURL)
-            // 开发阶段不做旧库升级：版本不同即拒绝且不修改文件，删除History目录后重建，by AI.Coding。
+            // 仅支持v4；版本不兼容保留原库，按迁移/恢复契约使用匹配版本或完整快照，by AI.Coding。
             guard try db.scalarInt("PRAGMA user_version") == Schema.version else { try db.close(); throw StoreError.incompatibleSchema }
             guard try db.scalarText("PRAGMA quick_check") == "ok", try db.rows("PRAGMA foreign_key_check").isEmpty else { throw StoreError.corruptPayload }
             try db.close()
@@ -318,11 +318,21 @@ public actor HistoryStore: HistoryRepository {
             let categories = Set(try db.rows("SELECT categoryID FROM clip_categories WHERE clipID=?", [.text(id)]).map { $0.text("categoryID") })
             let total = try db.scalarInt("SELECT COUNT(*) FROM items WHERE clipID=?", [.text(id)])
             let textual = try db.scalarInt("SELECT COUNT(DISTINCT itemIndex) FROM representations WHERE clipID=? AND type IN('public.utf8-plain-text','public.url','public.rtf','public.html','public.file-url')", [.text(id)])
-            return .init(summary: summary(row), categoryIDs: categories, hasTextRepresentations: total > 0 && total == textual, revision: try self.revision(db))
+            let bytes = try db.scalarInt("SELECT COALESCE(SUM(byteCount),0) FROM representations JOIN blobs ON digest=blobDigest WHERE clipID=?", [.text(id)])
+            let files = try db.scalarInt("SELECT COUNT(*) FROM representations WHERE clipID=? AND type='public.file-url'", [.text(id)]) > 0
+            return .init(summary: summary(row), categoryIDs: categories, hasTextRepresentations: total > 0 && total == textual, revision: try self.revision(db), outputByteCount: bytes, hasFileReferences: files)
         }
     }
     /// 接口分离避免列表批量读取图片。
-    public func loadPayload(id: ClipID, at: Instant) throws -> ClipboardPayload { try detail(id: id, at: at).payload }
+    #if DEBUG
+    private(set) var outputPayloadLoads = 0
+    #endif
+    public func loadPayload(id: ClipID, at: Instant) throws -> ClipboardPayload {
+        #if DEBUG
+        outputPayloadLoads += 1
+        #endif
+        return try detail(id: id, at: at).payload
+    }
     /// 可见文本卡片按需统计完整文字，不把180字符摘要当全文，不批量读取图片或文件载荷。
     public func textCharacterCount(id: ClipID, at: Instant) throws -> Int? {
         let settings = try settings()
@@ -369,7 +379,12 @@ public actor HistoryStore: HistoryRepository {
             preview: row.text("previewText"), context: context ?? row.text("previewText"), title: row.text("title").nonEmpty)
     }
     /// 全文字面子串；缺索引时从可提取原始表示回退，不能丢长文尾部。
-    public func search(_ request: SearchRequest) throws -> SearchPage {
+    #if DEBUG
+    private(set) var lastCandidateProjectionBytes = 0
+    #endif
+    public func search(_ request: SearchRequest) async throws -> SearchPage {
+        let repair = try await prepareSearchRepair(request)
+        defer { try? repair.db.close() }
         let literal = SearchNormalizer.normalize(request.literal)
         let currentRevision = try strategy.read { try self.revision($0) }
         var candidates: Set<ClipID>?
@@ -383,7 +398,7 @@ public actor HistoryStore: HistoryRepository {
         #if DEBUG
         if candidates != nil { narrowedSearchCount += 1 }
         #endif
-        let result = try searchExecution(request, onlyIDs: candidates, includeMatchContext: true)
+        let result = try searchExecution(request, onlyIDs: candidates, includeMatchContext: true, repair: repair)
         if !literal.isEmpty, request.cursor == nil {
             searchCandidateCache = .init(literal: literal, filterSignature: filterSignature(request), revision: result.page.revision, ids: result.candidateIDs)
         } else if literal.isEmpty, request.cursor == nil {
@@ -393,29 +408,57 @@ public actor HistoryStore: HistoryRepository {
         return result.page
     }
     /// 刷新前核对浏览锚点是否仍属于查询，删除/筛选移除的ID不能迫使扫描完整历史。
-    public func matchingIDs(_ ids: Set<ClipID>, in request: SearchRequest) throws -> (ids: Set<ClipID>, revision: Int64) {
+    public func matchingIDs(_ ids: Set<ClipID>, in request: SearchRequest) async throws -> (ids: Set<ClipID>, revision: Int64) {
+        let repair = try await prepareSearchRepair(request)
+        defer { try? repair.db.close() }
         var matching: Set<ClipID> = []
         let revision = try strategy.read { try self.revision($0) }
         let values = Array(ids)
         for start in stride(from: 0, to: values.count, by: 50) {
             var query = request; query.cursor = nil; query.pageSize = 50
-            let page = try searchExecution(query, onlyIDs: Set(values[start..<min(start + 50, values.count)]), includeMatchContext: false).page
+            let page = try searchExecution(query, onlyIDs: Set(values[start..<min(start + 50, values.count)]), includeMatchContext: false, repair: repair).page
             guard page.revision == revision else { throw StoreError.invalidCursor }
             matching.formUnion(page.items.map(\.id))
         }
         return (matching, revision)
     }
-    func search(_ request: SearchRequest, onlyIDs: Set<ClipID>?) throws -> SearchPage {
-        try searchExecution(request, onlyIDs: onlyIDs, includeMatchContext: true, useContextCache: false).page
+    func search(_ request: SearchRequest, onlyIDs: Set<ClipID>?) async throws -> SearchPage {
+        let repair = try await prepareSearchRepair(request)
+        defer { try? repair.db.close() }
+        return try searchExecution(request, onlyIDs: onlyIDs, includeMatchContext: true, useContextCache: false, repair: repair).page
+    }
+    /// 缺索引回退在有界批次之间让出actor；取消/删除/采集可运行，最终查询仍返回完整集合，by AI.Coding。
+    private func prepareSearchRepair(_ request: SearchRequest) async throws -> SearchRepairSession {
+        try requireAvailable()
+        let repair = try SearchRepairSession(database: databaseURL)
+        do {
+            if !SearchNormalizer.normalize(request.literal).isEmpty,
+               try revision(repair.db) != noMissingTextContentRevision {
+                while try repair.repairBatch(extract: extractedText) > 0 {
+                    await Task.yield()
+                    try Task.checkCancellation()
+                    // 配额操作可能原子替换数据库；旧连接不能混入新revision。
+                    if try strategy.read({ try self.revision($0) }) != revision(repair.db) {
+                        // 正常原库事务在同一连接可见；仅旧inode需要重新准备。
+                        try repair.db.close()
+                        return try await prepareSearchRepair(request)
+                    }
+                }
+            }
+            try Task.checkCancellation()
+            return repair
+        } catch { try? repair.db.close(); throw error }
     }
     private func filterSignature(_ request: SearchRequest) -> String {
         var filters = request; filters.literal = ""
         return filters.signature
     }
-    private func searchExecution(_ request: SearchRequest, onlyIDs: Set<ClipID>?, includeMatchContext: Bool, useContextCache: Bool = true) throws -> SearchExecution {
+    private func searchExecution(_ request: SearchRequest, onlyIDs: Set<ClipID>?, includeMatchContext: Bool, useContextCache: Bool = true, repair: SearchRepairSession) throws -> SearchExecution {
         let settings = try settings(); let at = clock.now()
         let knownCompleteRevision = noMissingTextContentRevision
-        return try strategy.read { db in
+        // 最终SQL没有await；修复连接不跨等待持有主库读锁。
+        let db = repair.db
+        return try { () throws -> SearchExecution in
             let revision = try self.revision(db)
             if let cursor = request.cursor, cursor.revision != revision || cursor.signature != request.signature { throw StoreError.invalidCursor }
             if searchContextRevision != revision {
@@ -441,29 +484,11 @@ public actor HistoryStore: HistoryRepository {
             }
             // 按SQLite页缓存扫描有界结果，不在Swift中常驻全部正文/规范化副本。
             // BLOB instr保持NUL及UTF-8字节字面语义，不使用LIKE/FTS通配规则。
-            let indexIsComplete: Bool
-            let allMissing: [[String: SQLValue]]
-            if knownCompleteRevision == revision || onlyIDs?.isEmpty == true {
-                indexIsComplete = knownCompleteRevision == revision
-                allMissing = []
-            } else {
-                allMissing = try db.rows("SELECT DISTINCT r.clipID FROM representations r LEFT JOIN text_content t ON t.clipID=r.clipID AND t.itemIndex=r.itemIndex WHERE t.clipID IS NULL AND r.type IN('public.utf8-plain-text','public.url','public.rtf','public.html','public.file-url')")
-                indexIsComplete = allMissing.isEmpty
-            }
-            let missing = onlyIDs.map { ids in allMissing.filter { ids.contains($0.text("clipID")) } } ?? allMissing
-            // 旧库缺失索引先在只读连接的临时表补齐，原始载荷仍是最终依据。
-            if !missing.isEmpty {
-                try db.exec("CREATE TEMP TABLE search_repair(clipID TEXT,itemIndex INTEGER,plainText TEXT,normalizedText TEXT)")
-                for row in missing {
-                    let payload = try readPayload(db, id: row.text("clipID"))
-                    for (index, item) in payload.items.enumerated() {
-                        guard try db.scalarInt("SELECT COUNT(*) FROM text_content WHERE clipID=? AND itemIndex=?", [.text(row.text("clipID")), .integer(Int64(index))]) == 0 else { continue }
-                        let text = extractedText(item) ?? ""
-                        try db.run("INSERT INTO search_repair VALUES(?,?,?,?)", [.text(row.text("clipID")), .integer(Int64(index)), .text(text), .text(SearchNormalizer.normalize(text))])
-                    }
-                }
-            }
-            let indexed = missing.isEmpty ? "text_content" : "(SELECT * FROM text_content UNION ALL SELECT * FROM search_repair)"
+            let indexIsComplete = repair.repaired == 0
+            let indexed = repair.indexedSQL
+            // 仅第一页需要候选缓存；候选JSON只随首行返回，by AI.Coding。
+            let collectCandidates = request.cursor == nil && includeMatchContext
+            let candidateProjection = collectCandidates ? "CASE WHEN page.id IS (SELECT id FROM page ORDER BY matchRank,lastCopiedAtMs DESC,id LIMIT 1) THEN (SELECT candidateIDs FROM candidate_ids) END" : "NULL"
             let sql = """
             WITH matches AS MATERIALIZED (
                 SELECT clips.*, (\(protectedSQL)) AS isProtected,
@@ -475,18 +500,23 @@ public actor HistoryStore: HistoryRepository {
                 FROM clips WHERE \(condition)
             ), matching AS MATERIALIZED (
                 SELECT * FROM matches WHERE matchRank<4
+            ), candidate_set AS MATERIALIZED (
+                SELECT id FROM matching ORDER BY matchRank,lastCopiedAtMs DESC,id LIMIT 5001
             ), candidate_ids AS (
-                SELECT json_group_array(id) AS candidateIDs FROM (
-                    SELECT id FROM matching ORDER BY matchRank,lastCopiedAtMs DESC,id LIMIT 5001
-                )
-            ), page AS (
+                SELECT CASE WHEN (SELECT COUNT(*) FROM candidate_set)<=5000
+                    THEN (SELECT json_group_array(id) FROM candidate_set) END AS candidateIDs
+            ), page AS MATERIALIZED (
                 SELECT * FROM matching ORDER BY matchRank,lastCopiedAtMs DESC,id LIMIT ? OFFSET ?
-            ) SELECT page.*,candidate_ids.candidateIDs FROM candidate_ids LEFT JOIN page ON true
+            ) SELECT page.*,\(candidateProjection) AS candidateIDs
+              FROM (SELECT 1) LEFT JOIN page ON true
+              ORDER BY page.matchRank,page.lastCopiedAtMs DESC,page.id
             """
             let rows = try db.rows(sql, [.text(needle)] + filters + [.integer(Int64(size + 1)), .integer(Int64(offset))])
-            let candidateJSON = rows.first?.text("candidateIDs") ?? "[]"
-            let decodedCandidates = try JSONDecoder().decode([ClipID].self, from: Data(candidateJSON.utf8))
-            let candidateIDs = decodedCandidates.count > 5000 ? nil : decodedCandidates
+            let candidateJSON = rows.first?.text("candidateIDs") ?? ""
+            let candidateIDs = candidateJSON.isEmpty ? nil : try JSONDecoder().decode([ClipID].self, from: Data(candidateJSON.utf8))
+            #if DEBUG
+            lastCandidateProjectionBytes = rows.reduce(0) { $0 + $1.text("candidateIDs").utf8.count }
+            #endif
             let pageRows = rows.filter { !$0.text("id").isEmpty }
             let page = try pageRows.prefix(size).map { row -> ClipSummary in
                 if !includeMatchContext { return summary(row) }
@@ -511,7 +541,7 @@ public actor HistoryStore: HistoryRepository {
             let resultPage = SearchPage(queryID: request.queryID, revision: revision, items: page,
                 next: pageRows.count > size ? .init(revision: revision, offset: offset + size, signature: request.signature) : nil)
             return .init(page: resultPage, candidateIDs: candidateIDs, indexIsComplete: indexIsComplete)
-        }
+        }()
     }
     /// 旧库曾回收的全文索引以最多200条候选批次补齐；失败不淘汰任何历史。
     public func rebuildSearchIndex(limit: Int = 200) throws -> Int {
@@ -522,9 +552,12 @@ public actor HistoryStore: HistoryRepository {
         let settings = try settings()
         try mutate(quota: settings.quotaBytes) { db in
             for id in missing {
-                let payload = try readPayload(db, id: id)
-                for (index, item) in payload.items.enumerated() {
-                    guard item.representations.contains(where: { [SupportedType.string, SupportedType.url, SupportedType.fileURL, SupportedType.rtf, SupportedType.html].contains($0.type) }),
+                try Task.checkCancellation()
+                let indices = try db.rows("SELECT itemIndex FROM items WHERE clipID=? ORDER BY itemIndex", [.text(id)])
+                for row in indices {
+                    let index = row.int("itemIndex")
+                    let item = try SearchRepairSession.textItem(db, id: id, index: index)
+                    guard !item.representations.isEmpty,
                           try db.scalarInt("SELECT COUNT(*) FROM text_content WHERE clipID=? AND itemIndex=?", [.text(id), .integer(Int64(index))]) == 0 else { continue }
                     let text = extractedText(item) ?? ""
                     let compact = text.utf8.count > MiB && item.representations.contains(where: { $0.type == SupportedType.string })
@@ -539,6 +572,7 @@ public actor HistoryStore: HistoryRepository {
         let settings = try settings(); let at = clock.now()
         var message = "删除后立即移除；30秒内、合计50MiB以内可在本会话撤销。超出预算不可撤销。"
         var confirmation = true; var count = 0
+        var protectedCount = 0; var canUndo: Bool?; var undoUnavailableReason: String?
         let revision = try strategy.read { db -> Int64 in
             switch change {
             case .favorite(let id, let value):
@@ -560,8 +594,14 @@ public actor HistoryStore: HistoryRepository {
                 count = try expiredUnprotectedCount(db, ids: ids, removingCategory: category, removingFavorite: false, settings: settings, at: at)
                 confirmation = true; message = "删除分类，保留有效记录；失去最后保护的到期记录将删除"
             case .delete(let ids):
-                confirmation = false
-                for id in Set(ids) { count += Int(try db.scalarInt("SELECT COUNT(*) FROM clips WHERE id=?", [.text(id)])) }
+                let estimate = try deletionEstimate(db, ids: ids)
+                count = estimate.ids.count; protectedCount = estimate.protectedCount
+                canUndo = estimate.bytes != nil && count > 0
+                confirmation = count > 0 && canUndo != true
+                if confirmation {
+                    undoUnavailableReason = count > 4096 ? "超过4096条撤销上限" : "超过50MiB撤销预算"
+                    message = "将删除\(count)条记录（含\(protectedCount)条受保护记录），\(undoUnavailableReason!)，不可撤销。"
+                } else { message = "删除\(count)条记录；30秒内可在本会话撤销。" }
             case .clearOrdinary: count = Int(try db.scalarInt("SELECT COUNT(*) FROM clips WHERE \(ordinarySQL)"))
             case .retention(let days):
                 guard (0...365).contains(days) else { throw StoreError.invalidSettings }
@@ -595,7 +635,7 @@ public actor HistoryStore: HistoryRepository {
             estimated = max(0, before - strategy.lastCandidateBytes - (try CommitStrategy.bytes(strategy.staging)))
         }
         let preview = ChangePreview(token: UUID(), operation: change, storeRevision: revision, settingsRevision: settings.revision,
-            affectedCount: count, estimatedReclaimBytes: estimated, requiresConfirmation: confirmation, message: message)
+            affectedCount: count, estimatedReclaimBytes: estimated, requiresConfirmation: confirmation, message: message, protectedCount: protectedCount, canUndo: canUndo, undoUnavailableReason: undoUnavailableReason)
         if previews.count >= 64 { previews.removeAll() }
         previews[preview.token] = preview
         return preview
@@ -839,25 +879,40 @@ public actor HistoryStore: HistoryRepository {
     public func sources() throws -> [SourceAttribution] {
         try strategy.read { db in try db.rows("SELECT sourceBundleID,MIN(sourceName) AS sourceName,MIN(sourceBasis) AS sourceBasis FROM clips GROUP BY COALESCE(sourceBundleID,'') ORDER BY sourceName").map { .init(bundleID: $0.text("sourceBundleID").isEmpty ? nil : $0.text("sourceBundleID"), name: $0.text("sourceName"), basis: $0.text("sourceBasis")) } }
     }
-    /// 删除包只驻留内存，先估算预算，超预算不读取大正文。
+    /// 预览和提交使用同一个只读估算；去重并排除不存在ID，不读取BLOB正文，by AI.Coding。
+    private func deletionEstimate(_ db: SQLiteConnection, ids: [ClipID]) throws -> (ids: [ClipID], protectedCount: Int, bytes: Int64?) {
+        var existing: [ClipID] = []; var protectedCount = 0
+        for id in Set(ids).sorted() {
+            guard let row = try db.rows("SELECT (\(protectedSQL)) AS isProtected FROM clips WHERE id=?", [.text(id)]).first else { continue }
+            existing.append(id); protectedCount += row.int("isProtected") == 1 ? 1 : 0
+        }
+        guard !existing.isEmpty, existing.count <= 4096 else { return (existing, protectedCount, nil) }
+        let placeholders = existing.map { _ in "?" }.joined(separator: ",")
+        let values = existing.map(SQLValue.text)
+        let blobCondition = "digest IN(SELECT blobDigest FROM representations WHERE clipID IN(" + placeholders + "))"
+        let bytes = try db.scalarInt("SELECT COALESCE(SUM(byteCount),0) FROM blobs WHERE " + blobCondition, values)
+        let metadata = try db.scalarInt("SELECT COALESCE(SUM(length(CAST(previewText AS BLOB))+COALESCE(length(CAST(title AS BLOB))*2,0)),0) FROM clips WHERE id IN(" + placeholders + ")", values)
+        let texts = try db.scalarInt("SELECT COALESCE(SUM(length(CAST(plainText AS BLOB))+length(CAST(normalizedText AS BLOB))),0) FROM text_content WHERE clipID IN(" + placeholders + ")", values)
+        let declarations = try db.scalarInt("SELECT COALESCE(SUM(length(CAST(declaredTypes AS BLOB))),0) FROM items WHERE clipID IN(" + placeholders + ")", values)
+        let total = bytes + metadata + texts + declarations + Int64(existing.count) * 8192
+        return (existing, protectedCount, total <= 50 * MiB ? total : nil)
+    }
+    /// 删除包只驻留内存；预览与提交共享预算，超限不读取大正文。
     private func makeUndo(_ change: HistoryChange) throws -> UndoPacket? {
-        guard case .delete(let ids) = change, !ids.isEmpty, ids.count <= 4096 else { return nil }
+        guard case .delete(let ids) = change else { return nil }
         return try strategy.read { db in
-            let placeholders = Set(ids).map { _ in "?" }.joined(separator: ",")
-            let values = Set(ids).sorted().map(SQLValue.text)
+            let estimate = try deletionEstimate(db, ids: ids)
+            guard let bytes = estimate.bytes else { return nil }
+            let placeholders = estimate.ids.map { _ in "?" }.joined(separator: ",")
+            let values = estimate.ids.map(SQLValue.text)
             let blobCondition = "digest IN(SELECT blobDigest FROM representations WHERE clipID IN(" + placeholders + "))"
-            let bytes = try db.scalarInt("SELECT COALESCE(SUM(byteCount),0) FROM blobs WHERE " + blobCondition, values)
-            let metadata = try db.scalarInt("SELECT COALESCE(SUM(length(CAST(previewText AS BLOB))+COALESCE(length(CAST(title AS BLOB))*2,0)),0) FROM clips WHERE id IN(" + placeholders + ")", values)
-            let texts = try db.scalarInt("SELECT COALESCE(SUM(length(CAST(plainText AS BLOB))+length(CAST(normalizedText AS BLOB))),0) FROM text_content WHERE clipID IN(" + placeholders + ")", values)
-            let declarations = try db.scalarInt("SELECT COALESCE(SUM(length(CAST(declaredTypes AS BLOB))),0) FROM items WHERE clipID IN(" + placeholders + ")", values)
-            guard bytes + metadata + texts + declarations + Int64(ids.count) * 8192 <= 50 * MiB else { return nil }
             var tables: [String: [[String: SQLValue]]] = [:]
             tables["clips"] = try db.rows("SELECT * FROM clips WHERE id IN(" + placeholders + ")", values)
             for table in ["items", "representations", "text_content", "clip_categories"] {
                 tables[table] = try db.rows("SELECT * FROM " + table + " WHERE clipID IN(" + placeholders + ")", values)
             }
             tables["blobs"] = try db.rows("SELECT * FROM blobs WHERE " + blobCondition, values)
-            return UndoPacket(expires: clock.now() + 30_000, tables: tables, bytes: bytes + metadata + texts + declarations + Int64(ids.count) * 8192)
+            return UndoPacket(expires: clock.now() + 30_000, tables: tables, bytes: bytes)
         }
     }
     /// 到期主动释放内存正文，不能只隐藏撤销入口。

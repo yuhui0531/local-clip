@@ -36,6 +36,9 @@ import AppKit
         for key in order where !ids.contains(key as String) { remove(key) }
     }
 
+    /// 外部文件引用版本变化时只清除对应预览，by AI.Coding。
+    func removeObject(forKey key: NSString) { remove(key) }
+
     /// 替换、淘汰共用计费出口。
     private func remove(_ key: NSString) {
         if let entry = entries.removeValue(forKey: key) { byteCount -= entry.bytes }

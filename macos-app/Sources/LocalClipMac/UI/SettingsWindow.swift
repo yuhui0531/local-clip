@@ -2,7 +2,6 @@
 import AppKit
 
 @MainActor final class SettingsWindow: NSWindow, NSWindowDelegate {
-    private var dismissal: Task<Void, Never>?
     private var fitted = false
 
     /// 窗口贴合当前分组内容，保持标题栏位置不动；首次直接定尺寸，之后切换分组时动画过渡，by AI.Coding。
@@ -18,7 +17,7 @@ import AppKit
     override func cancelOperation(_ sender: Any?) {
         guard attachedSheet == nil, NSApp.modalWindow == nil,
               (firstResponder as? NSTextView)?.hasMarkedText() != true else { return }
-        dismissal?.cancel(); close()
+        close()
     }
 
     /// 文本编辑器也可用Esc关闭；快捷键录制的本地监视器先消费Esc，附属窗口单独收事件。
@@ -31,19 +30,5 @@ import AppKit
         super.sendEvent(event)
     }
 
-    /// 等待焦点转移稳定，避免应用选择器或附属确认框暂时接管key时误关闭。
-    func windowDidResignKey(_ notification: Notification) {
-        dismissal?.cancel()
-        dismissal = Task { [weak self] in
-            do { try await Task.sleep(for: .milliseconds(150)) } catch { return }
-            guard let self, !self.isKeyWindow, self.attachedSheet == nil, NSApp.modalWindow == nil else { return }
-            self.close()
-        }
-    }
-
-    /// 返回设置窗口时撤销过期关闭任务。
-    func windowDidBecomeKey(_ notification: Notification) { dismissal?.cancel() }
-
-    /// 关闭窗口后释放未完成的失焦任务。
-    func windowWillClose(_ notification: Notification) { dismissal?.cancel() }
+    // 设置保留页面和待应用草稿；仅显式关闭/Esc结束窗口，by AI.Coding。
 }

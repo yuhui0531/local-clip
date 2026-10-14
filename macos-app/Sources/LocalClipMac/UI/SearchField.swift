@@ -46,7 +46,8 @@ public struct SearchField: NSViewRepresentable {
             case #selector(NSResponder.deleteBackward(_:)), #selector(NSResponder.deleteForward(_:)):
                 // 空搜索也保留文字编辑语义，不能误删历史记录。
                 return false
-            case #selector(NSResponder.insertTab(_:)): parent.onEnter(); return true
+            // Tab/Shift-Tab沿原生焦点链到工具栏和操作区；Return仍保留先进入结果的两阶段行为。
+            case #selector(NSResponder.insertTab(_:)), #selector(NSResponder.insertBacktab(_:)): return false
             case #selector(NSResponder.insertNewline(_:)): parent.onEnter(); return true
             case #selector(NSResponder.moveDown(_:)): parent.onNavigate(1); return true
             case #selector(NSResponder.moveUp(_:)): parent.onNavigate(-1); return true

@@ -91,21 +91,21 @@ public struct SettingsView: View {
                     }
                     Section {
                         // 开关传递绝对用户意图，不能由启动时的新配置反转，by AI.Coding。
-                        Toggle("记录新的剪贴板变化", isOn: Binding(get: { model.settings.captureEnabled }, set: { value in model.setCaptureEnabled(value) }))
-                        LabeledContent("定时暂停") {
+                        Toggle("监控剪贴板变化", isOn: Binding(get: { model.settings.captureEnabled }, set: { value in model.setCaptureEnabled(value) }))
+                        LabeledContent("定时停止监控") {
                             if let deadline = model.settings.pauseUntil, deadline > SystemClock().now() {
                                 Text("至 " + Date(timeIntervalSince1970: Double(deadline)/1000).formatted(date: .omitted, time: .shortened)).foregroundStyle(.secondary)
                                 Button("取消") { model.updateSettings { $0.pauseUntil = nil } }
                             } else {
-                                Menu("暂停…") {
+                                Menu("停止…") {
                                     Button("15 分钟") { model.updateSettings { $0.pauseUntil = SystemClock().now() + 15 * 60_000 } }
                                     Button("1 小时") { model.updateSettings { $0.pauseUntil = SystemClock().now() + 60 * 60_000 } }
                                 }.fixedSize()
                             }
                         }
-                        Toggle("记录时播放提示音", isOn: setting(\.captureSounds))
-                    } header: { Text("记录") } footer: {
-                        Text("启动后自动监听新复制内容；手动暂停只作用于本次运行，定时暂停按期限保留。").settingsFootnote()
+                        Toggle("复制新内容时播放提示音", isOn: setting(\.captureSounds))
+                    } header: { Text("监控") } footer: {
+                        Text("启动后自动监控新复制内容；手动停止只作用于本次运行，定时停止按期限保留。").settingsFootnote()
                     }
                 }
                 if section == .paste {
@@ -144,13 +144,13 @@ public struct SettingsView: View {
                     Section {
                         Toggle("隐藏历史内容", isOn: setting(\.hideContents))
                         Toggle("限制系统窗口共享读取", isOn: setting(\.excludeFromSharing))
-                        Toggle("排除应用位于前台时暂停记录", isOn: setting(\.pauseWhenExcludedFrontmost))
+                        Toggle("排除应用位于前台时停止监控", isOn: setting(\.pauseWhenExcludedFrontmost))
                         ForEach(model.settings.excludedBundleIDs.sorted(), id: \.self) { id in
                             BundleRow(id: id) { model.updateSettings { $0.excludedBundleIDs.remove(id) } }
                         }
                         Button("添加要排除的应用…", action: chooseApplication)
                     } footer: {
-                        Text("排除仅按 org.nspasteboard.source 声明的 bundleID 匹配；前台推断与未知来源不参与应用排除，需要停止记录时请暂停。开启“前台时暂停”后，排除应用处于前台的整个区间都不记录，退出区间不补采。敏感/临时标记在正文读取前整次过滤，不能识别所有密码。共享限制使用公开 NSWindow 属性，不能保证所有录屏方式隐藏本窗口。新增排除不会删除已有历史；数据保存在本机，未宣称加密，不上传剪贴板内容。").settingsFootnote()
+                        Text("排除仅按 org.nspasteboard.source 声明的 bundleID 匹配；前台推断与未知来源不参与应用排除，需要停止记录时请停止监控。开启“前台时停止监控”后，排除应用处于前台的整个区间都不记录，退出区间不补采。敏感/临时标记在正文读取前整次过滤，不能识别所有密码。共享限制使用公开 NSWindow 属性，不能保证所有录屏方式隐藏本窗口。新增排除不会删除已有历史；数据保存在本机，未宣称加密，不上传剪贴板内容。").settingsFootnote()
                     }
                 }
                 if section == .storage {
@@ -229,6 +229,10 @@ public struct SettingsView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.willCloseNotification)) { notification in
             // 窗口保留用于再次打开；关闭时立即停止录制，不依赖SwiftUI销毁视图。
             if notification.object is SettingsWindow { model.settingsVisibilityChanged(false); stopRecording(); feedback = "" }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { notification in
+            // 切出设置停止录制，但保留页面和未应用输入，by AI.Coding。
+            if notification.object is SettingsWindow { stopRecording() }
         }
         .onDisappear { model.settingsVisibilityChanged(false); stopRecording() }
     }

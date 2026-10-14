@@ -38,16 +38,19 @@ struct SmartPastePlan {
         guard !performing else { return .failed("正在处理，请稍后") }
         performing = true; smartPasteNotice = nil; defer { performing = false }
         do {
+            try Task.checkCancellation()
             let initialCount = board.changeCount
+            try await OutputBudget.preflight(request.ids, store: store, at: clock.now(), transform: request.transform != nil)
             var records: [ClipboardPayload] = []
-            for id in request.ids { records.append(try await store.loadPayload(id: id, at: clock.now())) }
+            for id in request.ids { try Task.checkCancellation(); records.append(try await store.loadPayload(id: id, at: clock.now())) }
             let started = ContinuousClock.now
             // 目标分类延后到应用焦点恢复后；分类前始终保留原文件表示，by AI.Coding。
             let settings = try await store.settings()
             // 转换不与代码文件智能粘贴叠加；先按纯文本合并再转换，在关闭面板前完成，失败时面板保持打开，by AI.Coding。
             if request.transform != nil, records.contains(where: \.hasFileReferences) { return .failed("文件记录无法转换") }
             let smartFiles = request.transform == nil && request.join == .newline && settings.smartCodeFilePaste && !records.isEmpty && records.allSatisfy { $0.fileURLs != nil }
-            let combined = try await Task.detached { try OutputComposer.combine(records, format: request.transform != nil ? .plainText : smartFiles ? .original : request.format, join: request.join) }.value
+            let worker = Task.detached { try OutputComposer.combine(records, format: request.transform != nil ? .plainText : smartFiles ? .original : request.format, join: request.join) }
+            let combined = try await withTaskCancellationHandler { try await worker.value } onCancel: { worker.cancel() }
             let raw: ClipboardPayload
             if let transform = request.transform {
                 let language = transform == .markdownCodeBlock ? await SyntaxHighlighter.shared.language(of: combined.plainText ?? "") : nil
@@ -70,11 +73,12 @@ struct SmartPastePlan {
             // 计算期间删除/到期时不允许恢复。取值再次验证，UI不直接触碰存储。
             for id in request.ids { _ = try await store.metadata(id: id, at: clock.now()) }
             guard board.changeCount == initialCount else { return .failed("剪贴板已变化，请重新选择") }
-            var receipt = board.write(payload, fingerprint: converted ? fingerprint : originalFingerprint); capture.recordOwnWrite(receipt)
+            try Task.checkCancellation()
+            var receipt = board.write(payload, fingerprint: originalFingerprint); capture.recordOwnWrite(receipt)
             // 不确定或关闭开关时恢复原文件；只改自己仍持有的剪贴板，不覆盖用户的新复制，by AI.Coding。
             func restoreFiles() -> Bool {
                 guard converted else { return true }
-                guard board.matches(receipt) else { return false }
+                guard !Task.isCancelled, board.matches(receipt) else { return false }
                 receipt = board.write(smartPlan?.originalPayload ?? raw, fingerprint: smartPlan?.originalFingerprint ?? originalFingerprint); capture.recordOwnWrite(receipt)
                 converted = false; return receipt.successful
             }
@@ -98,6 +102,7 @@ struct SmartPastePlan {
             if let current = applications.target(), current.pid != target.pid || current.bundleID != target.bundleID || current.launchedAt != target.launchedAt {
                 return safeFallback("目标已变化，请确认输入位置后手动粘贴")
             }
+            try Task.checkCancellation()
             closePanel?()
             guard applications.isFrontmost(target) || applications.activate(target) else { return safeFallback("请确认目标位置后手动粘贴") }
             let deadline = ContinuousClock.now + .milliseconds(500)
@@ -114,6 +119,7 @@ struct SmartPastePlan {
             var readySince: ContinuousClock.Instant?
             var focusReady = false
             while ContinuousClock.now < focusDeadline {
+                try Task.checkCancellation()
                 guard board.matches(receipt) else { return .failed("剪贴板已变化，请重新选择") }
                 guard applications.permitted, applications.isAlive(target), applications.isFrontmost(target) else {
                     return safeFallback("目标已变化，请确认输入位置后手动粘贴")
@@ -154,6 +160,7 @@ struct SmartPastePlan {
                                            targetIdentityReady: identityReady, fileIdentityCurrent: currentFiles,
                                            clipboardUnchanged: board.matches(receipt)) {
                             payload = plan.textPayload; fingerprint = plan.textFingerprint; converted = true
+                            try Task.checkCancellation()
                             receipt = board.write(payload, fingerprint: fingerprint); capture.recordOwnWrite(receipt)
                             guard receipt.successful else { return .failed("复制失败，请重试") }
                         } else if !currentFiles { smartPasteNotice = CodeFileReadError.changed.message }
@@ -161,6 +168,7 @@ struct SmartPastePlan {
                     else { throw CodeFileReadError.changed }
                 }
                 catch let error as CodeFileReadError { smartPasteNotice = error.message }
+                catch is CancellationError { throw CancellationError() }
                 catch { smartPasteNotice = "已保留原文件：文件无法读取" }
             } else if smartPasteEligible, let sourceIdentityError { smartPasteNotice = sourceIdentityError.message }
             // 焦点等待期间删除的记录不能重新发往目标，by AI.Coding。
@@ -182,17 +190,22 @@ struct SmartPastePlan {
             guard applications.isAlive(target), applications.isFrontmost(target), applications.isPasteFocusReady(target) else {
                 return safeFallback("目标已变化，请确认输入位置后手动粘贴")
             }
+            try Task.checkCancellation()
             guard applications.sendPaste(target, ifClipboardUnchanged: { self.board.matches(receipt) }) else {
                 return safeFallback((applications.pasteFailureReason ?? "粘贴指令未发出") + "，请手动粘贴")
             }
             return .commandSent
-        } catch let error as TransformError { return .failed(error.message) }
+        } catch is OutputBudget { return .failed(OutputBudget.message) }
+        catch let error as TransformError { return .failed(error.message) }
         catch StoreError.corruptPayload { return .failed(request.transform != nil ? "所选内容包含无文本项目，无法转换" : request.join != .newline ? "所选内容包含无文本项目，无法合并" : "所选内容包含无文本项目，不能纯文本输出；请使用原格式") }
         catch StoreError.notFound { return .failed("内容已删除或到期，请重新选择") }
         catch { return .failed("复制失败，请重试") }
     }
     /// 写入派生纯文本（如图中文字）：只复制不粘贴，自写收据过滤，不进历史，by AI.Coding。
-    public func copyText(_ text: String) -> PasteResult {
+    public var clipboardChangeCount: Int { board.changeCount }
+    /// OCR准备期间的新复制不得被旧结果覆盖，by AI.Coding。
+    public func copyText(_ text: String, expectedChangeCount: Int? = nil) -> PasteResult {
+        guard expectedChangeCount == nil || expectedChangeCount == board.changeCount else { return .failed("识别完成，剪贴板已变化；请重新选择复制图中文字") }
         let payload = ClipboardPayload([.init([.init(SupportedType.string, Data(text.utf8))], plainText: text)])
         let receipt = board.write(payload, fingerprint: payload.fingerprint); capture.recordOwnWrite(receipt)
         return receipt.successful ? .copied : .failed("复制失败，请重试")
