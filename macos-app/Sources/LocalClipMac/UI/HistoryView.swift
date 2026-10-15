@@ -194,7 +194,7 @@ public struct HistoryView: View {
         switch state { case "正常": "正在监控"; case "用户暂停": "已停止监控"; case "定时暂停": "已定时停止监控"; case "正在暂停": "正在停止监控"; case "容量已满": "容量已满，新内容未记录"; default: state }
     }
     /// 类型名称与新增文件筛选保持一致。
-    public static func kindName(_ kind: ClipKind) -> String { switch kind { case .text: "文本"; case .url: "链接"; case .richText: "富文本"; case .image: "图片"; case .file: "文件"; case .mixed: "混合" } }
+    public static func kindName(_ kind: ClipKind) -> String { switch kind { case .text: "文本"; case .url: "链接"; case .image: "图片"; case .file: "文件"; case .mixed: "混合" } }
 }
 
 // 输入只让搜索框与列表读取，不引起工具栏、分类行和整条底栏重算，by AI.Coding。
@@ -519,7 +519,6 @@ private struct ClipCard: View, Equatable {
         // 文本与链接色相拉开，且都不同于选中强调色，选中环不会与标题栏混在一起，by AI.Coding。
         case .text: Color(red: 0.36, green: 0.38, blue: 0.80)
         case .url: Color(red: 0.11, green: 0.55, blue: 0.80)
-        case .richText: Color(red: 0.66, green: 0.39, blue: 0.62)
         case .image: Color(red: 0.24, green: 0.62, blue: 0.55)
         case .file: Color(red: 0.35, green: 0.49, blue: 0.70)
         case .mixed: Color(red: 0.73, green: 0.53, blue: 0.25) } }
@@ -553,9 +552,9 @@ private struct ClipCard: View, Equatable {
             } else { Text(item.title ?? languageTitle ?? HistoryView.kindName(item.kind)) }
         }.font(.system(size: tiny ? 10 : height < 150 ? 12 : 14, weight: .semibold)).lineLimit(1)
     }
-    /// 识别出代码语言时以语言名替换"文本/富文本"；隐藏内容时不透露，by AI.Coding。
+    /// 识别出代码语言时以语言名替换"文本"；隐藏内容时不透露，by AI.Coding。
     private var languageTitle: String? {
-        guard !hidden, item.kind == .text || item.kind == .richText else { return nil }
+        guard !hidden, item.kind == .text else { return nil }
         return detectedLanguage.flatMap { ContentInspector.languageNames[$0] }
     }
     /// 初始化编辑内容，不把种类默认标题误存成自定义名称，by AI.Coding。
@@ -629,7 +628,7 @@ private struct ClipCard: View, Equatable {
             .coordinateSpace(name: item.id)
             // 只识别≤180字符预览；预览达到上限视为被截断，只认JWT头部，by AI.Coding。
             .task(id: item.preview) {
-                detection = item.kind == .text || item.kind == .richText ? ContentInspector.inspect(item.preview, truncated: item.preview.count >= 180) : nil
+                detection = item.kind == .text ? ContentInspector.inspect(item.preview, truncated: item.preview.count >= 180) : nil
             }
     }
     private var interactiveCard: some View {
@@ -723,7 +722,7 @@ private struct ClipCard: View, Equatable {
                     guard version != nil else { fileTextFailed = true; thumbnailState = .failed; return }
                 }
                 // 只为实际出现的文字卡片统计全文，计数缓存不随选中状态重算。
-                if [.text, .url, .richText].contains(item.kind), displayedCharacterCount == nil {
+                if [.text, .url].contains(item.kind), displayedCharacterCount == nil {
                     let count = try? await model.previewCharacterCount(id: item.id)
                     guard !Task.isCancelled, model.contains(item.id),
                           (try? await model.previewMetadata(id: item.id)) != nil else { return }
@@ -838,7 +837,7 @@ private struct ClipCard: View, Equatable {
         }
     }
 
-    private var symbol: String { switch item.kind { case .text: code ? "chevron.left.forwardslash.chevron.right" : "text.alignleft"; case .url: "link"; case .richText: "textformat"; case .image: "photo"; case .file: "doc.on.doc"; case .mixed: "square.stack" } }
+    private var symbol: String { switch item.kind { case .text: code ? "chevron.left.forwardslash.chevron.right" : "text.alignleft"; case .url: "link"; case .image: "photo"; case .file: "doc.on.doc"; case .mixed: "square.stack" } }
 }
 // 复制时间只按分钟更新，紧凑卡片不被秒数长文本挤压，by AI.Coding。
 private struct CopyAge: View {

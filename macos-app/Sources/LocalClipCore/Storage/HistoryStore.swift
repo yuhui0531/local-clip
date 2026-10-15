@@ -50,7 +50,7 @@ public actor HistoryStore: HistoryRepository {
         if FileManager.default.fileExists(atPath: strategy.databaseURL.path) {
             // 读写打开让SQLite回滚崩溃遗留的热日志；只读取版本，高版本库不被修改。
             let db = try SQLiteConnection(strategy.databaseURL)
-            // 仅支持v4；版本不兼容保留原库，按迁移/恢复契约使用匹配版本或完整快照，by AI.Coding。
+            // 仅支持v5；版本不兼容保留原库，按迁移/恢复契约使用匹配版本或完整快照，by AI.Coding。
             guard try db.scalarInt("PRAGMA user_version") == Schema.version else { try db.close(); throw StoreError.incompatibleSchema }
             guard try db.scalarText("PRAGMA quick_check") == "ok", try db.rows("PRAGMA foreign_key_check").isEmpty else { throw StoreError.corruptPayload }
             try db.close()

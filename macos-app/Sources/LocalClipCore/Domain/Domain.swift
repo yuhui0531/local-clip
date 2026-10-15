@@ -96,7 +96,8 @@ public struct ClipboardPayload: Codable, Equatable, Sendable {
         let images = !types.isDisjoint(with: [SupportedType.png, SupportedType.tiff, SupportedType.jpeg])
         let texts = !types.isDisjoint(with: [SupportedType.string, SupportedType.url, SupportedType.rtf, SupportedType.html])
         if images { return texts ? .mixed : .image }
-        if types.contains(SupportedType.rtf) || types.contains(SupportedType.html) { return .richText }
+        // 富文本也是文本，原始RTF/HTML表示照常保留，粘贴与导出不受影响，by AI.Coding。
+        if types.contains(SupportedType.rtf) || types.contains(SupportedType.html) { return .text }
         if types.contains(SupportedType.url) { return .url }
         // 浏览器地址栏等来源只写纯文本；单项全文恰为一个网址时同样归为链接，by AI.Coding。
         guard items.count == 1, let value = items[0].representations.first(where: { $0.type == SupportedType.string }),
@@ -433,7 +434,7 @@ extension ApplicationClient {
         pasteTargetKind(target)
     }
 }
-public enum ClipKind: String, Codable, Sendable, CaseIterable { case text, url, richText, image, file, mixed }
+public enum ClipKind: String, Codable, Sendable, CaseIterable { case text, url, image, file, mixed }
 public enum OutputFormat: String, Codable, Sendable { case original, plainText }
 public enum PasteAction: String, Codable, Sendable { case copy, directPaste }
 public enum PasteResult: Equatable, Sendable {

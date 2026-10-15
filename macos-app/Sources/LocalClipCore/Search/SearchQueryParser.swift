@@ -17,9 +17,9 @@ public struct ParsedQuery: Equatable, Sendable {
 }
 public enum SearchQueryParser {
     private static let kinds: [String: ClipKind] = [
-        "text": .text, "url": .url, "link": .url, "rich": .richText, "richtext": .richText, "image": .image, "img": .image,
-        "file": .file, "mixed": .mixed, "文本": .text, "链接": .url, "富文本": .richText, "图片": .image, "文件": .file, "混合": .mixed]
-    private static let kindNames: [ClipKind: String] = [.text: "文本", .url: "链接", .richText: "富文本", .image: "图片", .file: "文件", .mixed: "混合"]
+        "text": .text, "url": .url, "link": .url, "image": .image, "img": .image,
+        "file": .file, "mixed": .mixed, "文本": .text, "链接": .url, "图片": .image, "文件": .file, "混合": .mixed]
+    private static let kindNames: [ClipKind: String] = [.text: "文本", .url: "链接", .image: "图片", .file: "文件", .mixed: "混合"]
     /// 只有token开头是已知键、冒号后值非空且值可解析时才算前缀；英文双引号包住的前缀按字面检索（去掉引号）。
     public static func parse(_ text: String, sources: [SourceAttribution], categories: [ClipCategory], now: Instant) -> ParsedQuery {
         var result = ParsedQuery(literal: text)

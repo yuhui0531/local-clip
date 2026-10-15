@@ -81,7 +81,7 @@ public enum ContentInspector {
     }
 
     // MARK: F17 开发者内容识别：卡片只看≤180字符预览，详情看完整正文；只读，不改记录，by AI.Coding。
-    /// highlight.js语言名的展示名，卡片标题用它替换"文本/富文本"。
+    /// highlight.js语言名的展示名，卡片标题用它替换"文本"。
     public static let languageNames: [String: String] = [
         "json": "JSON", "java": "Java", "python": "Python", "javascript": "JavaScript", "typescript": "TypeScript", "yaml": "YAML",
         "xml": "XML", "css": "CSS", "bash": "Shell", "swift": "Swift", "sql": "SQL", "cpp": "C++", "csharp": "C#",

@@ -1,7 +1,7 @@
 // 唯一历史模型；仅创建当前结构，其他版本拒绝打开，不做旧库升级，by AI.Coding。
 import Foundation
 enum Schema {
-    static let version: Int64 = 4
+    static let version: Int64 = 5
     /// 初次建库完整执行；未知版本拒绝而非盲目覆盖。
     static func create(_ db: SQLiteConnection, settings: SettingsSnapshot) throws {
         try db.exec("""

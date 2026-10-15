@@ -1,4 +1,4 @@
-// 纯文本网址归为链接，旧库在打开时补正，by AI.Coding。
+// 纯文本网址归为链接，富文本即使正文是网址也归为文本，by AI.Coding。
 import Foundation
 import Testing
 @testable import LocalClipCore
@@ -17,5 +17,17 @@ struct TextLinkKindTests {
         for text in ["README.md", "main.swift", "v0.3.22", "1.2.3.4", "a@b.com", "foo.bar", "index.html"] {
             #expect(fixture(text).payload.kind == .text, "\(text)")
         }
+    }
+    /// 富文本也是文本：RTF/HTML归入文本筛选，原始表示不丢失，by AI.Coding。
+    @Test func richTextIsText() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try HistoryStore(location: root), now = SystemClock().now()
+        let rtf = ClipboardSnapshot(payload: .init([.init([.init(SupportedType.rtf, Data("{\\rtf1 rich}".utf8)), .init(SupportedType.string, Data("rich".utf8))])]))
+        let html = ClipboardSnapshot(payload: .init([.init([.init(SupportedType.html, Data("<b>https://example.com</b>".utf8)), .init(SupportedType.string, Data("https://example.com".utf8))])]))
+        #expect(rtf.payload.kind == .text && html.payload.kind == .text)
+        let ids = [insertedID(try await store.ingest(rtf, at: now)), insertedID(try await store.ingest(html, at: now)), insertedID(try await store.ingest(fixture("plain"), at: now))]
+        #expect(Set(try await store.search(.init(kind: .text)).items.map(\.id)) == Set(ids))
+        #expect(try await store.loadPayload(id: ids[0], at: now).items[0].representations.contains { $0.type == SupportedType.rtf })
     }
 }
