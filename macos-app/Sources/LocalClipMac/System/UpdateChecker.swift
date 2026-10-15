@@ -4,7 +4,9 @@ import LocalClipCore
 import LocalClipUpdateKit
 
 @MainActor public final class UpdateChecker: ObservableObject {
-    public static let shared = UpdateChecker(locations: try? UpdateLocations.current())
+    nonisolated public static let shared: UpdateChecker = MainActor.assumeIsolated {
+        UpdateChecker(locations: try? UpdateLocations.current())
+    }
     public struct Release: Equatable { public let version: String; public let page: URL }
     @Published public private(set) var available: Release?
     @Published public private(set) var checking = false
@@ -42,12 +44,12 @@ import LocalClipUpdateKit
          restore: @escaping (URL) async throws -> DownloadedUpdate = { try await UpdateDownloadService.restore(directory: $0) },
          install: @escaping (DownloadedUpdate) async throws -> Void = { try await UpdateInstaller.begin($0) },
          locations: UpdateLocations? = nil,
-         cleanup: @escaping @Sendable (UpdateLocations, Set<String>) async -> Void = { locations, excluded in
-             _ = await Task.detached(priority: .utility) { UpdateJanitor.run(locations, excludedDownloads: excluded) }.value
-         }) {
+         cleanup: (@Sendable (UpdateLocations, Set<String>) async -> Void)? = nil) {
         self.defaults = defaults; self.now = now; self.fetch = fetch
         self.prepareUpdate = prepare; self.installUpdate = install; self.locations = locations
-        self.cleanup = cleanup
+        self.cleanup = cleanup ?? { locations, excluded in
+            _ = await Task.detached(priority: .utility) { UpdateJanitor.run(locations, excludedDownloads: excluded) }.value
+        }
         refreshResult()
         if let path = defaults.string(forKey: Self.readyKey) {
             checking = true
