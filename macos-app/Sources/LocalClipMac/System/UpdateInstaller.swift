@@ -9,7 +9,7 @@ struct UpdateQuitCancelled: Error, LocalizedError {
 
 @MainActor enum UpdateInstaller {
     static let lastAttemptKey = "lastUpdateAttemptDirectory"
-    private static let attemptFiles = ["LocalClipUpdater", "installer-ready", "startup-ok", "result.txt"]
+    private static var attemptFiles: [String] { ["LocalClipUpdater", "installer-ready", "startup-ok", "result.txt"] }
 
     /// 下载目录保留安装结果；辅助程序副本不随应用原子交换而失效。
     static func begin(_ update: DownloadedUpdate) async throws {
