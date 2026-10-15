@@ -118,6 +118,8 @@ struct ThumbnailPreviewTests {
 }
 
 /// 显式启用的原生托管回归仅创建本测试的窗口、临时库与假剪贴板，by AI.Coding。
+// 桌面展示另需明确授权；原有专项开关仍保留，by AI.Coding。
+@Suite(.enabled(if: ProcessInfo.processInfo.environment["LOCALCLIP_INTERACTIVE_TESTS"] == "1", "Requires explicit user request for desktop interaction"))
 @MainActor struct ThumbnailPreviewHostingTests {
     /// 识别本测试渲染的合成像素，不依赖SwiftUI内部AX树，也不截取系统屏幕。
     private func visibleText(_ bitmap: NSBitmapImageRep) throws -> String {

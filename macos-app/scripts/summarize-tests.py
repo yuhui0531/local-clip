@@ -18,7 +18,8 @@ summary = {
     "exitCode": exit_code,
     "passedFunctions": re.findall(r"^✔ Test (?!run with )(.+?) passed after", log, re.M),
     "failedFunctions": re.findall(r"^✘ Test (?!run with )(.+?) failed after", log, re.M),
-    "skippedFunctions": re.findall(r"^➜ Test (.+?) skipped\.", log, re.M),
+    # 环境门控会附带原因；同样计入跳过，不能遗漏或当作通过，by AI.Coding。
+    "skippedFunctions": re.findall(r"^➜ Test (.+?) skipped(?:\.|:)", log, re.M),
     "frameworkSummary": [line for line in log.splitlines() if "Test run with" in line],
     "enabledGates": {key: value for key, value in os.environ.items() if key.startswith("LOCALCLIP_") and value in ("0", "1")},
     "skipReason": "Environment-gated tests were not enabled; exact conditions are in gateInventory. Skips are not passes.",

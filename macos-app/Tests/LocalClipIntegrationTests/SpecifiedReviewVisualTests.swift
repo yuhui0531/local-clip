@@ -5,6 +5,8 @@ import Testing
 import LocalClipCore
 @testable import LocalClipMac
 
+// 桌面展示另需明确授权；原有专项开关仍保留，by AI.Coding。
+@Suite(.enabled(if: ProcessInfo.processInfo.environment["LOCALCLIP_INTERACTIVE_TESTS"] == "1", "Requires explicit user request for desktop interaction"))
 @MainActor struct SpecifiedReviewVisualTests {
     /// 仅渲染自有窗口；这不证明真实目标接收或辅助功能键盘导航。
     @Test(.enabled(if: ProcessInfo.processInfo.environment["LOCALCLIP_REVIEW_VISUAL"] == "1"))

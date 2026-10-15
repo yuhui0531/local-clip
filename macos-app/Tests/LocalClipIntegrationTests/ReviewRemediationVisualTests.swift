@@ -6,6 +6,8 @@ import Testing
 import LocalClipCore
 @testable import LocalClipMac
 
+// 桌面展示另需明确授权；原有专项开关仍保留，by AI.Coding。
+@Suite(.enabled(if: ProcessInfo.processInfo.environment["LOCALCLIP_INTERACTIVE_TESTS"] == "1", "Requires explicit user request for desktop interaction"))
 @MainActor struct ReviewRemediationVisualTests {
     /// 0/3分类全部可见；10分类可以滚动到最后一项，底部操作栏保持可见。
     @Test(.enabled(if: ProcessInfo.processInfo.environment["LOCALCLIP_REMEDIATION_VISUAL"] == "1"), arguments: [0, 3, 10])

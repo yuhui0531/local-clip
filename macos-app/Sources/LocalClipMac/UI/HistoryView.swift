@@ -458,6 +458,8 @@ private struct ClipCard: View, Equatable {
     @State private var fileText: String?
     @State private var fileTextFailed = false
     @State private var thumbnailState: ThumbnailPreviewState = .loading
+    /// N-01：仅图片/文件记录取值；文件每次进入视口重新查询，不把旧值当作实时值。
+    @State private var contentSize: ClipContentSize = .loading
     /// 离屏会丢弃解码状态；缓存命中时直接显示，不经过加载占位，by AI.Coding。
     private var displayedThumbnail: ThumbnailPreviewState {
         if item.kind == .file, checkedFileGeneration != previewGeneration { return .loading }
@@ -509,10 +511,22 @@ private struct ClipCard: View, Equatable {
         return detectedLanguage == nil ? size : min(size, 12.5)
     }
     /// 卡片合并辅助功能子元素后仍朗读预览状态；隐藏内容时不泄露状态或正文。
+    /// 大小只附加在原有次级信息之后，不替换类型、次数等字段；隐藏内容时不显示。
+    private var sizeLabel: String? { [.image, .file].contains(item.kind) && !hidden ? contentSize.label : nil }
+    private var footerText: String {
+        let base = displayedCharacterCount.map { "\($0) 个字符" } ?? (item.kind == .file ? "文件引用" : "复制\(item.copyCount)次")
+        // 极小卡片宽度只够前半段，大小在前避免被截断；两项都保留。
+        return sizeLabel.map { tiny ? $0 + " · " + base : base + " · " + $0 } ?? base
+    }
     private var accessibilityDescription: String {
         let title = "\(item.title ?? HistoryView.kindName(item.kind))，\(item.source.name)"
         if hidden { return title + "，内容已隐藏" }
-        if item.kind == .image || item.kind == .mixed { return title + "，" + item.preview + "，" + displayedThumbnail.label }
+        if let sizeLabel { return Self.describe(item, thumbnail: displayedThumbnail.label, detection: detection) + "，" + (contentSize.detail.map { $0 + "：" } ?? "") + sizeLabel }
+        return Self.describe(item, thumbnail: displayedThumbnail.label, detection: detection)
+    }
+    private static func describe(_ item: ClipSummary, thumbnail: String, detection: ContentInspector.Detection?) -> String {
+        let title = "\(item.title ?? HistoryView.kindName(item.kind))，\(item.source.name)"
+        if item.kind == .image || item.kind == .mixed { return title + "，" + item.preview + "，" + thumbnail }
         return title + (detection.map { "，\($0.kindName) \($0.badge)" } ?? "") + "，" + item.preview
     }
     private var tint: Color { switch item.kind {
@@ -595,7 +609,7 @@ private struct ClipCard: View, Equatable {
                     }
                 }
             HStack(spacing: 4) {
-                Text(displayedCharacterCount.map { "\($0) 个字符" } ?? (item.kind == .file ? "文件引用" : "复制\(item.copyCount)次")).lineLimit(1)
+                Text(footerText).lineLimit(1)
                 Spacer(minLength: 2)
                 // 详情入口跟随卡片：悬停或选中时出现，点按在本卡上方弹出详情，by AI.Coding。
                 if (hovering || selected) && !tiny && !hidden {
@@ -705,7 +719,7 @@ private struct ClipCard: View, Equatable {
             .onScrollVisibilityChange(threshold: 0.01) { visible in
                 isOnscreen = visible
                 model.thumbnailVisibilityChanged(id: item.id, visible: visible)
-                if !visible { if item.kind == .file { checkedFileGeneration = nil }; model.cancelRename(id: item.id); thumbnailState = .loading; Task { await model.derived.cancel(id: item.id) } }
+                if !visible { if item.kind == .file { checkedFileGeneration = nil; contentSize = .loading }; model.cancelRename(id: item.id); thumbnailState = .loading; Task { await model.derived.cancel(id: item.id) } }
             }
             .task(id: [String(isOnscreen), item.kind == .file ? previewGeneration.uuidString : "immutable"]) {
                 guard isOnscreen else { return }
@@ -715,11 +729,20 @@ private struct ClipCard: View, Equatable {
                     let urls = try? await model.previewDetail(id: item.id).payload.fileURLs
                     let version = await Task.detached(priority: .utility) { urls.flatMap(FileReferencePreviewVersion.read) }.value
                     guard !Task.isCancelled, model.contains(item.id) else { return }
+                    // 大小与预览身份分开：目录或不可读文件没有预览版本，仍可给出“未知/文件夹”而不影响其他功能。
+                    let size = await Task.detached(priority: .utility) { urls.map(ClipContentSize.measure) ?? .unknown }.value
+                    guard !Task.isCancelled, model.contains(item.id) else { return }
+                    contentSize = size
                     if !model.validateFilePreview(id: item.id, version: version) {
                         fileText = nil; fileTextFailed = false; thumbnailState = .loading
                     }
                     fileVersion = version; checkedFileGeneration = previewGeneration
                     guard version != nil else { fileTextFailed = true; thumbnailState = .failed; return }
+                }
+                if item.kind == .image, contentSize == .loading {
+                    let size = try? await model.previewImageSize(id: item.id)
+                    guard !Task.isCancelled, model.contains(item.id) else { return }
+                    contentSize = size.map { .stored(bytes: $0.bytes, items: $0.items) } ?? .unknown
                 }
                 // 只为实际出现的文字卡片统计全文，计数缓存不随选中状态重算。
                 if [.text, .url].contains(item.kind), displayedCharacterCount == nil {

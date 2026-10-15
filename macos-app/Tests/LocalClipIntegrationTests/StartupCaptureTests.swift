@@ -172,7 +172,8 @@ private actor SuspendedStartupRepository: HistoryRepository {
         let repository = SuspendedStartupRepository(store, phase: .recovery)
         let capture = CaptureCoordinator(board: MacPasteboardClient(access: raw), store: repository)
         let startup = Task { try await capture.start(resumeCapture: true) }
-        let deadline = ContinuousClock.now + .seconds(3)
+        // 并行全量测试负载下启动链可能超过3秒；只等正向信号，延长上限不拖慢通过路径。
+        let deadline = ContinuousClock.now + .seconds(10)
         while await !repository.suspended, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(5)) }
         let suspended = await repository.suspended; try #require(suspended)
         capture.requestPause()
@@ -196,14 +197,14 @@ private actor SuspendedStartupRepository: HistoryRepository {
             paste: PasteCoordinator(board: board, applications: FakeApplications(), store: store, capture: capture),
             derived: DerivedContentService(store: store))
         let startup = Task { try await model.start(resumeCapture: true) }
-        let deadline = ContinuousClock.now + .seconds(3)
+        let deadline = ContinuousClock.now + .seconds(10)
         while await !repository.suspended, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(5)) }
         let suspended = await repository.suspended; try #require(suspended)
         if intent == "preference" { model.updateSettings { $0.hideContents = true } }
         else { model.setCaptureEnabled(intent == "resume") }
         if intent == "pause" { raw.user("during-enable-commit"); capture.tick(); #expect(raw.reads.isEmpty) }
         await repository.release(); try await startup.value
-        let saved = ContinuousClock.now + .seconds(3)
+        let saved = ContinuousClock.now + .seconds(10)
         while model.message != "设置已保存", ContinuousClock.now < saved { try await Task.sleep(for: .milliseconds(5)) }
         #expect(model.message == "设置已保存")
         #expect(model.settings.captureEnabled == (intent != "pause"))

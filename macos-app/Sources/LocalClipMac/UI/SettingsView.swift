@@ -83,7 +83,7 @@ public struct SettingsView: View {
                         }
                         if case let .failed(message) = updates.phase { Text(message).foregroundStyle(.red).font(.caption) }
                         if case .manualOnly = updates.phase { Text("此版本尚未提供签名更新包，请从发布页手动安装。").settingsFootnote() }
-                        if let result = updates.manualResult { Text(result).foregroundStyle(.secondary).font(.caption) }
+                        if let result = updates.manualResult { Text(result).foregroundStyle(.secondary).font(.caption).onAppear { updates.markResultSeen() } }
                         if login.status == .requiresApproval || loginStatus.hasPrefix("请求失败") {
                             LabeledContent(loginStatus) { Button("打开登录项…") { login.openSettings() } }.foregroundStyle(.secondary)
                         }

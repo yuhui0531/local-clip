@@ -9,7 +9,8 @@ public final class UpdateTransaction {
     public let dataBackup: URL
     private let backupDirectory: URL
     private var prepared = false
-    private var replaced = false
+    /// 是否已完成应用交换；辅助程序据此区分替换前失败与需要回滚的会话。
+    public private(set) var replaced = false
     private var hadData = false
 
     /// 候选应用必须与安装目录同卷；真实辅助进程使用安装目录旁的私有工作目录。

@@ -7,6 +7,17 @@ import LocalClipUpdateKit
     /// keygen 生成独立发布密钥；manifest 根据最终 ZIP 生成签名元数据。
     static func main() throws {
         let args = CommandLine.arguments
+        #if DEBUG
+        // 仅 Debug：对隔离根执行与主程序相同的补偿清理，供安装器脚本验证；Release 不包含此命令，by AI.Coding。
+        if args.count >= 2 && args[1] == "janitor" {
+            let environment = ProcessInfo.processInfo.environment
+            guard environment["LOCALCLIP_UPDATER_TEST_ROOT"] != nil else { throw UpdateFailure.invalid("janitor 仅用于隔离测试根") }
+            let report = UpdateJanitor.run(try UpdateLocations.current(), excludedDownloads: Set(args.dropFirst(2)),
+                                           legacyQuietPeriod: environment["LOCALCLIP_JANITOR_QUIET"].flatMap(Double.init) ?? 120)
+            print("removed=\(report.removed.count) retained=\(report.retained.count) active=\(report.skippedActive.count) failures=\(report.failures.joined(separator: ","))")
+            return
+        }
+        #endif
         if args.count == 3 && args[1] == "keygen" {
             let file = URL(fileURLWithPath: args[2]), fm = FileManager.default
             guard !fm.fileExists(atPath: file.path) else { throw UpdateFailure.invalid("私钥已存在，不覆盖") }

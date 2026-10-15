@@ -140,6 +140,8 @@ import LocalClipCore
     func previewMetadata(id: ClipID) async throws -> ClipMetadata { try await store.metadata(id: id, at: clock.now()) }
     /// 只读取轻量字符数，不向视图暴露存储调用细节。
     func previewCharacterCount(id: ClipID) async throws -> Int? { try await store.textCharacterCount(id: id, at: clock.now()) }
+    /// 图片主表示的已保存字节数；只读计数列，不加载正文。
+    func previewImageSize(id: ClipID) async throws -> (bytes: Int64, items: Int)? { try await store.imageByteCount(id: id, at: clock.now()) }
     @Published public var showingDetail = false {
         didSet { if showingDetail && !canDisplayContents { showingDetail = false } }
     }
@@ -969,7 +971,7 @@ import LocalClipCore
             }
         }
     }
-    /// 清理在启动、每分钟和唤醒调用，所有读取入口仍自行检查到期。
+    /// 清理在首轮维护（启动约60秒后）、此后每分钟和唤醒调用；导出文件仍按10分钟租约到期，所有读取入口自行检查到期。
     public func maintenance() async {
         do { try await store.cleanExports() } catch { message = "导出临时文件回收未完成，仍计入容量" }
         revalidateVisibleContent()
@@ -990,7 +992,7 @@ import LocalClipCore
     }
     private var lastIntegrityCheck: ContinuousClock.Instant?
     /// 二进制容量单位与真实计量一致；零值显示数字而非“Zero KB”，by AI.Coding。
-    public static func bytes(_ value: Int64) -> String {
+    nonisolated public static func bytes(_ value: Int64) -> String {
         let formatter = ByteCountFormatter(); formatter.countStyle = .binary; formatter.allowsNonnumericFormatting = false
         return formatter.string(fromByteCount: value)
     }

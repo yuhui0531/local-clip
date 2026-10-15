@@ -348,6 +348,31 @@ public actor HistoryStore: HistoryRepository {
         return try detail(id: id, at: at).payload
     }
     /// 可见文本卡片按需统计完整文字，不把180字符摘要当全文，不批量读取图片或文件载荷。
+    /// N-01：图片记录每项按既有主表示顺序（PNG > TIFF > JPEG，与拖出/导出一致）取已保存字节数；
+    /// 只读 blobs.byteCount 计数列，不读取或解码图片正文；计数异常或溢出返回 nil（显示未知），by AI.Coding。
+    public func imageByteCount(id: ClipID, at: Instant) throws -> (bytes: Int64, items: Int)? {
+        let settings = try settings()
+        return try strategy.read { db in
+            guard let row = try db.rows("SELECT *, (\(protectedSQL)) AS isProtected FROM clips WHERE id=?", [.text(id)]).first,
+                  visible(row, at: at, settings: settings) else { throw StoreError.notFound }
+            let order = [SupportedType.png, SupportedType.tiff, SupportedType.jpeg]
+            let rows = try db.rows("SELECT itemIndex,type,byteCount FROM representations JOIN blobs ON digest=blobDigest WHERE clipID=? AND type IN(?,?,?)", [.text(id)] + order.map(SQLValue.text))
+            var primary: [Int64: (rank: Int, bytes: Int64)] = [:]
+            for value in rows {
+                guard let rank = order.firstIndex(of: value.text("type")) else { continue }
+                let index = value.int("itemIndex")
+                if primary[index].map({ rank < $0.rank }) ?? true { primary[index] = (rank, value.int("byteCount")) }
+            }
+            guard !primary.isEmpty else { return nil }
+            var total: Int64 = 0
+            for value in primary.values {
+                let (sum, overflow) = total.addingReportingOverflow(value.bytes)
+                guard value.bytes >= 0, !overflow else { return nil }
+                total = sum
+            }
+            return (total, primary.count)
+        }
+    }
     public func textCharacterCount(id: ClipID, at: Instant) throws -> Int? {
         let settings = try settings()
         return try strategy.read { db in
@@ -999,13 +1024,20 @@ public actor HistoryStore: HistoryRepository {
         if FileManager.default.fileExists(atPath: directory.path) { try FileManager.default.removeItem(at: directory) }
     }
     /// 仅清理本应用导出目录中过期文件；不碰原件，不提前回收交给目标的租约。
+    /// F-07：逐项隔离错误，一个文件不可删不阻断其他过期文件；失败项留到下一轮并继续计入容量，by AI.Coding。
     public func cleanExports() throws {
         let directory = strategy.root.appendingPathComponent("Exports")
         guard FileManager.default.fileExists(atPath: directory.path) else { return }
+        var firstError: (any Error)?
         for file in try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.contentModificationDateKey]) {
-            let values = try file.resourceValues(forKeys: [.contentModificationDateKey])
-            if let date = values.contentModificationDate, date.timeIntervalSinceNow < -600 { try FileManager.default.removeItem(at: file) }
+            do {
+                let values = try file.resourceValues(forKeys: [.contentModificationDateKey])
+                if let date = values.contentModificationDate, date.timeIntervalSinceNow < -600 { try FileManager.default.removeItem(at: file) }
+            } catch CocoaError.fileNoSuchFile, CocoaError.fileReadNoSuchFile {
+                continue
+            } catch { firstError = firstError ?? error }
         }
+        if let firstError { throw firstError }
     }
 
 }

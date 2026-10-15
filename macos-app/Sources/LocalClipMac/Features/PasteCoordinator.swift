@@ -30,6 +30,8 @@ struct SmartPastePlan {
     private var performing = false
     public private(set) var smartPasteNotice: String?
     public var closePanel: (() -> Void)?
+    /// Finder 复制暂存登记目录；nil 时保持原有进程内收尾（测试默认）。
+    public var copyJournal: URL?
     public init(board: any PasteboardClient, applications: any ApplicationClient, store: any HistoryRepository, capture: CaptureCoordinator, clock: any ClipClock = SystemClock()) {
         self.board = board; self.applications = applications; self.store = store; self.capture = capture; self.clock = clock
     }
@@ -244,7 +246,8 @@ struct SmartPastePlan {
               applications.isFrontmost(target), board.matches(receipt) else {
             return fallback("Finder目录或剪贴板已变化，请重新选择", receipt: receipt)
         }
-        let report = await Task.detached(priority: .userInitiated) { FileObjectCopier.copy(sources, to: destination.directory) }.value
+        let journal = copyJournal
+        let report = await Task.detached(priority: .userInitiated) { FileObjectCopier.copy(sources, to: destination.directory, journal: journal) }.value
         // 已发布的项目不自动回滚；失败结果准确陈述实际完成数量。
         return report.failure == nil ? .filesCopied(report.message) : .failed(report.message)
     }

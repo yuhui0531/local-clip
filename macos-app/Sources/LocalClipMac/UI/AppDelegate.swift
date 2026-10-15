@@ -118,6 +118,8 @@ import LocalClipCore
             model.resizePanel = { [weak self] height, persist in self?.resizeHistory(height, persist: persist) }
             model.showPasteFeedback = { [weak self] message, failed in self?.showPasteFeedback(message, failed: failed) }
             paste.closePanel = model.closePanel
+            let copyJournal = location.appendingPathComponent("FinderCopyJournal", isDirectory: true)
+            paste.copyJournal = copyJournal
             hotkeys.onInvoke = { [weak self] in self?.toggleHistory() }
             model.registerQueueShortcut = { [weak self] in self?.hotkeys.registerQueue($0) ?? false }
             model.unregisterQueueShortcut = { [weak self] in self?.hotkeys.unregisterQueue() }
@@ -127,8 +129,10 @@ import LocalClipCore
                 do {
                     // 手动暂停只作用于上一轮运行，定时暂停和隐私规则由采集器保留，by AI.Coding。
                     try await model.start(resumeCapture: true)
+                    // 上次进程崩溃遗留的已登记Finder复制暂存；后台执行，不阻塞回执与采集。
+                    Task.detached(priority: .utility) { CopyStagingJournal.recover(copyJournal) }
                     // 先确认真实存储恢复，再给安装器回执；权限引导可能等待用户，不能阻塞回执，by AI.Coding。
-                    if !Self.isolatedRun { UpdateInstaller.acknowledgeStartup() }
+                    if !Self.isolatedRun { UpdateInstaller.acknowledgeStartup(); UpdateChecker.shared.startupFinished() }
                     if !hotkeys.register(model.settings.shortcut) { model.message = "快捷键注册冲突，菜单栏仍可使用" }
                     applyAppearanceSettings(); updateMenu()
                     // 再次打开应用触发接替时，新进程完成启动后继续展示用户请求的历史。
@@ -150,7 +154,11 @@ import LocalClipCore
                     try? await Task.sleep(for: .seconds(60))
                     guard let model, !Task.isCancelled else { break }
                     await model.maintenance()
-                    if !Self.isolatedRun { UpdateChecker.shared.checkIfDue(enabled: model.settings.autoCheckUpdates) }
+                    if !Self.isolatedRun {
+                        // 更新残留补偿在每轮维护重试；会话活跃时跳过，不阻塞采集与界面。
+                        await UpdateChecker.shared.maintain()
+                        UpdateChecker.shared.checkIfDue(enabled: model.settings.autoCheckUpdates)
+                    }
                 }
             }
         } catch {

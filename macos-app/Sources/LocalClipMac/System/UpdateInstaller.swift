@@ -2,8 +2,14 @@
 import AppKit
 import LocalClipUpdateKit
 
+/// 用户取消退出且已确认辅助程序退出：替换从未发生，下载包可直接恢复为就绪状态，by AI.Coding。
+struct UpdateQuitCancelled: Error, LocalizedError {
+    var errorDescription: String? { "应用退出已取消" }
+}
+
 @MainActor enum UpdateInstaller {
     static let lastAttemptKey = "lastUpdateAttemptDirectory"
+    private static let attemptFiles = ["LocalClipUpdater", "installer-ready", "startup-ok", "result.txt"]
 
     /// 下载目录保留安装结果；辅助程序副本不随应用原子交换而失效。
     static func begin(_ update: DownloadedUpdate) async throws {
@@ -12,7 +18,7 @@ import LocalClipUpdateKit
         _ = try UpdatePackage.authenticate(directory: update.directory, installedApp: bundle, currentBuild: Int(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "0") ?? 0)
         let source = bundle.appendingPathComponent("Contents/Helpers/LocalClipUpdater")
         let helper = update.directory.appendingPathComponent("LocalClipUpdater")
-        for name in ["LocalClipUpdater", "installer-ready", "startup-ok", "result.txt"] {
+        for name in attemptFiles {
             let file = update.directory.appendingPathComponent(name)
             if fm.fileExists(atPath: file.path) { try fm.removeItem(at: file) }
         }
@@ -29,7 +35,7 @@ import LocalClipUpdateKit
         let deadline = Date().addingTimeInterval(60)
         while !fm.fileExists(atPath: update.directory.appendingPathComponent("installer-ready").path) {
             guard process.isRunning, Date() < deadline else {
-                if process.isRunning { process.terminate() }
+                if process.isRunning { process.terminate(); _ = await exited(process) }
                 let reason = (try? String(contentsOf: update.directory.appendingPathComponent("result.txt"), encoding: .utf8)) ?? "安装准备失败，请检查磁盘空间和安装目录权限"
                 throw UpdateFailure.invalid(reason)
             }
@@ -39,17 +45,30 @@ import LocalClipUpdateKit
         NSApp.terminate(nil)
         // 终止被用户/系统取消时，仍存活的父进程不能留下等待安装的辅助程序。
         if process.isRunning { process.terminate() }
-        throw UpdateFailure.invalid("应用退出已取消")
+        // F-01：发送信号不等于已退出；确认退出后父进程仍在，可证明替换未发生，才把包恢复为就绪。
+        guard await exited(process) else { throw UpdateFailure.invalid("应用退出已取消；安装器仍在退出，稍后自动回收") }
+        for name in attemptFiles + ["request.json"] {
+            try? fm.removeItem(at: update.directory.appendingPathComponent(name))
+        }
+        throw UpdateQuitCancelled()
+    }
+
+    /// 异步等待而不阻塞主线程；超时返回 false，由后续补偿在会话锁释放后处理。
+    private static func exited(_ process: Process, timeout: TimeInterval = 5) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while process.isRunning && Date() < deadline { try? await Task.sleep(for: .milliseconds(100)) }
+        return !process.isRunning
     }
 
     /// 完成存储恢复后才确认启动；限定自己的更新缓存，避免任意命令行路径写入。
-    static func acknowledgeStartup() {
-        let args = CommandLine.arguments
-        guard let flag = args.firstIndex(of: "--localclip-update-receipt"), args.indices.contains(flag + 1) else { return }
-        let receipt = URL(fileURLWithPath: args[flag + 1]).standardizedFileURL
-        let cache = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("local.localclip.dev/Updates").resolvingSymlinksInPath().path + "/"
-        guard receipt.lastPathComponent == "startup-ok", receipt.resolvingSymlinksInPath().path.hasPrefix(cache),
-              let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String else { return }
-        try? Data(build.utf8).write(to: receipt, options: .atomic)
+    /// T-01：可信根与辅助程序同源（UpdateLocations.current），Debug 隔离根可用，Release 恒为生产缓存。
+    @discardableResult
+    static func acknowledgeStartup(arguments: [String] = CommandLine.arguments, environment: [String: String] = ProcessInfo.processInfo.environment,
+                                   build: String? = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String) -> Bool {
+        guard let flag = arguments.firstIndex(of: "--localclip-update-receipt"), arguments.indices.contains(flag + 1),
+              let locations = try? UpdateLocations.current(environment: environment) else { return false }
+        let receipt = URL(fileURLWithPath: arguments[flag + 1]).standardizedFileURL
+        guard locations.isTrustedReceipt(receipt), let build else { return false }
+        return (try? Data(build.utf8).write(to: receipt, options: .atomic)) != nil
     }
 }

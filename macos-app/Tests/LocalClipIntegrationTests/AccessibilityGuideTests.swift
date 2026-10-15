@@ -24,7 +24,8 @@ import SwiftUI
     }
 
     /// 参考图按2倍像素换算为715×671点；引导应覆盖右侧内容区底部的浅横条。
-    @Test func referencePlacementAndResponsiveWidth() async throws {
+    // 可见浮层仅在用户明确要求桌面测试时启用，by AI.Coding。
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["LOCALCLIP_INTERACTIVE_TESTS"] == "1", "Requires explicit user request for desktop interaction")) func referencePlacementAndResponsiveWidth() async throws {
         _ = NSApplication.shared
         let screen = NSRect(x: 0, y: 0, width: 1440, height: 900)
         let reference = NSRect(x: 0, y: 0, width: 715, height: 671)
@@ -74,7 +75,8 @@ import SwiftUI
     }
 
     /// 真值变为已授权才显示成功并自动关闭；关闭后不再轮询。
-    @Test func authorizationClosesWithoutActivatingApp() async throws {
+    // 可见浮层仅在用户明确要求桌面测试时启用，by AI.Coding。
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["LOCALCLIP_INTERACTIVE_TESTS"] == "1", "Requires explicit user request for desktop interaction")) func authorizationClosesWithoutActivatingApp() async throws {
         _ = NSApplication.shared
         let foreground = NSWorkspace.shared.frontmostApplication?.processIdentifier
         var trusted = false, opened = 0, checks = 0
@@ -101,7 +103,8 @@ import SwiftUI
     }
 
     /// 整行实际接收鼠标；Escape关闭并取消检查，失焦则保留浮层。
-    @Test func rowHitTestingAndEscapeDismissal() async throws {
+    // 可见浮层仅在用户明确要求桌面测试时启用，by AI.Coding。
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["LOCALCLIP_INTERACTIVE_TESTS"] == "1", "Requires explicit user request for desktop interaction")) func rowHitTestingAndEscapeDismissal() async throws {
         _ = NSApplication.shared
         let guide = AccessibilityGuide(isTrusted: { false }, openSystemSettings: {}, settingsWindow: { _ in Self.settingsWindow })
         defer { guide.close() }
@@ -128,7 +131,8 @@ import SwiftUI
     }
 
     /// 说明页也监听授权；成功延迟关闭不能误关用户重新打开的向导。
-    @Test func dismissAndReopenCancelsPreviousCompletion() async throws {
+    // 可见浮层仅在用户明确要求桌面测试时启用，by AI.Coding。
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["LOCALCLIP_INTERACTIVE_TESTS"] == "1", "Requires explicit user request for desktop interaction")) func dismissAndReopenCancelsPreviousCompletion() async throws {
         _ = NSApplication.shared
         var trusted = false, opened = 0
         let guide = AccessibilityGuide(isTrusted: { trusted }, openSystemSettings: { opened += 1 }, settingsWindow: { _ in Self.settingsWindow })
@@ -152,7 +156,8 @@ import SwiftUI
         #expect(guide.state.step == .drag)
     }
     /// 设置最小化或切到其他应用时隐藏；返回同一窗口才恢复，关闭后不自动复活。
-    @Test func followsSettingsVisibilityAndStopsAfterClose() async throws {
+    // 可见浮层仅在用户明确要求桌面测试时启用，by AI.Coding。
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["LOCALCLIP_INTERACTIVE_TESTS"] == "1", "Requires explicit user request for desktop interaction")) func followsSettingsVisibilityAndStopsAfterClose() async throws {
         _ = NSApplication.shared
         var snapshot: AccessibilitySettingsWindow? = Self.settingsWindow
         var checks = 0
@@ -180,7 +185,8 @@ import SwiftUI
     }
 
     /// 启动系统设置前保持隐藏；启动失败会结束会话，手动关闭也禁止后续复活。
-    @Test func delayedSettingsLaunchAndFailure() async throws {
+    // 可见浮层仅在用户明确要求桌面测试时启用，by AI.Coding。
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["LOCALCLIP_INTERACTIVE_TESTS"] == "1", "Requires explicit user request for desktop interaction")) func delayedSettingsLaunchAndFailure() async throws {
         _ = NSApplication.shared
         var snapshot: AccessibilitySettingsWindow?
         let guide = AccessibilityGuide(isTrusted: { false }, openSystemSettings: {}, settingsWindow: { _ in snapshot }, openingTimeout: .seconds(2))
@@ -201,7 +207,8 @@ import SwiftUI
     }
 
     /// 隐藏期间授权成功直接结束，不把成功提示重新弹到其他应用上。
-    @Test func authorizationWhileSettingsMinimizedStaysHidden() async throws {
+    // 可见浮层仅在用户明确要求桌面测试时启用，by AI.Coding。
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["LOCALCLIP_INTERACTIVE_TESTS"] == "1", "Requires explicit user request for desktop interaction")) func authorizationWhileSettingsMinimizedStaysHidden() async throws {
         _ = NSApplication.shared
         var snapshot = Self.settingsWindow
         var trusted = false
@@ -216,7 +223,8 @@ import SwiftUI
     }
 
     /// 各状态按SwiftUI自然高度贴合，帮助展开后增长、收起后回缩，不留下固定高度空白。
-    @Test func panelFitsMeasuredContent() async throws {
+    // 可见浮层仅在用户明确要求桌面测试时启用，by AI.Coding。
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["LOCALCLIP_INTERACTIVE_TESTS"] == "1", "Requires explicit user request for desktop interaction")) func panelFitsMeasuredContent() async throws {
         _ = NSApplication.shared
         let guide = AccessibilityGuide(isTrusted: { false }, openSystemSettings: {}, settingsWindow: { _ in Self.settingsWindow })
         defer { guide.close() }
