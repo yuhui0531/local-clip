@@ -5,6 +5,26 @@ import LocalClipUpdateKit
 @testable import LocalClipMac
 
 @MainActor struct UpdateCheckerTests {
+    /// LC-F05：仅承诺数据快照，保留清理失败细节与原始回滚结果，by AI.Coding。
+    @Test(arguments: ["更新成功；数据快照：/fixture/backup", "更新成功；部分临时文件未清理：workspace；数据快照：/fixture/backup", "更新失败：启动回执不匹配", "更新失败：自动恢复失败，备份已保留：/fixture/rescue"])
+    func restoredUpdateResultMatchesRetainedMaterials(message: String) throws {
+        let suite = "LocalClip.UpdateTests." + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try Data(message.utf8).write(to: root.appendingPathComponent("result.txt"))
+        defaults.set(root.path, forKey: UpdateInstaller.lastAttemptKey)
+        let checker = UpdateChecker(defaults: defaults)
+        let result = try #require(checker.manualResult)
+        if message.hasPrefix("更新成功") {
+            #expect(result.hasPrefix("更新已完成；本次更新前的数据快照已保留"))
+            #expect(!result.contains("旧版本"))
+            #expect(result.contains("/fixture/backup"))
+            if message.contains("部分临时文件") { #expect(result.contains("部分临时文件未清理：workspace")) }
+        } else { #expect(result == message) }
+    }
+
     /// 自动发现只准备更新；唯有显式点击才调用安装器，重复点击不会重复安装。
     @Test func automaticDownloadNeverInstallsWithoutExplicitClick() async throws {
         let suite = "LocalClip.UpdateTests." + UUID().uuidString

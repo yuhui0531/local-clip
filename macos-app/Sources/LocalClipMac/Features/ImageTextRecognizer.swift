@@ -20,7 +20,7 @@ public enum ImageTextRecognizer {
         guard !lines.isEmpty else { throw Failure(message: "未识别到文字") }
         return lines
     }
-    /// 单次只解码一个候选；损坏或超限表示不遮蔽后续有效图，禁用ImageIO全局缓存，by AI.Coding。
+    /// 逐项优先真实图片文件，再尝试内嵌表示；损坏或超限候选不遮蔽后续有效图，禁用ImageIO全局缓存，by AI.Coding。
     private static func decode(_ payload: ClipboardPayload) throws -> CGImage {
         let options = [kCGImageSourceShouldCache: false] as CFDictionary
         var found = false, exceeded = false
@@ -32,17 +32,18 @@ public enum ImageTextRecognizer {
             guard width <= pixelLimit / height else { exceeded = true; return nil }
             return CGImageSourceCreateImageAtIndex(source, 0, options)
         }
-        for type in [SupportedType.png, SupportedType.tiff, SupportedType.jpeg] {
-            for item in payload.items {
+        for item in payload.items {
+            // LC-F03/F04：混合记录也枚举每项合法文件URL，文件图标不能抢占实际图片；不改变fileURLs的全文件契约。
+            if let url = item.fileURL, ClipboardPayload.isImageFile(url.path) {
+                found = true
+                if let value = image(CGImageSourceCreateWithURL(url as CFURL, options)) { return value }
+            }
+            for type in [SupportedType.png, SupportedType.tiff, SupportedType.jpeg] {
                 for representation in item.representations where representation.type == type {
                     found = true
                     if let value = image(CGImageSourceCreateWithData(representation.data as CFData, options)) { return value }
                 }
             }
-        }
-        for url in payload.fileURLs ?? [] where ClipboardPayload.isImageFile(url.path) {
-            found = true
-            if let value = image(CGImageSourceCreateWithURL(url as CFURL, options)) { return value }
         }
         throw Failure(message: exceeded ? "图片超过 4000 万像素，无法识别" : found ? "图片无法解码" : "所选内容不含图片")
     }

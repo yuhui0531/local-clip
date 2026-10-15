@@ -933,9 +933,8 @@ struct ClipInspector: View {
                 }
                 if urls.count > 4 { Text("另有 \(urls.count - 4) 个文件").font(.caption).foregroundStyle(.secondary) }
                 if let text {
-                    // 依据原生文本排版测量折行高度，长文仍保留滚动与有界预览，by AI.Coding。
-                    let measured = text.boundingRect(with: CGSize(width: 444, height: CGFloat.greatestFiniteMagnitude), options: [.usesLineFragmentOrigin, .usesFontLeading]).height
-                    SyntaxDetailPreview(content: text).frame(height: min(200, max(52, ceil(measured) + 20)))
+                    // LC-F01：高度计算只测量短文，长文直接使用滚动视口；传入预览的全文保持不变，by AI.Coding。
+                    SyntaxDetailPreview(content: text).frame(height: InspectorPreviewLayout.height(for: text))
                 }
             }.padding(10).frame(maxWidth: .infinity, alignment: .leading)
                 .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 10))

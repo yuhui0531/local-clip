@@ -19,12 +19,16 @@ public final class ClipExportAccess: Sendable {
     }
     /// 每个项目独立延迟读取，版本复查后才向目标返回真实格式。
     public func itemData(index: Int, type: String) throws -> Data {
+        try itemPayload(index: index, type: type).data
+    }
+    private func itemPayload(index: Int, type: String) throws -> VerifiedExportPayload {
         let db = try SQLiteConnection(database, readonly: true); defer { try? db.close() }; try validate(db)
+        // 与主存储连接使用相同的有界映射；不支持映射时SQLite继续使用普通读取，by AI.Coding。
+        try db.exec("PRAGMA mmap_size=201326592")
         guard let row = try db.rows("SELECT payload,digest,byteCount FROM representations JOIN blobs ON digest=blobDigest WHERE clipID=? AND itemIndex=? AND type=?", [.text(id), .integer(Int64(index)), .text(type)]).first else { throw StoreError.notFound }
-        let bytes = row.data("payload")
-        guard Int64(bytes.count) == row.int("byteCount"), ContentFingerprint.hash(bytes) == row.text("digest") else { throw StoreError.corruptPayload }
+        let payload = try VerifiedExportPayload(row.data("payload"), expectedDigest: row.text("digest"), expectedByteCount: row.int("byteCount"))
         let current = try SQLiteConnection(database, readonly: true); defer { try? current.close() }; try validate(current)
-        return bytes
+        return payload
     }
     public func itemTypes() throws -> [[String]] {
         let db = try SQLiteConnection(database, readonly: true); defer { try? db.close() }; try validate(db)
@@ -35,8 +39,8 @@ public final class ClipExportAccess: Sendable {
     /// 目标请求文件URL时同步兑现；不等待actor/主线程任务，避免pasteboard回调死锁，by AI.Coding。
     public func materializeDragFile(index: Int, type: String, fileName: String) throws -> (url: URL, created: Bool) {
         let root = database.deletingLastPathComponent().deletingLastPathComponent()
-        let data = try itemData(index: index, type: type)
-        let file = try DragFileStorage.write(data, root: root, fileName: fileName)
+        let payload = try itemPayload(index: index, type: type)
+        let file = try DragFileStorage.write(payload, root: root, fileName: fileName)
         do { try checkValid(); return file }
         catch {
             // 写入中记录被删除/会话取消时，不发布路径，也不删此前已交给外部应用的文件。
@@ -53,5 +57,20 @@ public final class ClipExportAccess: Sendable {
         let cutoff = retentionCutoff(settings: settings, at: clock.now())
         guard try db.scalarInt("SELECT COUNT(*) FROM clips WHERE id=? AND (? IS NULL OR (\(protectedSQL)) OR lastCopiedAtMs>?)",
                                [.text(id), cutoff.map(SQLValue.integer) ?? .null, cutoff.map(SQLValue.integer) ?? .null]) == 1 else { throw StoreError.notFound }
+    }
+}
+
+// 校验结果与不可变字节一起传递；拖出文件不再重复哈希，也不接受未经校验的摘要，by AI.Coding。
+struct VerifiedExportPayload {
+    let data: Data
+    let digest: String
+    init(_ data: Data) {
+        self.data = data
+        digest = ContentFingerprint.hash(data)
+    }
+    init(_ data: Data, expectedDigest: String, expectedByteCount: Int64) throws {
+        guard Int64(data.count) == expectedByteCount else { throw StoreError.corruptPayload }
+        self.init(data)
+        guard digest == expectedDigest else { throw StoreError.corruptPayload }
     }
 }

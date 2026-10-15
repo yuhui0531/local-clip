@@ -135,7 +135,17 @@ final class ImageDragSession: Sendable {
     private let state = Mutex(State())
     /// 每项只兑现一次；锁覆盖创建/登记，结束会话不会漏掉跨线程的新建路径。
     func fileURL(key: String, create: () throws -> (url: URL, created: Bool)) throws -> URL {
-        try state.withLock { state in
+        #if DEBUG
+        let requested = ProcessInfo.processInfo.systemUptime
+        #endif
+        return try state.withLock { state in
+            #if DEBUG
+            let acquired = ProcessInfo.processInfo.systemUptime, mainThread = Thread.isMainThread
+            defer {
+                let ended = ProcessInfo.processInfo.systemUptime, provided = state.urls[key] != nil
+                Task { @MainActor in GUIAcceptanceProbe.exportRequest("image-lock", id: key, type: SupportedType.fileURL, provided: provided, bytes: -1, at: ended, durationMs: (ended - acquired) * 1000, mainThread: mainThread, lockWaitMs: (acquired - requested) * 1000) }
+            }
+            #endif
             guard !state.finished || state.retain else { throw StoreError.notFound }
             if let url = state.urls[key] { return url }
             let file = try create()
@@ -175,6 +185,9 @@ private final class ImageDataProvider: NSObject, NSPasteboardItemDataProvider, S
     }
     /// 目标首次索取URL才读取/哈希/写出原图；无需等待主线程actor回调。
     func value(for type: NSPasteboard.PasteboardType) -> Any? {
+        #if DEBUG
+        let began = ProcessInfo.processInfo.systemUptime, mainThread = Thread.isMainThread
+        #endif
         let value: Any?
         if type == .fileURL {
             value = [SupportedType.png, SupportedType.tiff, SupportedType.jpeg].first(where: types.contains).flatMap { imageType in
@@ -186,7 +199,7 @@ private final class ImageDataProvider: NSObject, NSPasteboardItemDataProvider, S
         #if DEBUG
         // 原生目标拒绝时区分未请求、请求失败与解码失败；Release不编译诊断，by AI.Coding。
         let id = access.id, type = type.rawValue, provided = value != nil, bytes = (value as? Data)?.count ?? -1, at = ProcessInfo.processInfo.systemUptime
-        Task { @MainActor in GUIAcceptanceProbe.exportRequest("image-read", id: id, type: type, provided: provided, bytes: bytes, at: at) }
+        Task { @MainActor in GUIAcceptanceProbe.exportRequest("image-read", id: id, type: type, provided: provided, bytes: bytes, at: at, durationMs: (at - began) * 1000, mainThread: mainThread) }
         #endif
         return value
     }
@@ -352,6 +365,7 @@ struct HistoryDragBridge: NSViewRepresentable {
         private var preparing = false
         private var dragged = false
         private var nativeSessionActive = false
+        private var dataProviderRegistrationFailed = false
         private var preparedWriters: [any NSPasteboardWriting] = []
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
         /// ⌘T转换菜单定位到所选卡片；只取仍在窗口中的卡片，by AI.Coding。
@@ -385,7 +399,7 @@ struct HistoryDragBridge: NSViewRepresentable {
             }
         }
         /// 原生会话接管后必须收到拖动和抬起事件，否则AppKit无法向分类目标派发放下，by AI.Coding。
-        func handPointerToNativeSession() { nativeSessionActive = true }
+        func handPointerToNativeSession() { nativeSessionActive = true; dataProviderRegistrationFailed = false }
         func handle(_ event: NSEvent) -> NSEvent? {
             if nativeSessionActive { return event }
             guard let model else { return event }
@@ -446,19 +460,52 @@ struct HistoryDragBridge: NSViewRepresentable {
             content.cacheDisplay(in: rect, to: bitmap)
             let image = NSImage(size: bounds.size); image.addRepresentation(bitmap); return image
         }
-        func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation { .copy }
+        /// LC-V02：注册失败后禁止接收端接受投放，原生手势仍由AppKit处理到结束，by AI.Coding。
+        var allowedDragOperation: NSDragOperation { dataProviderRegistrationFailed ? [] : .copy }
+        func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation { allowedDragOperation }
+        /// 不在willBegin中提前结束模型会话；失败的原生会话禁止投放，结束回调统一取消/清理。
+        func installDataProviders(on board: NSPasteboard, _ install: () throws -> Void) {
+            do { try install() }
+            catch {
+                dataProviderRegistrationFailed = true
+                // 撤销本次会话已部分注册的类型/承诺，避免接收方缓存了copy操作后仍读到半成品。
+                board.clearContents()
+                model?.message = "拖出失败，无法注册图片输出，请松开鼠标后重试"
+            }
+        }
+        /// AppKit已写入真实原生promise项，在接收方读取前补充公开延迟类型回调，by AI.Coding。
         func draggingSession(_ session: NSDraggingSession, willBeginAt screenPoint: NSPoint) {
-            // AppKit已写入真实原生promise项；在接收方读取前只补充公开的延迟类型回调，by AI.Coding。
-            do { try ContentExportProvider.installImageDataProviders(preparedWriters, on: session.draggingPasteboard) }
-            catch { model?.finishDrag(cancelled: true); model?.message = "拖出失败，无法注册图片输出" }
+            installDataProviders(on: session.draggingPasteboard) {
+                try ContentExportProvider.installImageDataProviders(preparedWriters, on: session.draggingPasteboard)
+                #if DEBUG
+                // 仅隔离验收包显式文件命令可注入部分注册失败；不访问系统general板，by AI.Coding。
+                if let output = GUIAcceptanceProbe.output {
+                    let trigger = output.appendingPathComponent("fail-next-registration")
+                    if FileManager.default.fileExists(atPath: trigger.path) {
+                        try FileManager.default.removeItem(at: trigger)
+                        if let model { GUIAcceptanceProbe.event("registration-failure-injected", model) }
+                        throw StoreError.ioFailure
+                    }
+                }
+                #endif
+            }
             #if DEBUG
             if let model { GUIAcceptanceProbe.event("native-session-started", model) }
             #endif
         }
-        func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
+        /// 失败注册即使接收端错误报告copy也按取消清理，不保留本轮未接受路径。
+        func finishNativeSession(operation: NSDragOperation) {
             preparedWriters.removeAll()
             nativeSessionActive = false; down = nil; pressedID = nil; Self.active = nil
-            model?.finishDrag(cancelled: operation.isEmpty)
+            model?.finishDrag(cancelled: dataProviderRegistrationFailed || operation.isEmpty)
+            dataProviderRegistrationFailed = false
+        }
+        /// 原生结束事件是模型状态与文件生命周期的唯一结束点，by AI.Coding。
+        func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
+            finishNativeSession(operation: operation)
+            #if DEBUG
+            if let model { GUIAcceptanceProbe.event("native-session-ended-\(operation.rawValue)", model) }
+            #endif
         }
         deinit {
             MainActor.assumeIsolated {

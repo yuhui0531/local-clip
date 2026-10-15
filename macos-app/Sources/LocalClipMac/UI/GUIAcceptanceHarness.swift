@@ -28,9 +28,11 @@ import LocalClipCore
     private static var pointers: [[String: Any]] = []
     private static var exports: [[String: Any]] = []
     /// LC-R01只记录隔离验收包的类型协商和输出结果，不记录载荷正文，by AI.Coding。
-    static func exportRequest(_ kind: String, id: String, type: String, provided: Bool, bytes: Int, at: Double) {
+    static func exportRequest(_ kind: String, id: String, type: String, provided: Bool, bytes: Int, at: Double, durationMs: Double? = nil, mainThread: Bool? = nil, lockWaitMs: Double? = nil) {
         guard output != nil else { return }
-        exports.append(["kind": kind, "id": id, "type": type, "provided": provided, "bytes": bytes, "uptime": at])
+        var entry: [String: Any] = ["kind": kind, "id": id, "type": type, "provided": provided, "bytes": bytes, "uptime": at]
+        entry["durationMs"] = durationMs; entry["mainThread"] = mainThread; entry["lockWaitMs"] = lockWaitMs
+        exports.append(entry)
         write(exports, "drag-export-requests.json")
     }
     static func pointer(_ event: NSEvent, id: String?, rectangles: [[String: String]]) {

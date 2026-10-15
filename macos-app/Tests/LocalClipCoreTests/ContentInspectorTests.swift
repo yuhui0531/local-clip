@@ -98,6 +98,20 @@ struct ContentInspectorTests {
         #expect(badge.range(of: "^(\\d{4}-)?\\d{2}-\\d{2} \\d{2}:\\d{2}$", options: .regularExpression) != nil, "\(badge)")
     }
 
+    /// 截图样本：含路径的中文说明、纯路径不做语言猜测；带中文注释的代码仍保留样本，by AI.Coding。
+    @Test func languageSampleSkipsPathsAndCJKProse() throws {
+        let path = "/Users/ronny/VscodeProjects/rea/macos-app/docs/reviews/LocalClip_Comprehensive_Review_2026-10-14.md"
+        #expect(ContentInspector.languageSample(path) == nil)
+        #expect(ContentInspector.languageSample("  ~/Downloads/a.txt\n") == nil)
+        #expect(ContentInspector.languageSample("请根据review comments **\(path) 进行修复。**  注意，切记功能") == nil)
+        #expect(ContentInspector.languageSample("今天下午三点开会，记得带电脑。") == nil)
+        let sample = try #require(ContentInspector.languageSample("See /usr/local/bin/foo for details"))
+        #expect(!sample.contains("/usr"))
+        let code = "// 获取用户列表\nfunction getUsers() { return api.get('/users'); }"
+        #expect(ContentInspector.languageSample(code) == code)
+        #expect(ContentInspector.languageSample("x = a/b/c") == "x = a/b/c")
+    }
+
     /// AC4与颜色写法互转：hex、rgb()/rgba()、hsl()，越界不算颜色，by AI.Coding。
     @Test func colors() throws {
         let green = try #require(ContentInspector.color("#34C759"))

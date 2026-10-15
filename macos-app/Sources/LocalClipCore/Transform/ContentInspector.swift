@@ -86,6 +86,19 @@ public enum ContentInspector {
         "json": "JSON", "java": "Java", "python": "Python", "javascript": "JavaScript", "typescript": "TypeScript", "yaml": "YAML",
         "xml": "XML", "css": "CSS", "bash": "Shell", "swift": "Swift", "sql": "SQL", "cpp": "C++", "csharp": "C#",
         "go": "Go", "ruby": "Ruby", "php": "PHP", "rust": "Rust", "ini": "INI", "markdown": "Markdown"]
+    /// CJK标点、假名、汉字、韩文与全角字符。
+    private static let cjkRanges: [ClosedRange<UInt32>] = [0x3000...0x30FF, 0x3400...0x9FFF, 0xAC00...0xD7AF, 0xFF00...0xFFEF]
+    private static let pathToken = try! NSRegularExpression(pattern: "(?<![A-Za-z0-9_)\\]])(?:~|\\.{1,2})?(?:/[\\w.@+-]+){2,}/?")
+    /// 语言猜测用的样本：抹掉文件路径（highlight.js会把"/a/b/"当成Ruby/Swift正则字面量），
+    /// 只剩路径或中日韩文字占比≥40%的正文返回nil，不做语言识别，by AI.Coding。
+    /// ponytail: 字符占比启发式，中文注释极多的代码片段会被当正文；误判明显时改为按行判断。
+    public static func languageSample(_ text: String) -> String? {
+        let masked = pathToken.stringByReplacingMatches(in: text, range: NSRange(text.startIndex..., in: text), withTemplate: " ")
+        let visible = masked.unicodeScalars.filter { !CharacterSet.whitespacesAndNewlines.contains($0) }
+        guard !visible.isEmpty else { return nil }
+        let cjk = visible.filter { scalar in cjkRanges.contains { $0.contains(scalar.value) } }
+        return Double(cjk.count) / Double(visible.count) >= 0.4 ? nil : masked
+    }
     public struct RGBA: Equatable, Sendable {
         public let red: Int, green: Int, blue: Int
         public let alpha: Double

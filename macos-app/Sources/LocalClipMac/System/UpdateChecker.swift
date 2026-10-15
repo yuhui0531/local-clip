@@ -38,7 +38,10 @@ import LocalClipUpdateKit
         self.prepareUpdate = prepare; self.installUpdate = install
         if let path = defaults.string(forKey: UpdateInstaller.lastAttemptKey),
            let message = try? String(contentsOfFile: path + "/result.txt", encoding: .utf8) {
-            manualResult = message.hasPrefix("更新成功") ? "更新已完成；旧版本和数据快照已保留" : message
+            // LC-F05：成功后旧应用工作区已清理，只承诺数据快照；保留清理异常和快照路径，失败/回滚结果原样展示。
+            manualResult = message.hasPrefix("更新成功")
+                ? "更新已完成；本次更新前的数据快照已保留" + message.dropFirst("更新成功".count)
+                : message
         }
         if let path = defaults.string(forKey: Self.readyKey) {
             checking = true

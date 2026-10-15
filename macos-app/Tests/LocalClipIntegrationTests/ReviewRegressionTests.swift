@@ -286,4 +286,13 @@ struct ReviewCodeRegressionTests {
         #expect(await SyntaxHighlighter.shared.highlight("https://example.invalid/path?a=1&b=2#section") == nil)
         #expect(await SyntaxHighlighter.detail.highlight("https://example.invalid/path?a=1&b=2#section") == nil)
     }
+    /// 截图样本：路径曾被当成Ruby/Swift正则字面量，卡片标题显示成语言名，by AI.Coding。
+    @Test func pathsAndChineseProseAreNeverDetectedAsCode() async {
+        let path = "/Users/ronny/VscodeProjects/rea/macos-app/docs/reviews/LocalClip_Comprehensive_Review_2026-10-14.md"
+        for text in [path, "请根据review comments **\(path) 进行修复。**  注意，切记功能", "See /usr/local/bin/foo for details"] {
+            #expect(await SyntaxHighlighter.shared.highlight(text) == nil, "\(text)")
+            #expect(await SyntaxHighlighter.shared.language(of: text) == nil, "\(text)")
+        }
+        #expect(await SyntaxHighlighter.shared.language(of: "// 获取用户列表\nfunction getUsers() { return api.get('/users'); }") != nil)
+    }
 }

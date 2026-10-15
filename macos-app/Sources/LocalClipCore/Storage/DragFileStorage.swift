@@ -2,24 +2,21 @@
 import Foundation
 
 enum DragFileStorage {
-    /// 只在目标实际索取URL时写出完整原始字节，不影响历史配额或原始表示。
+    /// 只在目标实际索取URL时写出独立的完整原始字节，不影响历史配额或原始表示。
     static func write(_ data: Data, root: URL, fileName: String) throws -> (url: URL, created: Bool) {
+        guard data.count <= 50 * MiB else { throw StoreError.invalidSettings }
+        return try write(VerifiedExportPayload(data), root: root, fileName: fileName)
+    }
+    static func write(_ payload: VerifiedExportPayload, root: URL, fileName: String) throws -> (url: URL, created: Bool) {
+        let data = payload.data
         guard !fileName.isEmpty, !fileName.contains("/"), !fileName.hasPrefix("."),
               ["png", "tiff", "jpg"].contains(URL(fileURLWithPath: fileName).pathExtension), data.count <= 50 * MiB else { throw StoreError.invalidSettings }
-        let digest = ContentFingerprint.hash(data)
-        let folder = root.appendingPathComponent("DragFiles/" + digest, isDirectory: true)
+        let folder = root.appendingPathComponent("DragFiles/" + payload.digest, isDirectory: true)
         let file = folder.appendingPathComponent(fileName)
         let fm = FileManager.default
         if fm.fileExists(atPath: file.path) { return (file, false) }
-        // 改名/多选序号只增加硬链接，不重复分配原图；拒绝已被目标修改的候选。
-        if fm.fileExists(atPath: folder.path),
-           let existing = try fm.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey]).first(where: {
-               let values = try $0.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
-               return $0.pathExtension == file.pathExtension && values.isRegularFile == true && values.isSymbolicLink != true
-           }), let existingData = try? Data(contentsOf: existing, options: .mappedIfSafe), ContentFingerprint.hash(existingData) == digest {
-            // 不支持硬链接的卷退回原有写入路径，不能损失文件URL输出能力。
-            if (try? fm.linkItem(at: existing, to: file)) != nil { return (file, true) }
-        }
+        // LC-F02：不同名称必须独立写入；已接受文件可被外部原地编辑，不能共享inode或用它作新导出的数据源。
+        // 同名旧路径继续复用且不覆盖；新路径仍以数据库校验后的原始字节进行空间预检和原子写入。
         let filesystem = try fm.attributesOfFileSystem(forPath: root.path)
         guard let free = filesystem[.systemFreeSize] as? NSNumber,
               free.int64Value > Int64(data.count) * 2 + 8 * MiB else { throw StoreError.diskFull }

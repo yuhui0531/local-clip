@@ -19,6 +19,63 @@ import Testing
     }
     private func payload(_ data: Data) -> ClipboardPayload { .init([.init([.init(SupportedType.png, data)])]) }
 
+    /// LC-F03：正文图片文件优先于同项图标，保留混合文本条目下的相同语义，by AI.Coding。
+    @Test(arguments: [false, true])
+    func fileContentsTakePrecedenceOverIcon(mixed: Bool) async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".png")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try Self.png(lines: ["DOCUMENT 4242"]).write(to: url)
+        let icon = try #require(NSBitmapImageRep(data: Self.png(lines: ["ICON 9999"]))?.representation(using: .tiff, properties: [:]))
+        let file = PasteboardItemValue([.init(SupportedType.fileURL, Data(url.absoluteString.utf8)), .init(SupportedType.tiff, icon)])
+        let text = PasteboardItemValue([.init(SupportedType.string, Data("caption".utf8))])
+        let value = ClipboardPayload(mixed ? [text, file] : [file])
+        let recognized = try await ImageTextRecognizer.recognize(value).joined(separator: " ")
+        #expect(recognized.contains("4242"), "\(recognized)")
+        #expect(!recognized.contains("9999"), "\(recognized)")
+    }
+
+    /// LC-F04：逐项枚举混合记录的文件，跳过非图片/损坏文件，保持全文件聚合契约，by AI.Coding。
+    @Test(arguments: [false, true])
+    func mixedFileReferencesRemainOCRCandidates(textFirst: Bool) async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("document.png")
+        try Self.png(lines: ["MIXED 5678"]).write(to: url)
+        let bad = root.appendingPathComponent("broken.png"), other = root.appendingPathComponent("note.txt")
+        try Data("not an image".utf8).write(to: bad)
+        try Data("plain file".utf8).write(to: other)
+        let files = [other, bad, url].map { PasteboardItemValue([.init(SupportedType.fileURL, Data($0.absoluteString.utf8))]) }
+        let text = PasteboardItemValue([.init(SupportedType.string, Data("caption".utf8))])
+        let mixed = ClipboardPayload(textFirst ? [text] + files : files + [text])
+        #expect(mixed.fileURLs == nil)
+        #expect(ClipboardPayload(files).fileURLs == [other, bad, url])
+        #expect(try await ImageTextRecognizer.recognize(mixed).joined().contains("5678"))
+    }
+
+    /// 文件不可用时仍可识别后续有效表示；内嵌图片加独立文本保持可用，by AI.Coding。
+    @Test func unavailableFileFallsBackToInlineImage() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".png")
+        let bytes = try Self.png(lines: ["FALLBACK 6789"])
+        let file = PasteboardItemValue([.init(SupportedType.fileURL, Data(url.absoluteString.utf8)), .init(SupportedType.png, Data("broken".utf8)), .init(SupportedType.tiff, bytes)])
+        let text = PasteboardItemValue([.init(SupportedType.string, Data("caption".utf8))])
+        for value in [ClipboardPayload([file, text]), ClipboardPayload([.init([.init(SupportedType.png, bytes)]), text])] {
+            #expect(try await ImageTextRecognizer.recognize(value).joined().contains("6789"))
+        }
+    }
+
+    /// 超过4000万像素的文件不解码，并可回退到下一项的有效图片，by AI.Coding。
+    @Test func oversizedFileIsRejectedWithoutHidingLaterImage() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".png")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try ImageFixtures.image(width: 6500, height: 6200).write(to: url)
+        let file = PasteboardItemValue([.init(SupportedType.fileURL, Data(url.absoluteString.utf8))])
+        do { _ = try await ImageTextRecognizer.recognize(.init([file])); Issue.record("Oversized image accepted") }
+        catch let error as ImageTextRecognizer.Failure { #expect(error.message == "图片超过 4000 万像素，无法识别") }
+        let next = PasteboardItemValue([.init(SupportedType.png, try Self.png(lines: ["NEXT 7890"]))])
+        #expect(try await ImageTextRecognizer.recognize(.init([file, next])).joined().contains("7890"))
+    }
+
     /// LC-R10：损坏首表示应尝试后续原图；Finder图片引用沿用同一识别链，by AI.Coding。
     @Test func fallsBackToTIFFAndRecognizesFileReference() async throws {
         let data = try Self.png(lines: ["LocalClip fallback 2026"])

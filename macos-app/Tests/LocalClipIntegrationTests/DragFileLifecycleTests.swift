@@ -1,10 +1,55 @@
-// LC-R01：取消、内部分类、外部路径保留与改名硬链接，全部使用测试库，by AI.Coding。
+// LC-R01/LC-F02：取消、内部分类、外部路径保留与导出写入隔离，全部使用测试库，by AI.Coding。
 import AppKit
 import Testing
 @testable import LocalClipCore
 @testable import LocalClipMac
 
 @MainActor struct DragFileLifecycleTests {
+    /// LC-V02：故障注入覆盖部分注册后的失败；禁止投放但保持手势，结束时回收新文件并保留历史路径，by AI.Coding。
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["LOCALCLIP_NAMED_TEST"] == "1"))
+    func failedRegistrationRejectsDropUntilNativeSessionEnds() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try HistoryStore(location: root)
+        let bytes = try ImageFixtures.image(width: 24, height: 16)
+        guard case .inserted(let id) = try await store.ingest(.init(payload: .init([.init([.init(SupportedType.png, bytes)])])), at: SystemClock().now()) else { throw StoreError.notFound }
+        let accepted = try await store.writeTrackedDragFile(bytes, id: id, fileName: "accepted.png")
+        let raw = MacPasteboardClient(access: RawBoard()), capture = CaptureCoordinator(board: raw, store: store)
+        let model = HistoryViewModel(store: store, capture: capture, paste: PasteCoordinator(board: raw, applications: FakeApplications(), store: store, capture: capture), derived: DerivedContentService(store: store))
+        try await model.start(); capture.stop()
+        let deadline = ContinuousClock.now + .seconds(5)
+        while (model.items.isEmpty || model.historyBusy), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(5)) }
+        let token = model.prepareDrag(id)
+        var access: ClipExportAccess?
+        let writers = try await ContentExportProvider.writers(ids: [id], store: store, token: token, register: { access = $0; model.registerDragAccess($0) }, registerSession: model.registerDragSession)
+        let board = NSPasteboard(name: .init("local.localclip.registration-failure." + UUID().uuidString))
+        defer { board.releaseGlobally() }
+        #expect(board.writeObjects(writers))
+        let view = HistoryDragBridge.DragView(frame: .zero); view.model = model
+        view.handPointerToNativeSession()
+        var materialized: URL?
+        view.installDataProviders(on: board) {
+            try ContentExportProvider.installImageDataProviders(writers, on: board)
+            materialized = try #require(board.string(forType: .fileURL).flatMap(URL.init(string:)))
+            throw StoreError.ioFailure
+        }
+        #expect(view.allowedDragOperation.isEmpty)
+        #expect(board.pasteboardItems?.isEmpty != false)
+        #expect(model.dragActive)
+        #expect(model.message.contains("无法注册图片输出"))
+        try #require(access).checkValid()
+        view.finishNativeSession(operation: .copy)
+        await model.waitForDragCleanup()
+        #expect(!model.dragActive)
+        #expect(throws: StoreError.notFound) { try #require(access).checkValid() }
+        #expect(!FileManager.default.fileExists(atPath: try #require(materialized).path))
+        #expect(try Data(contentsOf: accepted.url) == bytes)
+        #expect(try await store.integrityCheck())
+        view.handPointerToNativeSession()
+        #expect(view.allowedDragOperation == .copy)
+        view.finishNativeSession(operation: [])
+    }
+
     /// 保留每项真实promise身份；注册延迟类型后，混合多选的正文、文件名和原图不能串项，by AI.Coding。
     @Test(.enabled(if: ProcessInfo.processInfo.environment["LOCALCLIP_NAMED_TEST"] == "1"))
     func nativeProvidersAndLazyDataKeepMixedItemOrder() async throws {
@@ -182,8 +227,9 @@ import Testing
         #expect(try await store.loadPayload(id: id, at: SystemClock().now()).items[0].representations[0].data == bytes)
     }
 
-    /// 同一图片改名不重复分配物理块；取消新链接不破坏原外部路径。
-    @Test func renamedImageSharesInode() async throws {
+    /// LC-F02：改名和多选编号必须隔离原地写入；取消新文件不破坏已接受路径或数据库，by AI.Coding。
+    @Test(arguments: ["renamed.png", "first-2.png"])
+    func renamedImageIsolatesInPlaceWrites(fileName: String) async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let store = try HistoryStore(location: root)
@@ -191,14 +237,25 @@ import Testing
         guard case .inserted(let id) = try await store.ingest(.init(payload: .init([.init([.init(SupportedType.png, bytes)])])), at: SystemClock().now()) else { throw StoreError.notFound }
         let first = try await store.writeTrackedDragFile(bytes, id: id, fileName: "first.png")
         let originalBytes = try await store.dragFilesBytes()
-        let renamed = try await store.writeTrackedDragFile(bytes, id: id, fileName: "renamed.png")
-        #expect(try await store.dragFilesBytes() == originalBytes)
+        let renamed = try await store.writeTrackedDragFile(bytes, id: id, fileName: fileName)
+        #expect(try await store.dragFilesBytes() > originalBytes)
         let fm = FileManager.default
         #expect(first.created && renamed.created)
-        #expect(try fm.attributesOfItem(atPath: first.url.path)[.systemFileNumber] as? NSNumber == fm.attributesOfItem(atPath: renamed.url.path)[.systemFileNumber] as? NSNumber)
+        #expect(try fm.attributesOfItem(atPath: first.url.path)[.systemFileNumber] as? NSNumber != fm.attributesOfItem(atPath: renamed.url.path)[.systemFileNumber] as? NSNumber)
         #expect(try await store.writeTrackedDragFile(bytes, id: id, fileName: "first.png").created == false)
+        // FileHandle直接改写现有inode，不能用原子替换掩盖硬链接共享问题。
+        let firstHandle = try FileHandle(forWritingTo: first.url)
+        try firstHandle.write(contentsOf: Data([0x41])); try firstHandle.close()
+        #expect(try Data(contentsOf: renamed.url) == bytes)
+        let modifiedFirst = try Data(contentsOf: first.url)
+        let secondHandle = try FileHandle(forWritingTo: renamed.url)
+        try secondHandle.seek(toOffset: 1); try secondHandle.write(contentsOf: Data([0x42])); try secondHandle.close()
+        #expect(try Data(contentsOf: first.url) == modifiedFirst)
+        let third = try await store.writeTrackedDragFile(bytes, id: id, fileName: "fresh.png")
+        #expect(try Data(contentsOf: third.url) == bytes)
         try await store.removeDragFiles([renamed.url])
-        #expect(try Data(contentsOf: first.url) == bytes)
+        #expect(try Data(contentsOf: first.url) == modifiedFirst)
+        #expect(try await store.loadPayload(id: id, at: SystemClock().now()).items[0].representations[0].data == bytes)
         #expect(try await store.integrityCheck())
     }
 }
