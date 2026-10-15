@@ -456,7 +456,6 @@ private struct ClipCard: View, Equatable {
     @State private var fileVersion: FileReferencePreviewVersion?
     @State private var characterCount: Int?
     @State private var fileText: String?
-    @State private var fileTextFailed = false
     @State private var thumbnailState: ThumbnailPreviewState = .loading
     /// N-01：仅图片/文件记录取值；文件每次进入视口重新查询，不把旧值当作实时值。
     @State private var contentSize: ClipContentSize = .loading
@@ -467,18 +466,16 @@ private struct ClipCard: View, Equatable {
         return thumbnailState
     }
     private var thumbnail: NSImage? { displayedThumbnail.image }
-    /// 预览是路径列表且最多180字符；截断时末行不完整，只按完整行判断，加载时再用完整路径复核，by AI.Coding。
-    private func filePaths(_ rule: (String) -> Bool) -> (first: String, count: Int?)? {
+    /// 完整路径来自已验证的原始引用；摘要只在加载前用于标题，不能决定预览格式，by AI.Coding。
+    private var filePaths: (first: String, count: Int?)? {
         guard item.kind == .file else { return nil }
+        if checkedFileGeneration == previewGeneration, let urls = fileVersion?.references, let first = urls.first {
+            return (first.path, urls.count)
+        }
         let lines = item.preview.split(separator: "\n").map(String.init)
-        let truncated = item.preview.count >= 180 && lines.count > 1
-        let complete = truncated ? Array(lines.dropLast()) : lines
-        guard let first = complete.first, complete.allSatisfy(rule) else { return nil }
-        return (first, truncated ? nil : lines.count)
+        guard let first = lines.first else { return nil }
+        return (first, item.preview.count >= 180 ? nil : lines.count)
     }
-    private var imageFilePaths: (first: String, count: Int?)? { filePaths(ClipboardPayload.isImageFile) }
-    /// 全部为文本文件时显示第一个文件的开头内容；读取失败退回文件样式，by AI.Coding。
-    private var textFilePaths: (first: String, count: Int?)? { filePaths(TextFilePreview.isCandidate) }
     /// 缓存中的空串表示已确认不是文本，不再重复读取。
     private var cachedFileText: String? { checkedFileGeneration == previewGeneration ? model.fileTexts.object(forKey: item.id as NSString).map(String.init) : nil }
     private var displayedFileText: String? { checkedFileGeneration == previewGeneration ? fileText ?? cachedFileText.flatMap { $0.isEmpty ? nil : $0 } : nil }
@@ -487,12 +484,19 @@ private struct ClipCard: View, Equatable {
         let more = (model.fileCounts.object(forKey: item.id as NSString)?.intValue ?? paths.count).map { $0 > 1 ? " 等\($0)\(unit)" : "" } ?? " 等多\(unit)"
         return (paths.first as NSString).lastPathComponent + more
     }
-    /// 全部为图片的文件引用以第一张预览；仍是文件记录，粘贴与Finder操作不变，by AI.Coding。
-    private var isImageFile: Bool { imageFilePaths != nil }
+    /// OCR仍沿用图片文件组判断；卡片内容预览独立于此规则，by AI.Coding。
+    private var isImageFile: Bool {
+        guard item.kind == .file else { return false }
+        if checkedFileGeneration == previewGeneration, let urls = fileVersion?.references {
+            return !urls.isEmpty && urls.allSatisfy { ClipboardPayload.isImageFile($0.path) }
+        }
+        let paths = item.preview.split(separator: "\n")
+        return !paths.isEmpty && paths.allSatisfy { ClipboardPayload.isImageFile(String($0)) }
+    }
     /// 文件已删或无法解码时退回普通文件卡片，不显示图片错误态。
-    private var showsImageFile: Bool {
-        guard isImageFile else { return false }
-        switch displayedThumbnail { case .ready, .loading: return true; case .failed, .tooLarge: return false }
+    private var showsFileThumbnail: Bool {
+        guard item.kind == .file else { return false }
+        switch displayedThumbnail { case .ready: return true; case .loading: return isImageFile; case .failed, .tooLarge: return false }
     }
     private var displayedCharacterCount: Int? { characterCount ?? model.characterCounts.object(forKey: item.id as NSString)?.intValue }
     @State private var isOnscreen = false
@@ -734,10 +738,28 @@ private struct ClipCard: View, Equatable {
                     guard !Task.isCancelled, model.contains(item.id) else { return }
                     contentSize = size
                     if !model.validateFilePreview(id: item.id, version: version) {
-                        fileText = nil; fileTextFailed = false; thumbnailState = .loading
+                        fileText = nil; thumbnailState = .loading
                     }
                     fileVersion = version; checkedFileGeneration = previewGeneration
-                    guard version != nil else { fileTextFailed = true; thumbnailState = .failed; return }
+                    guard let version, let url = version.references.first else { thumbnailState = .failed; return }
+                    model.fileCounts.setObject(version.references.count as NSNumber, forKey: item.id as NSString)
+                    if displayedFileText != nil || thumbnail != nil { return }
+                    // 图片、文本和常见文档共用内容预览入口，文本解码失败不能提前吞掉图片/文档预览。
+                    let result = await FileCardPreview.render(fileAt: url)
+                    guard !Task.isCancelled, model.contains(item.id),
+                          (try? await model.previewMetadata(id: item.id)) != nil else { return }
+                    guard await Task.detached(priority: .utility, operation: { version.isCurrent() }).value,
+                          !Task.isCancelled else { thumbnailState = .failed; return }
+                    switch result {
+                    case .text(let text):
+                        fileText = text
+                        model.fileTexts.setObject(text as NSString, forKey: item.id as NSString)
+                    case .image(let data):
+                        thumbnailState = ThumbnailPreviewState(.image(data))
+                        if let image = thumbnailState.image { model.thumbnails.setObject(image, forKey: item.id as NSString, encodedBytes: data.count) }
+                    case .unavailable: thumbnailState = .failed
+                    }
+                    return
                 }
                 if item.kind == .image, contentSize == .loading {
                     let size = try? await model.previewImageSize(id: item.id)
@@ -753,38 +775,10 @@ private struct ClipCard: View, Equatable {
                     characterCount = count
                     if let count { model.characterCounts.setObject(count as NSNumber, forKey: item.id as NSString) }
                 }
-                if textFilePaths != nil, cachedFileText == nil, fileText == nil, !fileTextFailed {
-                    let urls = try? await model.previewDetail(id: item.id).payload.fileURLs
-                    var text: String?
-                    if let urls, urls.allSatisfy({ TextFilePreview.isCandidate($0.path) }), let url = urls.first {
-                        text = await Task.detached(priority: .utility) { TextFilePreview.read(url) }.value
-                    }
-                    guard !Task.isCancelled, model.contains(item.id) else { return }
-                    guard let text, let urls else {
-                        fileTextFailed = true
-                        if urls != nil { model.fileTexts.setObject("", forKey: item.id as NSString) }
-                        return
-                    }
-                    guard let version = fileVersion,
-                          await Task.detached(priority: .utility, operation: { version.isCurrent() }).value,
-                          !Task.isCancelled else { fileText = nil; fileTextFailed = true; return }
-                    fileText = text
-                    model.fileTexts.setObject(text as NSString, forKey: item.id as NSString)
-                    model.fileCounts.setObject(urls.count as NSNumber, forKey: item.id as NSString)
-                    return
-                }
-                guard item.kind == .image || item.kind == .mixed || isImageFile, thumbnail == nil else { return }
+                guard item.kind == .image || item.kind == .mixed, thumbnail == nil else { return }
                 // 可见即自动加载；失败必须退出加载态，不把错误伪装成等待用户操作。
                 thumbnailState = .loading
-                let result: ThumbnailResult
-                if isImageFile {
-                    guard let urls = try? await model.previewDetail(id: item.id).payload.fileURLs,
-                          urls.allSatisfy({ ClipboardPayload.isImageFile($0.path) }), let url = urls.first else { thumbnailState = .failed; return }
-                    model.fileCounts.setObject(urls.count as NSNumber, forKey: item.id as NSString)
-                    result = await Task.detached(priority: .utility) { ThumbnailRenderer.render(fileAt: url) }.value
-                } else {
-                    result = await model.derived.thumbnail(id: item.id)
-                }
+                let result = await model.derived.thumbnail(id: item.id)
                 guard !Task.isCancelled, model.contains(item.id) else { return }
                 do { _ = try await model.previewMetadata(id: item.id) }
                 catch {
@@ -792,11 +786,6 @@ private struct ClipCard: View, Equatable {
                     return
                 }
                 guard !Task.isCancelled, model.contains(item.id) else { return }
-                if isImageFile {
-                    guard let version = fileVersion,
-                          await Task.detached(priority: .utility, operation: { version.isCurrent() }).value,
-                          !Task.isCancelled else { thumbnailState = .failed; return }
-                }
                 thumbnailState = ThumbnailPreviewState(result)
                 if let image = thumbnailState.image, case .image(let data) = result {
                     model.thumbnails.setObject(image, forKey: item.id as NSString, encodedBytes: data.count)
@@ -811,15 +800,15 @@ private struct ClipCard: View, Equatable {
             }
     }
     @ViewBuilder private var cardContent: some View {
-        if showsImageFile {
+        if showsFileThumbnail {
             VStack(spacing: 0) {
                 ThumbnailPreview(state: displayedThumbnail, tint: tint, compact: tiny)
-                if !tiny, let paths = imageFilePaths {
-                    Text(fileCaption(paths, unit: "张")).font(.system(size: 11, weight: .medium)).lineLimit(1).truncationMode(.middle)
+                if !tiny, let paths = filePaths {
+                    Text(fileCaption(paths, unit: isImageFile ? "张" : "个")).font(.system(size: 11, weight: .medium)).lineLimit(1).truncationMode(.middle)
                         .padding(.horizontal, 10).padding(.vertical, 5)
                 }
             }
-        } else if let text = displayedFileText, let paths = textFilePaths {
+        } else if let text = displayedFileText, let paths = filePaths {
             VStack(spacing: 0) {
                 SyntaxText(text: text, size: previewFontSize, spacing: tiny ? 0 : 3, onLanguage: { detectedLanguage = $0 })
                     .lineSpacing(tiny ? 0 : 3).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).clipped()
