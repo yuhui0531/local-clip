@@ -110,6 +110,14 @@ public struct HistoryView: View {
                 .onChange(of: model.showingDetail) { _, _ in model.detailVisibilityChanged() }
                 .onChange(of: model.showingCategoryEditor) { _, _ in model.panelInteractionChanged?() }
         }.frame(maxWidth: .infinity, maxHeight: .infinity)
+            // sheet独立于滚动卡片存活；点击面板外部不能隐式丢弃未保存草稿，by AI.Coding。
+            .sheet(isPresented: Binding(get: { model.contentEditorPresented }, set: {
+                if !$0 && model.panelVisible && model.canDisplayContents { model.requestCancelContentEdit() }
+            })) {
+                if let editor = model.contentEditor {
+                    ClipContentEditor(state: editor, save: model.saveContentEdit, cancel: model.requestCancelContentEdit, discard: model.discardContentEdit)
+                }
+            }
     }
     /// 类型与分类共享工具栏剩余宽度；溢出只滚动这段，主入口与搜索保持可见，by AI.Coding。
     private func categoryNavigation(compact: Bool) -> some View {
@@ -366,6 +374,11 @@ private struct HistorySelectionActions: View {
             }
             Button { model.showingDetail.toggle() } label: { if compact { Image(systemName: "info.circle") } else { Label("详情", systemImage: "info.circle") } }.buttonStyle(.plain)
                 .accessibilityLabel("详情").help("详情 · ⌘I").disabled(!model.canDisplayContents)
+            // 编辑与详情并列，紧凑模式沿用图标按钮；多选不隐式修改其中一张。
+            Button { if let id = value.selectedID { model.beginContentEdit(id) } } label: {
+                if compact { Image(systemName: "square.and.pencil") } else { Label("编辑", systemImage: "square.and.pencil") }
+            }.buttonStyle(.plain).accessibilityLabel("编辑内容").help("编辑内容 · ⌘E")
+                .disabled(!model.canDisplayContents || value.selectedCount != 1 || ![ClipKind.text, .url].contains(selected?.kind ?? .mixed))
             Divider().frame(height: 20)
             if !compact {
                 Button { model.perform(.plainText, action: .copy) } label: { Label("纯文本复制", systemImage: "doc.plaintext") }
@@ -455,7 +468,7 @@ private struct ClipCard: View, Equatable {
     let previewGeneration: UUID
     @State private var checkedFileGeneration: UUID?
     @State private var fileVersion: FileReferencePreviewVersion?
-    @State private var characterCount: Int?
+    @State private var characterCount: (fingerprint: String?, count: Int)?
     @State private var fileText: String?
     @State private var thumbnailState: ThumbnailPreviewState = .loading
     /// N-01：仅图片/文件记录取值；文件每次进入视口重新查询，不把旧值当作实时值。
@@ -499,7 +512,12 @@ private struct ClipCard: View, Equatable {
         guard item.kind == .file else { return false }
         switch displayedThumbnail { case .ready: return true; case .loading: return isImageFile; case .failed, .tooLarge: return false }
     }
-    private var displayedCharacterCount: Int? { characterCount ?? model.characterCounts.object(forKey: item.id as NSString)?.intValue }
+    // 编辑后可能因搜索条件离开当前列表；缓存键携带内容身份，返回列表也不会显示旧计数，by AI.Coding。
+    private var characterCountKey: NSString { "\(item.id):\(item.contentFingerprint ?? "")" as NSString }
+    private var displayedCharacterCount: Int? {
+        characterCount.flatMap { $0.fingerprint == item.contentFingerprint ? $0.count : nil }
+            ?? model.characterCounts.object(forKey: characterCountKey)?.intValue
+    }
     @State private var isOnscreen = false
     @State private var detectedLanguage: String?
     @State private var detection: ContentInspector.Detection?
@@ -674,6 +692,7 @@ private struct ClipCard: View, Equatable {
             .accessibilityAction { model.select(item.id) }
             .accessibilityAction(named: Text("复制并粘贴")) { model.doubleClick(item.id) }
             .accessibilityAction(named: Text("重命名")) { model.beginRename(item.id) }
+            .accessibilityAction(named: Text("编辑内容")) { model.beginContentEdit(item.id) }
             .onChange(of: editing) { _, active in if active { startNameEditing() } else { nameFocused = false } }
             .onChange(of: nameFocused) { _, focused in if !focused && model.renamingID == item.id { model.cancelRename() } }
             .onAppear { if editing { startNameEditing() } }
@@ -698,6 +717,8 @@ private struct ClipCard: View, Equatable {
                 }
                 // 输出、整理、检视各自分组，保留全部已有菜单项，by AI.Coding。
                 Divider()
+                Button("编辑内容… · ⌘E") { model.beginContentEdit(item.id) }
+                    .disabled(hidden || ![ClipKind.text, .url].contains(item.kind))
                 Button("重命名") { model.beginRename(item.id) }
                 Button(item.isFavorite ? "取消收藏" : "收藏") { model.change(.favorites(model.selectedIDs.contains(item.id) ? model.orderedSelection : [item.id], !item.isFavorite)) }
                 Menu("加入分类") {
@@ -726,8 +747,10 @@ private struct ClipCard: View, Equatable {
                 model.thumbnailVisibilityChanged(id: item.id, visible: visible)
                 if !visible { if item.kind == .file { checkedFileGeneration = nil; contentSize = .loading }; model.cancelRename(id: item.id); thumbnailState = .loading; Task { await model.derived.cancel(id: item.id) } }
             }
-            .task(id: [String(isOnscreen), item.kind == .file ? previewGeneration.uuidString : "immutable"]) {
+            .task(id: [String(isOnscreen), item.kind == .file ? previewGeneration.uuidString : item.contentFingerprint ?? "immutable"]) {
                 guard isOnscreen else { return }
+                // 文本内容身份变化重新取计数，不能仅凭截断预览判断是否更新，by AI.Coding。
+                if [.text, .url].contains(item.kind) { characterCount = nil }
                 // 外部文件每次进入视口/重开面板先验证身份；慢卷期间只显示占位，by AI.Coding。
                 if item.kind == .file {
                     checkedFileGeneration = nil
@@ -773,8 +796,8 @@ private struct ClipCard: View, Equatable {
                     guard !Task.isCancelled, model.contains(item.id),
                           (try? await model.previewMetadata(id: item.id)) != nil else { return }
                     guard !Task.isCancelled, model.contains(item.id) else { return }
-                    characterCount = count
-                    if let count { model.characterCounts.setObject(count as NSNumber, forKey: item.id as NSString) }
+                    characterCount = count.map { (item.contentFingerprint, $0) }
+                    if let count { model.characterCounts.setObject(count as NSNumber, forKey: characterCountKey) }
                 }
                 guard item.kind == .image || item.kind == .mixed, thumbnail == nil else { return }
                 // 可见即自动加载；失败必须退出加载态，不把错误伪装成等待用户操作。

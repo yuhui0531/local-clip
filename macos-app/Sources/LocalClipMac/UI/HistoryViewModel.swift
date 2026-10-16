@@ -7,7 +7,7 @@ import LocalClipCore
     public let capture: CaptureCoordinator
     public let paste: PasteCoordinator
     public let derived: DerivedContentService
-    /// 卡片派生显示结果按记录缓存；同一ID内容不变，切换分类回到已见卡片时首帧即是最终内容，by AI.Coding。
+    /// 卡片字符数按记录与内容指纹缓存，修改后不会复用旧值，by AI.Coding。
     let characterCounts = NSCache<NSString, NSNumber>()
     /// 图片文件引用的文件数；预览文本截断时据此显示准确张数。
     let fileCounts = NSCache<NSString, NSNumber>()
@@ -187,7 +187,8 @@ import LocalClipCore
     @Published public private(set) var canUndoDeletion = false
     public var canUndoFromSearch: Bool { recordUndoQuery != nil && recordUndoQuery == query }
     private var pendingSettingsEdits: [(inout SettingsSnapshot) -> Void] = []
-    public private(set) var panelVisible = true
+    // 编辑sheet跟随父面板显示，隐藏期间仅保留草稿，不留下独立可见窗口，by AI.Coding。
+    @Published public private(set) var panelVisible = true
     private var hiddenChanges = false
     private var settingsVisible = false
     private var sourcesNeeded = false
@@ -285,6 +286,8 @@ import LocalClipCore
         panelVisible = visible
         thumbnailCleanup?.cancel(); thumbnailCleanup = nil
         if !visible {
+            // 尚未打开的编辑请求不在隐藏面板上弹出；已经输入的草稿保留到下次打开。
+            contentEditRequest = UUID()
             transformMenuRequest = UUID(); transformMenu?.close()
             cancelRename()
             let delay = thumbnailCleanupDelay
@@ -565,14 +568,18 @@ import LocalClipCore
         if !preserveSelection { selectedIDs = Set(id.map { [$0] } ?? []); anchorID = id }
         if selectedID == id {
             guard let id else { return }
-            // 同一ID的原始内容不可变；只更新元数据，不释放正在浏览的正文。
+            // 同一ID仅元数据变化时保留正文；内容变化时重载详情，避免复制或检视旧版本。
             metadataTask?.cancel()
             let generation = selectionGeneration
             metadataTask = Task {
                 guard let latest = try? await store.metadata(id: id, at: clock.now()),
                       !Task.isCancelled, selectedID == id, generation == selectionGeneration else { return }
                 selectedMetadata = latest
-                if var detail, detail.summary.id == id { detail.summary = latest.summary; detail.categoryIDs = latest.categoryIDs; detail.revision = latest.revision; self.detail = detail }
+                if var detail, detail.summary.id == id {
+                    if detail.summary.contentFingerprint != latest.summary.contentFingerprint {
+                        invalidateDetail(); if showingDetail { loadDetail() }
+                    } else { detail.summary = latest.summary; detail.categoryIDs = latest.categoryIDs; detail.revision = latest.revision; self.detail = detail }
+                }
             }
             return
         }
@@ -633,6 +640,10 @@ import LocalClipCore
                 guard !Task.isCancelled, generation == detailID, canDisplayContents, selectedID == id else { return }
                 let latest = try await store.metadata(id: id, at: clock.now())
                 guard generation == detailID, canDisplayContents, selectedID == id, isVisible(latest.summary), !pendingDeletion.contains(id) else { return }
+                // 异步高亮期间正文可能被编辑，旧详情不能在新摘要之后发布，by AI.Coding。
+                guard latest.summary.contentFingerprint == detail.summary.contentFingerprint else {
+                    invalidateDetail(); if showingDetail { loadDetail() }; return
+                }
                 richPreview = showsText ? preview : nil; detailInspection = inspection; detailHighlight = readyHighlight
                 if kind == .image || kind == .mixed {
                     image = bytes.flatMap(NSImage.init(data:))
@@ -704,9 +715,67 @@ import LocalClipCore
         }
     }
     @Published public private(set) var renamingID: ClipID?
+    @Published private(set) var contentEditor: ClipContentEditorState?
+    private var contentEditRequest = UUID()
+    /// 隐藏面板或内容时只保留草稿，不能继续拦截历史复制等快捷键，by AI.Coding。
+    var contentEditorPresented: Bool { contentEditor != nil && canDisplayContents && panelVisible }
+    /// 所选记录的快捷键入口复用菜单编辑行为，多选时不任取一项，by AI.Coding。
+    func editSelectedContent() {
+        guard selectedIDs.count == 1, let id = selectedID else { return }
+        beginContentEdit(id)
+    }
+    /// 读取完整载荷后再显示编辑器，原卡片双击粘贴和标题重命名保持原样，by AI.Coding。
+    func beginContentEdit(_ id: ClipID) {
+        guard canDisplayContents, panelVisible, !dragActive, contains(id), contentEditor == nil else { return }
+        cancelRename(); showingDetail = false
+        let request = UUID(); contentEditRequest = request
+        Task {
+            do {
+                let detail = try await store.detail(id: id, at: clock.now())
+                guard request == contentEditRequest, panelVisible, canDisplayContents, contains(id), contentEditor == nil else { return }
+                guard let text = detail.payload.editableText else { message = ContentEditError.unsupportedContent.message; return }
+                contentEditor = ClipContentEditorState(detail: detail, text: text)
+                panelInteractionChanged?()
+            } catch { if request == contentEditRequest { message = "内容读取失败，记录可能已删除或过期。" } }
+        }
+    }
+    /// 取消有修改时先确认，失焦或列表刷新不删除草稿，by AI.Coding。
+    func requestCancelContentEdit() {
+        guard let editor = contentEditor, !editor.saving else { return }
+        if editor.hasChanges { editor.confirmingDiscard = true } else { discardContentEdit() }
+    }
+    /// 明确放弃后释放草稿，不向存储发送写操作，by AI.Coding。
+    func discardContentEdit() {
+        guard contentEditor?.saving != true else { return }
+        contentEditor = nil; contentEditRequest = UUID(); panelInteractionChanged?()
+    }
+    /// 保存失败保留草稿和错误；只在原子提交成功后关闭编辑器，by AI.Coding。
+    func saveContentEdit() {
+        guard let editor = contentEditor, editor.canSave else { return }
+        let text = editor.text
+        editor.saving = true; editor.error = ""
+        Task {
+            do {
+                try await store.updateText(id: editor.id, text: text, expectedFingerprint: editor.fingerprint)
+                if contentEditor === editor { contentEditor = nil }
+                notice("内容已保存"); panelInteractionChanged?()
+            } catch {
+                editor.saving = false
+                if let error = error as? ContentEditError { editor.error = error.message }
+                else if let error = error as? StoreError {
+                    switch error {
+                    case .notFound: editor.error = "记录已删除或过期，草稿已保留。"
+                    case .quotaExceeded, .diskFull: editor.error = "可用空间不足，保存失败；原内容与草稿均已保留。"
+                    case .postCommitUnavailable: editor.error = "提交后存储不可用，请保留草稿并重启核对；修改可能已保存。"
+                    default: editor.error = "保存失败，草稿已保留，请重试。"
+                    }
+                } else { editor.error = "保存失败，草稿已保留，请重试。" }
+            }
+        }
+    }
     /// 只编辑指定卡片的名称，不改变单选/多选与当前滚动窗口，by AI.Coding。
     public func beginRename(_ id: ClipID) {
-        guard !dragActive, contains(id) else { return }
+        guard !dragActive, contains(id), contentEditor == nil else { return }
         renamingID = id
     }
     /// 取消仅移除编辑状态，不写库，by AI.Coding。

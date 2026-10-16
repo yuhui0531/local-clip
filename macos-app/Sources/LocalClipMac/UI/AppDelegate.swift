@@ -464,7 +464,7 @@ import LocalClipCore
                 showingCategoryEditor: self.model?.showingCategoryEditor == true,
                 showingFilters: self.model?.showingFilters == true)
             guard self.focusState.shouldDismiss(panelIsKey: panel.isKeyWindow, ownsKeyWindow: ownsKey,
-                dragging: self.model?.dragActive == true, confirming: self.model?.confirmingChange == true,
+                dragging: self.model?.dragActive == true, confirming: self.model?.confirmingChange == true || self.model?.contentEditorPresented == true,
                 hasModal: NSApp.modalWindow != nil, pinned: self.model?.pinned == true) else { return }
             self.dismissHistory()
         }
@@ -477,7 +477,7 @@ import LocalClipCore
         var owner: NSWindow? = window
         while let value = owner {
             if value === panel { return true }
-            owner = value.parent
+            owner = value.sheetParent ?? value.parent
         }
         return (showingDetail || showingCategoryEditor || showingFilters) && window.isVisible && window !== settings && window !== feedback
     }
@@ -635,6 +635,8 @@ import LocalClipCore
             guard let self else { return event }
             // 本地Cmd-Q先于历史/IME分支，也适用于只有设置窗口或菜单图标隐藏时，by AI.Coding。
             if self.handleQuitShortcut(event) { return nil }
+            // 编辑器接管文字按键，先返回系统事件，避免历史操作干扰草稿，by AI.Coding。
+            if self.model?.contentEditorPresented == true { return event }
             guard let panel = self.panel, panel.isVisible, let model = self.model,
                   Self.ownsHistoryWindow(event.window, panel: panel, settings: self.settingsWindow, feedback: self.feedbackPanel,
                       showingDetail: model.showingDetail, showingCategoryEditor: model.showingCategoryEditor,
@@ -689,6 +691,7 @@ import LocalClipCore
                 case 6: model.undoDeletion(); return nil
                 case 5: model.jumpToHistory(); return nil
                 case 31: model.openSelected(); return nil
+                case 14: model.editSelectedContent(); return nil
                 // ⌘I 是macOS“显示简介”的通用快捷键，在所选卡片上方切换详情，by AI.Coding。
                 case 34: if model.canDisplayContents, model.selectedID != nil { model.showingDetail.toggle() }; return nil
                 // ⌘T在所选卡片处弹出转换菜单，Esc只关闭菜单，by AI.Coding。

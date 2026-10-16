@@ -277,6 +277,8 @@ public struct ClipSummary: Identifiable, Codable, Equatable, Sendable {
     public var context: String
     // 默认标题仍由种类决定，自定义名称不参与内容身份，by AI.Coding。
     public var title: String? = nil
+    // 内容身份随编辑变化；轻量查询即可使卡片缓存失效，无需读取正文，by AI.Coding。
+    public var contentFingerprint: String? = nil
 }
 public struct ClipDetail: Sendable {
     public var summary: ClipSummary

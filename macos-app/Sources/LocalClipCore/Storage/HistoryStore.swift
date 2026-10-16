@@ -79,6 +79,38 @@ public actor HistoryStore: HistoryRepository {
             try db.run("UPDATE clips SET title=?,normalizedTitle=? WHERE id=?", [next.map(SQLValue.text) ?? .null, next.map { .text(SearchNormalizer.normalize($0)) } ?? .null, .text(id)])
         }
     }
+    /// 原地编辑保留记录身份与整理信息；指纹复查、正文和索引在同一事务更新，by AI.Coding。
+    public func updateText(id: ClipID, text: String, expectedFingerprint: String) throws {
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw ContentEditError.emptyText }
+        guard text.utf8.count <= 50 * MiB else { throw ContentEditError.tooLarge }
+        let settings = try settings()
+        let payload = ClipboardPayload([.init([.init(SupportedType.string, Data(text.utf8))], declaredTypes: [SupportedType.string], plainText: text)])
+        let hash = payload.fingerprint
+        // 不调用ingest，避免暂停策略阻止修正，也不增加复制次数或触发历史淘汰。
+        try mutate(quota: settings.quotaBytes, growth: payload.byteCount * 6 + 64 * 1024) { db in
+            guard let row = try db.rows("SELECT *, (\(protectedSQL)) AS isProtected FROM clips WHERE id=?", [.text(id)]).first,
+                  visible(row, at: clock.now(), settings: settings) else { throw StoreError.notFound }
+            guard row.text("contentHash") == expectedFingerprint else { throw ContentEditError.contentChanged }
+            let original = try readPayload(db, id: id)
+            guard let originalText = original.editableText else { throw ContentEditError.unsupportedContent }
+            // 未修改不重编码富文本，亦不触碰原分项与URL表示。
+            guard text != originalText else { return }
+            guard try db.scalarInt("SELECT COUNT(*) FROM clips WHERE contentHash=? AND id<>?", [.text(hash), .text(id)]) == 0 else { throw ContentEditError.duplicateContent }
+            try db.run("DELETE FROM items WHERE clipID=?", [.text(id)])
+            try db.run("DELETE FROM thumbnails WHERE clipID=?", [.text(id)])
+            try db.run("UPDATE clips SET contentHash=?,kind=?,previewText=? WHERE id=?", [.text(hash), .text(payload.kind.rawValue), .text(String(text.prefix(180))), .text(id)])
+            let declared = String(decoding: try JSONEncoder().encode([SupportedType.string]), as: UTF8.self)
+            try db.run("INSERT INTO items VALUES(?,0,?)", [.text(id), .text(declared)])
+            let data = Data(text.utf8), digest = ContentFingerprint.hash(data)
+            // 与其他记录共享BLOB时校验字节；旧BLOB由现有事务回收器按引用清理。
+            if let existing = try db.rows("SELECT payload FROM blobs WHERE digest=?", [.text(digest)]).first {
+                guard existing.data("payload") == data else { throw StoreError.corruptPayload }
+            } else { try db.run("INSERT INTO blobs VALUES(?,?,?)", [.text(digest), .integer(Int64(data.count)), .blob(data)]) }
+            try db.run("INSERT INTO representations VALUES(?,0,?,?)", [.text(id), .text(SupportedType.string), .text(digest)])
+            try db.run("INSERT INTO text_content VALUES(?,0,?,?)", [.text(id), .text(text.utf8.count > MiB ? "" : text), .text(SearchNormalizer.normalize(text))])
+        }
+        characterCounts[id] = nil
+    }
     /// 分类名称去空白、NFC规范化与ASCII大小写去重，参数始终绑定。
     private func categoryName(_ value: String) throws -> String {
         let name = value.trimmingCharacters(in: .whitespacesAndNewlines).precomposedStringWithCanonicalMapping
@@ -415,7 +447,8 @@ public actor HistoryStore: HistoryRepository {
         return ClipSummary(id: row.text("id"), firstCopiedAt: row.int("firstCopiedAtMs"), lastCopiedAt: row.int("lastCopiedAtMs"),
             copyCount: Int(row.int("copyCount")), kind: ClipKind(rawValue: row.text("kind")) ?? .mixed,
             isFavorite: row.int("isFavorite") == 1, isProtected: row.int("isProtected") == 1, source: .init(bundleID: bundle.isEmpty ? nil : bundle, name: row.text("sourceName"), basis: row.text("sourceBasis")),
-            preview: row.text("previewText"), context: context ?? row.text("previewText"), title: row.text("title").nonEmpty)
+            preview: row.text("previewText"), context: context ?? row.text("previewText"), title: row.text("title").nonEmpty,
+            contentFingerprint: row.text("contentHash").nonEmpty)
     }
     /// 全文字面子串；缺索引时从可提取原始表示回退，不能丢长文尾部。
     #if DEBUG
