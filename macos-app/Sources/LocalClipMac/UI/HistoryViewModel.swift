@@ -149,6 +149,8 @@ import LocalClipCore
         didSet { if showingDetail && !canDisplayContents { showingDetail = false } }
     }
     private var contentGeneration = UUID()
+    private var transformMenuRequest = UUID()
+    private var transformMenu: TransformMenuController?
     private var quickLookTask: Task<Void, Never>?
     @Published public var showingCategoryEditor = false
     @Published public private(set) var categoryBeingEdited: ClipCategory?
@@ -283,6 +285,7 @@ import LocalClipCore
         panelVisible = visible
         thumbnailCleanup?.cancel(); thumbnailCleanup = nil
         if !visible {
+            transformMenuRequest = UUID(); transformMenu?.close()
             cancelRename()
             let delay = thumbnailCleanupDelay
             thumbnailCleanup = Task { [weak self] in
@@ -648,6 +651,8 @@ import LocalClipCore
     private func invalidateDetail() {
         detailing?.cancel(); detailing = nil; detailID = UUID()
         quickLookTask?.cancel(); quickLookTask = nil; contentGeneration = UUID(); filePreview.close()
+        // 选择/内容变更时关闭旧转换菜单，避免继续对失效的快照执行操作，by AI.Coding。
+        transformMenuRequest = UUID(); transformMenu?.close()
         if detail != nil { detail = nil }; if image != nil { image = nil }; if richPreview != nil { richPreview = nil }
         if detailInspection != nil { detailInspection = nil }; if detailHighlight != nil { detailHighlight = nil }
         if !previewMessage.isEmpty { previewMessage = "" }; if detailLoading { detailLoading = false }
@@ -1287,11 +1292,13 @@ import LocalClipCore
             catch { if generation == imageTextGeneration && canDisplayContents { message = "识别失败，记录已变化"; showPasteFeedback?(message, true) } }
         }
     }
-    /// 转换菜单按需读取所选内容并逐项判定，不适用的置灰而不隐藏，位置固定便于记忆；按住⌥切换为仅复制，by AI.Coding。
+    /// 两列转换菜单按需读取所选内容并逐项判定；不适用置灰，按住⌥沿用仅复制，by AI.Coding。
     public func showTransformMenu(ids explicit: [ClipID]? = nil, atSelectedCard: Bool = false) {
         let ids = explicit ?? orderedSelection
-        guard canDisplayContents, !ids.isEmpty else { return }
-        let visibility = contentGeneration
+        guard canDisplayContents, panelVisible, !ids.isEmpty else { return }
+        transformMenu?.close()
+        transformMenuRequest = UUID()
+        let visibility = contentGeneration, request = transformMenuRequest
         Task {
             var records: [ClipboardPayload] = []
             do {
@@ -1301,27 +1308,25 @@ import LocalClipCore
             catch let error as TransformError { message = error.message; return }
             catch { message = "转换不可用，记录已变化"; return }
             let (available, reason) = await Task.detached { Self.transformAvailability(records) }.value
-            guard canDisplayContents, visibility == contentGeneration, explicit != nil || ids == orderedSelection else { return }
-            let menu = NSMenu(); menu.autoenablesItems = false
-            let target = TransformMenuTarget { [weak self] transform, copyOnly in self?.perform(.plainText, action: copyOnly ? .copy : nil, transform: transform, ids: ids) }
-            if let reason { let item = NSMenuItem(title: reason, action: nil, keyEquivalent: ""); item.isEnabled = false; menu.addItem(item); menu.addItem(.separator()) }
-            var group = 0
-            for transform in TextTransform.allCases {
-                if transform.group != group { menu.addItem(.separator()); group = transform.group }
-                // 默认操作为直接粘贴时才提供⌥交替项；交替项必须紧跟主项。
-                for copyOnly in settings.defaultAction == .directPaste ? [false, true] : [false] {
-                    let item = NSMenuItem(title: transform.title + (copyOnly ? "（仅复制）" : ""), action: #selector(TransformMenuTarget.choose(_:)), keyEquivalent: "")
-                    item.target = target; item.representedObject = transform.rawValue; item.tag = copyOnly ? 1 : 0
-                    item.isEnabled = available.contains(transform)
-                    if copyOnly { item.isAlternate = true; item.keyEquivalentModifierMask = .option } else { item.keyEquivalentModifierMask = [] }
-                    menu.addItem(item)
-                }
-            }
+            guard canDisplayContents, panelVisible, visibility == contentGeneration, request == transformMenuRequest,
+                  explicit != nil || ids == orderedSelection else { return }
             // ⌘T在所选卡片左上角弹出；鼠标入口在指针处弹出。
-            if atSelectedCard, let view = HistoryDragBridge.DragView.view(for: ids[0]) {
-                menu.popUp(positioning: nil, at: NSPoint(x: 12, y: view.isFlipped ? 12 : view.bounds.height - 12), in: view)
-            } else { menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil) }
-            withExtendedLifetime(target) {}
+            let view = HistoryDragBridge.DragView.view(for: ids[0])
+            guard let parent = atSelectedCard ? view?.window : (NSApp.keyWindow ?? view?.window) else { return }
+            var point = NSEvent.mouseLocation
+            if atSelectedCard, let view {
+                point = parent.convertPoint(toScreen: view.convert(NSPoint(x: 12, y: view.isFlipped ? 12 : view.bounds.height - 12), to: nil))
+            }
+            let menu = makeTransformMenu(ids: ids, available: available, reason: reason)
+            menu.onDismiss = { [weak self] in self?.transformMenu = nil }
+            transformMenu = menu
+            menu.present(parent: parent, at: point)
+        }
+    }
+    /// 构造菜单与显示窗口分离；鼠标/键盘共用原有转换管线，也可用fake客户端安静验证，by AI.Coding。
+    func makeTransformMenu(ids: [ClipID], available: Set<TextTransform>, reason: String?) -> TransformMenuController {
+        TransformMenuController(available: available, reason: reason, allowsCopyOnly: settings.defaultAction == .directPaste) { [weak self] transform, copyOnly in
+            self?.perform(.plainText, action: copyOnly ? .copy : nil, transform: transform, ids: ids)
         }
     }
     /// 转换菜单的可用项与整体不可用原因；文件记录的纯文本只是路径，与图片一样不提供转换，by AI.Coding。
@@ -1409,14 +1414,5 @@ private final class SaveFormatPicker: NSObject {
     init(panel: NSSavePanel, extensions: [String]) { self.panel = panel; self.extensions = extensions }
     @MainActor @objc func changed(_ sender: NSPopUpButton) {
         panel.nameFieldStringValue = (panel.nameFieldStringValue as NSString).deletingPathExtension + "." + extensions[sender.indexOfSelectedItem]
-    }
-}
-/// 转换菜单项的动作目标；菜单弹出期间由调用方持有，by AI.Coding。
-private final class TransformMenuTarget: NSObject {
-    let handler: @MainActor (TextTransform, Bool) -> Void
-    init(_ handler: @escaping @MainActor (TextTransform, Bool) -> Void) { self.handler = handler }
-    @MainActor @objc func choose(_ sender: NSMenuItem) {
-        guard let raw = sender.representedObject as? String, let transform = TextTransform(rawValue: raw) else { return }
-        handler(transform, sender.tag == 1)
     }
 }

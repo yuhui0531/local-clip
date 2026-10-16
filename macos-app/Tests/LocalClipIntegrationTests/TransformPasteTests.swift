@@ -1,5 +1,6 @@
 // F16转换后粘贴：真实临时SQLite + fake剪贴板与目标应用，验证只写纯文本、失败不关面板、不新增历史，by AI.Coding。
 import Foundation
+import AppKit
 import Testing
 @testable import LocalClipCore
 @testable import LocalClipMac
@@ -112,6 +113,33 @@ import Testing
         }
         let (huge, tooLarge) = HistoryViewModel.transformAvailability([text(String(repeating: "a", count: TextTransform.byteLimit + 1))])
         #expect(huge.isEmpty); #expect(tooLarge == "内容过大（超过 4 MiB），无法转换")
+    }
+
+    /// 菜单实际分派走原有转换管线；⌥只复制，不按⌥仍直接粘贴，全程使用fake客户端，by AI.Coding。
+    @Test(arguments: [false, true], [false, true]) func twoColumnMenuPreservesPasteAndOptionCopy(option: Bool, keyboard: Bool) async throws {
+        let h = try harness(); defer { try? FileManager.default.removeItem(at: h.root) }
+        let id = try await ingest(h.store, "user_id")
+        let model = HistoryViewModel(store: h.store, capture: h.capture, paste: h.paste, derived: DerivedContentService(store: h.store))
+        model.target = h.apps.remembered
+        let menu = model.makeTransformMenu(ids: [id], available: [.camelCase], reason: nil)
+        #expect(menu.window == nil)
+        let count = h.raw.count
+        if keyboard {
+            menu.move(keyCode: 125)
+            let enter = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: option ? [.option] : [], timestamp: 0, windowNumber: 0, context: nil, characters: "\r", charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36))
+            #expect(menu.handleKey(enter))
+        } else { menu.choose(.camelCase, modifiers: option ? [.option] : []) }
+        let deadline = ContinuousClock.now + .seconds(3)
+        while h.raw.count == count && ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(20)) }
+        // 直接粘贴包含写入后的异步目标恢复，等待fake收件而不启动真实应用。
+        if !option {
+            while h.apps.events == 0 && ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(20)) }
+        }
+        #expect(h.raw.count > count)
+        #expect(h.raw.items.first?[SupportedType.string] == Data("userId".utf8))
+        #expect(h.apps.events == (option ? 0 : 1))
+        #expect(h.apps.activations == (option ? 0 : 1))
+        #expect(try await h.store.loadPayload(id: id, at: SystemClock().now()).plainText == "user_id")
     }
 
     /// F18：AC1 SQL列表只写纯文本并按选择顺序；AC2换行与原有合并逐字节一致；AC3含图片时拒绝且剪贴板不变，by AI.Coding。
