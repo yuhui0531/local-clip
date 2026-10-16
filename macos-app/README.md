@@ -1,4 +1,4 @@
-# LocalClip 0.3.38（构建60）
+# LocalClip 0.3.39（构建61）
 
 Current delivery: every clipboard kind supports an optional persistent display name. Double-click the coloured header or use 重命名 in its context menu; Enter saves, Esc cancels, clearing restores the default. Body double-click retains its existing paste behaviour. The full-history tab says 剪贴板. Names preserve content, ordering, copy identity, selection, categories and favourites; they are stored in `clips.title` (schema v4; other schema versions are refused, no migration) and are searchable. Current storage, interaction defaults and performance baseline: [architecture](docs/architecture.md). The 2026-10-15 review identified five corrective findings; passing automated tests alone does not close the separate native acceptance and release gates. Repeated-search overhead is 23.60 ms (limit 60 ms); initial-cycle overhead is 69.73 ms and remains a concern. Details and user-owned physical checks: [review fixes and evidence](docs/review-fixes-r01-r12.md).
 
