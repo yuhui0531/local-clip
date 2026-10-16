@@ -73,7 +73,7 @@ public struct HistoryView: View {
                 if filterHeight > 0 { FilterStrip(model: model) }
                 HistoryStrip(model: model, list: model.listState, cardHeight: cardHeight,
                     categoryID: model.categoryID, categories: model.categories,
-                    target: model.target, draggedIDs: model.draggedIDs, hideContents: model.settings.hideContents, focusRequest: model.focusRequest, renamingID: model.renamingID, showingDetail: model.showingDetail)
+                    target: model.target, draggedIDs: model.draggedIDs, hideContents: model.settings.hideContents, focusRequest: model.focusRequest, renamingID: model.renamingID, showingDetail: model.showingDetail && model.detail != nil)
                 Divider().opacity(0.5)
                 HStack(spacing: 12) {
                     Circle().fill(model.status == "正常" ? Color.green : model.capture.capacityBlocked ? Color.red : Color.orange).frame(width: 6, height: 6)
@@ -266,7 +266,8 @@ private struct HistoryScroller: View {
                     ForEach(Array(strip.model.items.enumerated()), id: \.element.id) { index, item in
                         ClipCard(item: item, index: index, selected: strip.model.selectedIDs.contains(item.id), dragging: strip.draggedIDs.contains(item.id), editing: strip.renamingID == item.id, hidden: strip.hideContents, quickModifiers: strip.model.settings.quickModifiers, height: strip.cardHeight, categoryID: strip.categoryID, categories: strip.categories, target: strip.target, model: strip.model, previewGeneration: strip.focusRequest).equatable().id(item.id)
                             // 详情贴着所选卡片弹出，而不是远在底栏右侧的按钮，by AI.Coding。
-                            .popover(isPresented: Binding(get: { strip.showingDetail && strip.model.selectedID == item.id }, set: { if !$0 { strip.model.showingDetail = false } }), arrowEdge: .top) {
+                            // 详情内容备好后才弹出，弹出即最终尺寸，by AI.Coding。
+                            .popover(isPresented: Binding(get: { strip.showingDetail && strip.model.selectedID == item.id && strip.model.detail?.summary.id == item.id }, set: { if !$0 { strip.model.showingDetail = false } }), arrowEdge: .top) {
                                 ClipInspector(model: strip.model).frame(width: 520)
                             }
                     }
@@ -870,19 +871,21 @@ private struct CopyAge: View {
 // 详情按“标题 / 预览 / 信息 / 操作”排列，高度随内容，按钮与面板主次样式一致，by AI.Coding。
 struct ClipInspector: View {
     @ObservedObject var model: HistoryViewModel
-    /// 识别结果与正文高亮同批就绪后才显示详情，避免弹窗先出原文、再变色、再插入识别区块而连续跳动，by AI.Coding。
-    private struct Prepared { let id: ClipID; let inspection: ContentInspector.Inspection?; let highlight: SyntaxHighlight? }
-    @State private var prepared: Prepared?
+    /// 中间信息区最大高度；整窗约为此值加标题与按钮的120pt。
+    static let maxInfoHeight: CGFloat = 520
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            if let detail = model.detail, let prepared, prepared.id == detail.summary.id {
+            if let detail = model.detail {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(detail.summary.title ?? HistoryView.kindName(detail.summary.kind)).font(.system(size: 17, weight: .semibold)).lineLimit(1)
                     Text("\(detail.summary.source.name) · \(detail.summary.source.basis == "frontmost" ? "复制时前台应用推断" : detail.summary.source.basis == "declared" ? "应用声明" : "来源未知")")
                         .font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
-                preview(detail, highlight: prepared.highlight)
-                if let inspection = prepared.inspection, !model.settings.hideContents { InspectionSection(model: model, detail: detail, inspection: inspection) }
+                // 中间信息区封顶，超出在区内滚动；标题与操作按钮始终可见，弹窗不随识别行数无限增高，by AI.Coding。
+                ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                preview(detail)
+                if let inspection = model.detailInspection, !model.settings.hideContents { InspectionSection(model: model, detail: detail, inspection: inspection) }
                 if !model.previewMessage.isEmpty { Text(model.previewMessage).font(.caption).foregroundStyle(.secondary) }
                 Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 5) {
                     row("大小", "\(detail.payload.items.count) 项 · \(HistoryViewModel.bytes(detail.payload.byteCount))")
@@ -894,6 +897,8 @@ struct ClipInspector: View {
                 if !notes.isEmpty {
                     Label(notes.joined(separator: "\n"), systemImage: "info.circle").font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
+                }.frame(maxWidth: .infinity, alignment: .leading)
+                }.scrollBounceBehavior(.basedOnSize).frame(maxHeight: Self.maxInfoHeight).fixedSize(horizontal: false, vertical: true)
                 Divider()
                 HStack(spacing: 8) {
                     Button(role: .destructive) { model.change(.delete([detail.summary.id])) } label: { Label("删除", systemImage: "trash").font(.system(size: 12)) }
@@ -913,35 +918,15 @@ struct ClipInspector: View {
                     if model.settings.defaultFormat == .plainText { copyButton("原格式复制", .original, enabled: true); copyButton("纯文本复制", .plainText, enabled: detail.payload.plainText != nil) }
                     else { copyButton("纯文本复制", .plainText, enabled: detail.payload.plainText != nil); copyButton("原格式复制", .original, enabled: true) }
                 }
-            } else if model.detail != nil || model.detailLoading { ProgressView("正在读取完整内容…").frame(maxWidth: .infinity).frame(height: 220) }
+            } else if model.detailLoading { ProgressView("正在读取完整内容…").frame(maxWidth: .infinity).frame(height: 220) }
             else { ContentUnavailableView("内容已变化", systemImage: "doc.text.magnifyingglass", description: Text("请选择仍存在的历史条目。")).frame(height: 220) }
         }.padding(20)
-            // 识别挂在始终存在的容器上：完整正文在后台识别，切换记录或版本时重新计算；
-            // 同一记录换版本时保留旧结果直到新结果就绪，不回退到加载态，by AI.Coding。
-            .task(id: "\(model.detail?.summary.id ?? "")-\(model.detail?.revision ?? 0)") {
-                guard let detail = model.detail else { prepared = nil; return }
-                let previewText = Self.previewText(detail, model.richPreview)?.string ?? ""
-                async let highlight = previewText.isEmpty ? nil : SyntaxHighlighter.detail.highlight(previewText)
-                var inspection: ContentInspector.Inspection?
-                if let text = detail.payload.plainText, !detail.payload.hasFileReferences {
-                    let language = await SyntaxHighlighter.shared.language(of: text)
-                    inspection = await Task.detached { ContentInspector.inspectFull(text, language: language) }.value
-                }
-                let ready = Prepared(id: detail.summary.id, inspection: inspection, highlight: await highlight)
-                guard !Task.isCancelled else { return }
-                prepared = ready
-            }
             .presentationBackground(Color(nsColor: .windowBackgroundColor))
     }
     /// 预览放入浅底圆角容器；文件显示图标、名称与所在文件夹，不把路径当代码高亮，by AI.Coding。
-    /// 文件列表与纯图片不显示正文预览。
-    private static func previewText(_ detail: ClipDetail, _ rich: NSAttributedString?) -> NSAttributedString? {
-        let hasURLs = detail.summary.kind == .file && !(detail.payload.fileURLs ?? []).isEmpty
-        return !hasURLs && detail.summary.kind != .image ? rich.flatMap { $0.length > 0 ? $0 : nil } : nil
-    }
-    @ViewBuilder private func preview(_ detail: ClipDetail, highlight: SyntaxHighlight?) -> some View {
+    @ViewBuilder private func preview(_ detail: ClipDetail) -> some View {
         let urls = detail.summary.kind == .file ? detail.payload.fileURLs ?? [] : []
-        let text = Self.previewText(detail, model.richPreview)
+        let text = model.richPreview
         if model.image != nil || !urls.isEmpty || text != nil {
             VStack(alignment: .leading, spacing: 10) {
                 if let image = model.image {
@@ -961,7 +946,7 @@ struct ClipInspector: View {
                 if urls.count > 4 { Text("另有 \(urls.count - 4) 个文件").font(.caption).foregroundStyle(.secondary) }
                 if let text {
                     // LC-F01：高度计算只测量短文，长文直接使用滚动视口；传入预览的全文保持不变，by AI.Coding。
-                    SyntaxDetailPreview(content: text, highlight: highlight)
+                    SyntaxDetailPreview(content: text, highlight: model.detailHighlight)
                 }
             }.padding(10).frame(maxWidth: .infinity, alignment: .leading)
                 .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 10))

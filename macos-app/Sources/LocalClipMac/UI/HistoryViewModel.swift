@@ -83,6 +83,9 @@ import LocalClipCore
     @Published public private(set) var detailLoading = false
     @Published public private(set) var detail: ClipDetail?
     @Published public private(set) var image: NSImage?
+    /// 识别结果与正文高亮随详情同批发布，弹窗首帧即最终内容与尺寸，by AI.Coding。
+    @Published private(set) var detailInspection: ContentInspector.Inspection?
+    @Published private(set) var detailHighlight: SyntaxHighlight?
     @Published public private(set) var previewMessage = ""
     @Published public var status = "准备中"
     @Published public var message = ""
@@ -610,17 +613,29 @@ import LocalClipCore
                     return AttributedString(result)
                 }.value
                 guard !Task.isCancelled, generation == detailID, canDisplayContents, selectedID == id else { return }
+                // 正文高亮、识别结果与原图都在弹出前备好；弹窗只在详情发布后出现，不先显示加载态再撑高，by AI.Coding。
+                // 文件列表与纯图片不显示正文预览。
+                let kind = detail.summary.kind
+                let preview = NSAttributedString(rich)
+                let showsText = kind != .image && (kind != .file || (detail.payload.fileURLs ?? []).isEmpty) && preview.length > 0
+                let previewString = showsText ? preview.string : ""
+                async let highlight = previewString.isEmpty ? nil : SyntaxHighlighter.detail.highlight(previewString)
+                var inspection: ContentInspector.Inspection?
+                if let text = detail.payload.plainText, !detail.payload.hasFileReferences {
+                    let language = await SyntaxHighlighter.shared.language(of: text)
+                    inspection = await Task.detached { ContentInspector.inspectFull(text, language: language) }.value
+                }
+                let bytes = kind == .image || kind == .mixed ? await Task.detached { RichContent.fullImage(detail.payload) }.value : nil
+                let readyHighlight = await highlight
+                guard !Task.isCancelled, generation == detailID, canDisplayContents, selectedID == id else { return }
                 let latest = try await store.metadata(id: id, at: clock.now())
                 guard generation == detailID, canDisplayContents, selectedID == id, isVisible(latest.summary), !pendingDeletion.contains(id) else { return }
-                self.detail = detail; detailLoading = false; richPreview = NSAttributedString(rich)
-                if detail.summary.kind == .image || detail.summary.kind == .mixed {
-                    let bytes = await Task.detached { RichContent.fullImage(detail.payload) }.value
-                    let metadata = try await store.metadata(id: id, at: clock.now())
-                    guard !Task.isCancelled, generation == detailID, canDisplayContents, selectedID == id, isVisible(metadata.summary) else { return }
+                richPreview = showsText ? preview : nil; detailInspection = inspection; detailHighlight = readyHighlight
+                if kind == .image || kind == .mixed {
                     image = bytes.flatMap(NSImage.init(data:))
                     if image == nil { previewMessage = "原图预览不可用或超过40MP；原始格式仍保留" }
-
                 }
+                self.detail = detail; detailLoading = false
             } catch { if generation == detailID { invalidateDetail() } }
         }
     }
@@ -634,6 +649,7 @@ import LocalClipCore
         detailing?.cancel(); detailing = nil; detailID = UUID()
         quickLookTask?.cancel(); quickLookTask = nil; contentGeneration = UUID(); filePreview.close()
         if detail != nil { detail = nil }; if image != nil { image = nil }; if richPreview != nil { richPreview = nil }
+        if detailInspection != nil { detailInspection = nil }; if detailHighlight != nil { detailHighlight = nil }
         if !previewMessage.isEmpty { previewMessage = "" }; if detailLoading { detailLoading = false }
     }
     /// 已发布卡片与详情也必须在到期边界消失，不能等待每分钟物理清理。
