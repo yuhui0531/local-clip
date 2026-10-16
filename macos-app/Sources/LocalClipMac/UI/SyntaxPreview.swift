@@ -120,20 +120,14 @@ struct SyntaxCardPreview: NSViewRepresentable {
         }
     }
 }
+/// 高亮由详情与识别结果一并预先算好，首帧即最终配色与高度，不再先显示原文再变色，by AI.Coding。
 struct SyntaxDetailPreview: View {
     let content: NSAttributedString
+    var highlight: SyntaxHighlight? = nil
     @Environment(\.colorScheme) private var scheme
-    @State private var highlighted: SyntaxHighlight?
-    @State private var source = ""
     var body: some View {
-        RichTextPreview(content: source == content.string && highlighted != nil
-            ? SyntaxStyle.attributed(content.string, highlight: highlighted!, size: 13, dark: scheme == .dark)
-            : content)
-        .task(id: content.string) {
-            highlighted = nil; source = content.string
-            let result = await SyntaxHighlighter.detail.highlight(content.string)
-            guard !Task.isCancelled else { return }
-            highlighted = result
-        }
+        let shown = highlight.map { SyntaxStyle.attributed(content.string, highlight: $0, size: 13, dark: scheme == .dark) } ?? content
+        // 按实际显示的等宽字体测量高度，避免按原文测量后多出滚动条。
+        RichTextPreview(content: shown).frame(height: InspectorPreviewLayout.height(for: shown))
     }
 }
