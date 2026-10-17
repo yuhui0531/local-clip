@@ -4,6 +4,12 @@ import Combine
 import SwiftUI
 import LocalClipCore
 
+/// 文本与链接的查看、编辑共享外框和留白，切换时保持气泡尺寸稳定，by AI.Coding。
+enum ClipContentLayout {
+    static let size = NSSize(width: 520, height: 350)
+    static let padding: CGFloat = 16
+}
+
 @MainActor final class ClipContentEditorState: ObservableObject {
     let id: ClipID
     let fingerprint: String
@@ -61,7 +67,7 @@ import LocalClipCore
 }
 
 struct ClipContentEditor: View {
-    static let preferredSize = NSSize(width: 520, height: 350)
+    static let preferredSize = ClipContentLayout.size
     @ObservedObject var state: ClipContentEditorState
     let save: () -> Void
     let cancel: () -> Void
@@ -212,7 +218,7 @@ struct ClipContentEditor: View {
                 }
             }
         }
-        .padding(16)
+        .padding(ClipContentLayout.padding)
         .frame(width: Self.preferredSize.width, height: Self.preferredSize.height)
         .background(Color(nsColor: .windowBackgroundColor))
         .presentationBackground(Color(nsColor: .windowBackgroundColor))

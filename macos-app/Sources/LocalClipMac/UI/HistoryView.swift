@@ -269,8 +269,8 @@ private struct HistoryScroller: View {
                         ClipCard(item: item, index: index, selected: strip.model.selectedIDs.contains(item.id) || (strip.model.contentEditorPresented && strip.model.contentEditor?.id == item.id), dragging: strip.draggedIDs.contains(item.id), editing: strip.renamingID == item.id, hidden: strip.hideContents, quickModifiers: strip.model.settings.quickModifiers, height: strip.cardHeight, categoryID: strip.categoryID, categories: strip.categories, target: strip.target, model: strip.model, previewGeneration: strip.focusRequest).equatable().id(item.id)
                             // 详情贴着所选卡片弹出，而不是远在底栏右侧的按钮，by AI.Coding。
                             // 详情内容备好后才弹出，弹出即最终尺寸，by AI.Coding。
-                            .popover(isPresented: Binding(get: { strip.showingDetail && strip.model.selectedID == item.id && strip.model.detail?.summary.id == item.id }, set: { if !$0 { strip.model.showingDetail = false } }), arrowEdge: .top) {
-                                ClipInspector(model: strip.model).frame(width: 520)
+                            .popover(isPresented: Binding(get: { strip.showingDetail && strip.model.selectedID == item.id && strip.model.detail?.summary.id == item.id }, set: { if !$0 { strip.model.showingDetail = false } }), attachmentAnchor: .rect(.bounds), arrowEdge: .top) {
+                                ClipInspector(model: strip.model)
                             }
                     }
                     if strip.model.hasMore {
@@ -903,11 +903,16 @@ private struct CopyAge: View {
         return "\(seconds / 86400)天前"
     }
 }
-// 详情按“标题 / 预览 / 信息 / 操作”排列，高度随内容，按钮与面板主次样式一致，by AI.Coding。
+// 文本/链接详情与编辑共享固定外框，其他类型保持原有自适应布局，by AI.Coding。
 struct ClipInspector: View {
     @ObservedObject var model: HistoryViewModel
     /// 中间信息区最大高度；整窗约为此值加标题与按钮的120pt。
     static let maxInfoHeight: CGFloat = 520
+    /// 仅文本和链接使用编辑框尺寸；图片、文件与混合内容不改变展示方式，by AI.Coding。
+    private var usesTextLayout: Bool {
+        model.detail?.summary.kind == .text || model.detail?.summary.kind == .url
+    }
+    /// 正文与附加信息在固定气泡内滚动，标题和底部操作始终可见，by AI.Coding。
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             if let detail = model.detail {
@@ -933,7 +938,9 @@ struct ClipInspector: View {
                     Label(notes.joined(separator: "\n"), systemImage: "info.circle").font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
                 }.frame(maxWidth: .infinity, alignment: .leading)
-                }.scrollBounceBehavior(.basedOnSize).frame(maxHeight: Self.maxInfoHeight).fixedSize(horizontal: false, vertical: true)
+                }.scrollBounceBehavior(.basedOnSize)
+                    .frame(maxHeight: usesTextLayout ? .infinity : Self.maxInfoHeight)
+                    .fixedSize(horizontal: false, vertical: !usesTextLayout)
                 Divider()
                 HStack(spacing: 8) {
                     Button(role: .destructive) { model.change(.delete([detail.summary.id])) } label: { Label("删除", systemImage: "trash").font(.system(size: 12)) }
@@ -959,7 +966,8 @@ struct ClipInspector: View {
                 }
             } else if model.detailLoading { ProgressView("正在读取完整内容…").frame(maxWidth: .infinity).frame(height: 220) }
             else { ContentUnavailableView("内容已变化", systemImage: "doc.text.magnifyingglass", description: Text("请选择仍存在的历史条目。")).frame(height: 220) }
-        }.padding(20)
+        }.padding(usesTextLayout ? ClipContentLayout.padding : 20)
+            .frame(width: ClipContentLayout.size.width, height: usesTextLayout ? ClipContentLayout.size.height : nil, alignment: .topLeading)
             .presentationBackground(Color(nsColor: .windowBackgroundColor))
     }
     /// 预览放入浅底圆角容器；文件显示图标、名称与所在文件夹，不把路径当代码高亮，by AI.Coding。

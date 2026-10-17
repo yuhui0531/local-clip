@@ -178,6 +178,51 @@ import LocalClipCore
         #expect(!textEditor.hasChanges && !textEditor.confirmingDiscard && textEditor.text == "普通文本")
     }
 
+    /// 隐藏窗口验证短文、链接与长文的预览/编辑尺寸一致，长文尾部可滚动到达，by AI.Coding。
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["LOCALCLIP_NAMED_TEST"] == "1"))
+    func hiddenPreviewAndEditorLayout() async throws {
+        _ = NSApplication.shared
+        let longText = String(repeating: "完整内容保持可读\n", count: 300) + "END-OF-CONTENT"
+        let (root, _, model, _, _) = try await setup(["短文本", "https://example.com/path", longText])
+        defer { try? FileManager.default.removeItem(at: root) }
+        let size = ClipContentEditor.preferredSize
+        let window = NSPanel(contentRect: .init(origin: .zero, size: size), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil; window.close() }
+        // 只渲染生产视图；不装载会弹出气泡的历史根视图，窗口始终隐藏，by AI.Coding。
+        func textViews(_ view: NSView) -> [NSTextView] {
+            (view as? NSTextView).map { [$0] } ?? view.subviews.flatMap(textViews)
+        }
+        for item in model.items {
+            model.select(item.id); model.showingDetail = true; model.detailVisibilityChanged()
+            try await wait { model.detail?.summary.id == item.id && model.richPreview != nil }
+            let detail = try #require(model.detail)
+            let original = try #require(detail.payload.editableText)
+            let state = ClipContentEditorState(detail: detail, text: original)
+            let preview = NSHostingView(rootView: ClipInspector(model: model))
+            window.contentView = preview; preview.frame = .init(origin: .zero, size: size)
+            preview.layoutSubtreeIfNeeded()
+            try await wait { textViews(preview).contains { $0.string == original } }
+            #expect(preview.fittingSize == size)
+            let shownText = try #require(textViews(preview).first { $0.string == original })
+            #expect(!shownText.isEditable && shownText.isSelectable)
+            // 长文显示完整载荷，滚动在预览内部发生，不撑高外框，by AI.Coding。
+            if original == longText {
+                let scroll = try #require(shownText.enclosingScrollView)
+                let container = try #require(shownText.textContainer)
+                shownText.layoutManager?.ensureLayout(for: container)
+                shownText.scrollRangeToVisible(NSRange(location: original.utf16.count - 1, length: 1))
+                #expect(scroll.contentView.bounds.origin.y > 0)
+                #expect(shownText.string.hasSuffix("END-OF-CONTENT"))
+                #expect(preview.fittingSize == size)
+            }
+            let editor = NSHostingView(rootView: ClipContentEditor(state: state, save: {}, cancel: {}, discard: {}))
+            window.contentView = editor; editor.frame = .init(origin: .zero, size: size)
+            editor.layoutSubtreeIfNeeded()
+            #expect(editor.fittingSize == preview.fittingSize && !window.isVisible)
+        }
+    }
+
     /// 隐藏窗口内检查原生编辑控件与像素，不展示窗口，不使用真实剪贴板。
     @Test(.enabled(if: ProcessInfo.processInfo.environment["LOCALCLIP_NAMED_TEST"] == "1"))
     func hiddenNativeEditorRendering() async throws {
