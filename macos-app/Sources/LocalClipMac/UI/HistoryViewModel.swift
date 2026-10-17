@@ -146,7 +146,13 @@ import LocalClipCore
     /// 图片主表示的已保存字节数；只读计数列，不加载正文。
     func previewImageSize(id: ClipID) async throws -> (bytes: Int64, items: Int)? { try await store.imageByteCount(id: id, at: clock.now()) }
     @Published public var showingDetail = false {
-        didSet { if showingDetail && !canDisplayContents { showingDetail = false } }
+        didSet {
+            if showingDetail && !canDisplayContents { showingDetail = false; return }
+            if showingDetail, let editor = contentEditor {
+                if !editor.hasChanges && !editor.saving { discardContentEdit() }
+                else { showingDetail = false; requestCancelContentEdit() }
+            }
+        }
     }
     private var contentGeneration = UUID()
     private var transformMenuRequest = UUID()
@@ -726,16 +732,26 @@ import LocalClipCore
     }
     /// 读取完整载荷后再显示编辑器，原卡片双击粘贴和标题重命名保持原样，by AI.Coding。
     func beginContentEdit(_ id: ClipID) {
+        if let existing = contentEditor {
+            if existing.id == id { return }
+            if !existing.hasChanges && !existing.saving { discardContentEdit() }
+            else { requestCancelContentEdit(); return }
+        }
         guard canDisplayContents, panelVisible, !dragActive, contains(id), contentEditor == nil else { return }
-        cancelRename(); showingDetail = false
+        cancelRename(); showingDetail = false; showingCategoryEditor = false; showingFilters = false
         let request = UUID(); contentEditRequest = request
         Task {
             do {
                 let detail = try await store.detail(id: id, at: clock.now())
                 guard request == contentEditRequest, panelVisible, canDisplayContents, contains(id), contentEditor == nil else { return }
                 guard let text = detail.payload.editableText else { message = ContentEditError.unsupportedContent.message; return }
-                contentEditor = ClipContentEditorState(detail: detail, text: text)
+                let editor = ClipContentEditorState(detail: detail, text: text)
+                contentEditor = editor
                 panelInteractionChanged?()
+                if detail.summary.kind == .text, !editor.monospaced {
+                    let language = await SyntaxHighlighter.shared.language(of: String(text.prefix(4_096)))
+                    if contentEditor === editor { editor.applyDetectedLanguage(language) }
+                }
             } catch { if request == contentEditRequest { message = "内容读取失败，记录可能已删除或过期。" } }
         }
     }

@@ -462,7 +462,8 @@ import LocalClipCore
                 settings: self.settingsWindow, feedback: self.feedbackPanel,
                 showingDetail: self.model?.showingDetail == true,
                 showingCategoryEditor: self.model?.showingCategoryEditor == true,
-                showingFilters: self.model?.showingFilters == true)
+                showingFilters: self.model?.showingFilters == true,
+                showingContentEditor: self.model?.contentEditorPresented == true)
             guard self.focusState.shouldDismiss(panelIsKey: panel.isKeyWindow, ownsKeyWindow: ownsKey,
                 dragging: self.model?.dragActive == true, confirming: self.model?.confirmingChange == true || self.model?.contentEditorPresented == true,
                 hasModal: NSApp.modalWindow != nil, pinned: self.model?.pinned == true) else { return }
@@ -472,14 +473,15 @@ import LocalClipCore
     /// 父子窗口与自有弹窗共享面板交互，设置和反馈不属于历史，by AI.Coding。
     static func ownsHistoryWindow(_ window: NSWindow?, panel: NSWindow?, settings: NSWindow?,
                                   feedback: NSWindow?, showingDetail: Bool,
-                                  showingCategoryEditor: Bool, showingFilters: Bool) -> Bool {
+                                  showingCategoryEditor: Bool, showingFilters: Bool,
+                                  showingContentEditor: Bool = false) -> Bool {
         guard let window else { return false }
         var owner: NSWindow? = window
         while let value = owner {
             if value === panel { return true }
             owner = value.sheetParent ?? value.parent
         }
-        return (showingDetail || showingCategoryEditor || showingFilters) && window.isVisible && window !== settings && window !== feedback
+        return (showingDetail || showingCategoryEditor || showingFilters || showingContentEditor) && window.isVisible && window !== settings && window !== feedback
     }
     /// 所有退出入口共用系统终止请求，测试替换请求而不终止任何真实应用，by AI.Coding。
     @objc func quitApplication(_ sender: Any?) { requestTermination() }
@@ -566,7 +568,7 @@ import LocalClipCore
             guard let self, let panel = self.panel, panel.isVisible else { return event }
             if Self.ownsHistoryWindow(event.window, panel: panel, settings: self.settingsWindow, feedback: self.feedbackPanel,
                 showingDetail: self.model?.showingDetail == true, showingCategoryEditor: self.model?.showingCategoryEditor == true,
-                showingFilters: self.model?.showingFilters == true) {
+                showingFilters: self.model?.showingFilters == true, showingContentEditor: self.model?.contentEditorPresented == true) {
                 // 迟到的旧输入不能取消较新的外部关闭任务，by AI.Coding。
                 if self.focusState.ownedInteraction(at: event.timestamp) { self.focusDismissal?.cancel() }
             } else if event.window != nil {
@@ -635,12 +637,26 @@ import LocalClipCore
             guard let self else { return event }
             // 本地Cmd-Q先于历史/IME分支，也适用于只有设置窗口或菜单图标隐藏时，by AI.Coding。
             if self.handleQuitShortcut(event) { return nil }
-            // 编辑器接管文字按键，先返回系统事件，避免历史操作干扰草稿，by AI.Coding。
-            if self.model?.contentEditorPresented == true { return event }
+            // 编辑器接管文字按键；Esc优先收起页内放弃确认或取消编辑，⌘S/⌘↩显式保存，IME候选期间交给文本域，by AI.Coding。
+            if let editorState = self.model?.contentEditor, self.model?.contentEditorPresented == true {
+                let textEditor = event.window?.firstResponder as? NSTextView
+                if textEditor?.hasMarkedText() == true { return event }
+                if event.keyCode == 53 {
+                    if editorState.confirmingDiscard { editorState.confirmingDiscard = false }
+                    else { self.model?.requestCancelContentEdit() }
+                    return nil
+                }
+                let flags = event.modifierFlags.intersection([.command, .option, .control, .shift])
+                if flags == [.command], (event.keyCode == 1 || event.keyCode == 36 || event.keyCode == 76) {
+                    if editorState.canSave { self.model?.saveContentEdit() }
+                    return nil
+                }
+                return event
+            }
             guard let panel = self.panel, panel.isVisible, let model = self.model,
                   Self.ownsHistoryWindow(event.window, panel: panel, settings: self.settingsWindow, feedback: self.feedbackPanel,
                       showingDetail: model.showingDetail, showingCategoryEditor: model.showingCategoryEditor,
-                      showingFilters: model.showingFilters) || (event.window == nil && panel.isKeyWindow) else { return event }
+                      showingFilters: model.showingFilters, showingContentEditor: model.contentEditorPresented) || (event.window == nil && panel.isKeyWindow) else { return event }
             self.focusState.ownedInteraction(at: event.timestamp)
             // 弹窗归属只用于保留交互，不能把详情文字或确认按钮按键当作历史操作，by AI.Coding。
             guard Self.routesHistoryShortcuts(event.window, panel: panel,

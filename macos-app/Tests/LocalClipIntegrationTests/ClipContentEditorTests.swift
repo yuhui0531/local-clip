@@ -144,6 +144,40 @@ import LocalClipCore
         #expect(multiple.editableText == "first\nsecond" && multiple.textEditWarning != nil)
     }
 
+    /// 定位贴靠目标卡片而非全屏水平居中；未修改时切换卡片直接就绪，修改后切换或一键还原均安全。
+    @Test func cardAnchoredGeometryAndEditorUXState() async throws {
+        let hostBounds = NSRect(x: 0, y: 0, width: 1440, height: 340)
+        let leftCard = NSRect(x: 24, y: 55, width: 223, height: 223)
+        let anchoredLeft = ClipContentEditorPopover.anchorRect(in: hostBounds, cardRect: leftCard, cardHeight: 223, isFlipped: false)
+        #expect(anchoredLeft.minX == 24 && anchoredLeft.width == 223 && anchoredLeft.maxY == 278)
+        let anchoredFlipped = ClipContentEditorPopover.anchorRect(in: hostBounds, cardRect: leftCard, cardHeight: 223, isFlipped: true)
+        #expect(anchoredFlipped.minX == 24 && anchoredFlipped.minY == 55)
+        let fallback = ClipContentEditorPopover.anchorRect(in: hostBounds, cardRect: nil, cardHeight: 223, isFlipped: false)
+        #expect(fallback.minX == 24 && fallback.width == 223)
+
+        let (root, _, model, _, _) = try await setup(["{\"key\": 1,\n\"other\": 2}", "普通文本"])
+        defer { try? FileManager.default.removeItem(at: root) }
+        let jsonID = try #require(model.items.first { $0.preview.hasPrefix("{") }?.id)
+        let textID = try #require(model.items.first { $0.preview == "普通文本" }?.id)
+        model.beginContentEdit(jsonID); try await wait { model.contentEditor?.id == jsonID }
+        let jsonEditor = try #require(model.contentEditor)
+        #expect(jsonEditor.itemTitle == "JSON" && jsonEditor.monospaced && jsonEditor.lineCount == 2)
+        // 未修改时直接点击另一张卡片的编辑，平滑切换到新卡片。
+        model.beginContentEdit(textID); try await wait { model.contentEditor?.id == textID }
+        let textEditor = try #require(model.contentEditor)
+        #expect(!textEditor.monospaced && textEditor.lineCount == 1)
+        textEditor.text = "已修改但未保存\n第二行"
+        #expect(textEditor.hasChanges && textEditor.lineCount == 2)
+        // 有未保存修改时切换其他卡片或打开详情均触发放弃确认，不丢弃草稿。
+        model.beginContentEdit(jsonID)
+        #expect(model.contentEditor === textEditor && textEditor.confirmingDiscard)
+        textEditor.confirmingDiscard = false
+        model.showingDetail = true
+        #expect(!model.showingDetail && textEditor.confirmingDiscard)
+        textEditor.revert()
+        #expect(!textEditor.hasChanges && !textEditor.confirmingDiscard && textEditor.text == "普通文本")
+    }
+
     /// 隐藏窗口内检查原生编辑控件与像素，不展示窗口，不使用真实剪贴板。
     @Test(.enabled(if: ProcessInfo.processInfo.environment["LOCALCLIP_NAMED_TEST"] == "1"))
     func hiddenNativeEditorRendering() async throws {
@@ -152,14 +186,15 @@ import LocalClipCore
         defer { try? FileManager.default.removeItem(at: root) }
         let detail = try await store.detail(id: model.items[0].id, at: SystemClock().now())
         let state = ClipContentEditorState(detail: detail, text: try #require(detail.payload.editableText))
-        let window = NSPanel(contentRect: .init(x: 0, y: 0, width: 560, height: 390), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        let size = ClipContentEditor.preferredSize
+        let window = NSPanel(contentRect: .init(origin: .zero, size: size), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         defer { window.contentView = nil; window.close() }
         // 明暗外观都由生产组件实际渲染，输出证据仅用于目视检查。
         for (name, scheme) in [("light", ColorScheme.light), ("dark", .dark)] {
             window.appearance = NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)
             let host = NSHostingView(rootView: ClipContentEditor(state: state, save: {}, cancel: {}, discard: {}).environment(\.colorScheme, scheme))
-            host.sizingOptions = []; window.contentView = host; host.frame = .init(x: 0, y: 0, width: 560, height: 390)
+            host.sizingOptions = []; window.contentView = host; host.frame = .init(origin: .zero, size: size)
             host.layoutSubtreeIfNeeded()
             func editors(_ view: NSView) -> [NSTextView] { (view as? NSTextView).map { [$0] } ?? view.subviews.flatMap(editors) }
             try await wait { !editors(host).isEmpty }

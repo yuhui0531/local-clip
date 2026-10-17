@@ -110,14 +110,8 @@ public struct HistoryView: View {
                 .onChange(of: model.showingDetail) { _, _ in model.detailVisibilityChanged() }
                 .onChange(of: model.showingCategoryEditor) { _, _ in model.panelInteractionChanged?() }
         }.frame(maxWidth: .infinity, maxHeight: .infinity)
-            // sheet独立于滚动卡片存活；点击面板外部不能隐式丢弃未保存草稿，by AI.Coding。
-            .sheet(isPresented: Binding(get: { model.contentEditorPresented }, set: {
-                if !$0 && model.panelVisible && model.canDisplayContents { model.requestCancelContentEdit() }
-            })) {
-                if let editor = model.contentEditor {
-                    ClipContentEditor(state: editor, save: model.saveContentEdit, cancel: model.requestCancelContentEdit, discard: model.discardContentEdit)
-                }
-            }
+            // 编辑气泡贴靠目标卡片顶部弹出，独立于滚动卡片存活，不作为Sheet撑高或抬起底栏面板，by AI.Coding。
+            .background { ClipContentEditorPopover(model: model) }
     }
     /// 类型与分类共享工具栏剩余宽度；溢出只滚动这段，主入口与搜索保持可见，by AI.Coding。
     private func categoryNavigation(compact: Bool) -> some View {
@@ -272,7 +266,7 @@ private struct HistoryScroller: View {
             ScrollView(.horizontal) {
                 LazyHStack(spacing: 16) {
                     ForEach(Array(strip.model.items.enumerated()), id: \.element.id) { index, item in
-                        ClipCard(item: item, index: index, selected: strip.model.selectedIDs.contains(item.id), dragging: strip.draggedIDs.contains(item.id), editing: strip.renamingID == item.id, hidden: strip.hideContents, quickModifiers: strip.model.settings.quickModifiers, height: strip.cardHeight, categoryID: strip.categoryID, categories: strip.categories, target: strip.target, model: strip.model, previewGeneration: strip.focusRequest).equatable().id(item.id)
+                        ClipCard(item: item, index: index, selected: strip.model.selectedIDs.contains(item.id) || (strip.model.contentEditorPresented && strip.model.contentEditor?.id == item.id), dragging: strip.draggedIDs.contains(item.id), editing: strip.renamingID == item.id, hidden: strip.hideContents, quickModifiers: strip.model.settings.quickModifiers, height: strip.cardHeight, categoryID: strip.categoryID, categories: strip.categories, target: strip.target, model: strip.model, previewGeneration: strip.focusRequest).equatable().id(item.id)
                             // 详情贴着所选卡片弹出，而不是远在底栏右侧的按钮，by AI.Coding。
                             // 详情内容备好后才弹出，弹出即最终尺寸，by AI.Coding。
                             .popover(isPresented: Binding(get: { strip.showingDetail && strip.model.selectedID == item.id && strip.model.detail?.summary.id == item.id }, set: { if !$0 { strip.model.showingDetail = false } }), arrowEdge: .top) {
@@ -296,6 +290,11 @@ private struct HistoryScroller: View {
                 } action: { _, metrics in scrollWheelState.update(metrics); strip.model.historyScrolled(offset: metrics.offset) }
                 .background(HistoryScrollWheel(state: scrollWheelState) { x in scrollPosition.scrollTo(x: x) })
                 .onChange(of: strip.model.selectedID) { _, id in
+                    if let id, let index = strip.model.items.firstIndex(where: { $0.id == id }), scrollWheelState.needsReveal(index: index, cardWidth: strip.cardHeight) {
+                        proxy.scrollTo(id)
+                    }
+                }
+                .onChange(of: strip.model.contentEditor?.id) { _, id in
                     if let id, let index = strip.model.items.firstIndex(where: { $0.id == id }), scrollWheelState.needsReveal(index: index, cardWidth: strip.cardHeight) {
                         proxy.scrollTo(id)
                     }
@@ -634,11 +633,21 @@ private struct ClipCard: View, Equatable {
             HStack(spacing: 4) {
                 Text(footerText).lineLimit(1)
                 Spacer(minLength: 2)
-                // 详情入口跟随卡片：悬停或选中时出现，点按在本卡上方弹出详情，by AI.Coding。
+                // 编辑与详情入口跟随卡片：悬停或选中时出现，点按在本卡上方就地弹出，by AI.Coding。
                 if (hovering || selected) && !tiny && !hidden {
-                    Button { model.select(item.id); DispatchQueue.main.async { model.showingDetail = true } } label: {
-                        Image(systemName: "info.circle").font(.system(size: 13)).frame(width: 18, height: 18).contentShape(Rectangle())
-                    }.buttonStyle(.plain).foregroundStyle(Color.accentColor).help("详情 · ⌘I").accessibilityLabel("详情")
+                    HStack(spacing: 2) {
+                        if [ClipKind.text, .url].contains(item.kind) {
+                            Button {
+                                if !model.selectedIDs.contains(item.id) { model.select(item.id) }
+                                model.beginContentEdit(item.id)
+                            } label: {
+                                Image(systemName: "square.and.pencil").font(.system(size: 12.5)).frame(width: 18, height: 18).contentShape(Rectangle())
+                            }.buttonStyle(.plain).foregroundStyle(Color.accentColor).help("编辑内容 · ⌘E").accessibilityLabel("编辑内容")
+                        }
+                        Button { model.select(item.id); DispatchQueue.main.async { model.showingDetail = true } } label: {
+                            Image(systemName: "info.circle").font(.system(size: 13)).frame(width: 18, height: 18).contentShape(Rectangle())
+                        }.buttonStyle(.plain).foregroundStyle(Color.accentColor).help("详情 · ⌘I").accessibilityLabel("详情")
+                    }
                         .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(item.id)) } action: { infoRect = $0 }
                         .onDisappear { infoRect = .zero }
                 }
@@ -717,7 +726,10 @@ private struct ClipCard: View, Equatable {
                 }
                 // 输出、整理、检视各自分组，保留全部已有菜单项，by AI.Coding。
                 Divider()
-                Button("编辑内容… · ⌘E") { model.beginContentEdit(item.id) }
+                Button("编辑内容… · ⌘E") {
+                    if !model.selectedIDs.contains(item.id) { model.select(item.id) }
+                    model.beginContentEdit(item.id)
+                }
                     .disabled(hidden || ![ClipKind.text, .url].contains(item.kind))
                 Button("重命名") { model.beginRename(item.id) }
                 Button(item.isFavorite ? "取消收藏" : "收藏") { model.change(.favorites(model.selectedIDs.contains(item.id) ? model.orderedSelection : [item.id], !item.isFavorite)) }
@@ -932,7 +944,11 @@ struct ClipInspector: View {
                         Button { model.copyImageText(id: detail.summary.id, fromDetail: true) } label: { Label("复制图中文字", systemImage: "text.viewfinder") }
                             .buttonStyle(ToolbarTabStyle(selected: true)).disabled(model.settings.hideContents).help("识别图片中的文字并复制")
                     }
-                    // 混合记录新增OCR后仍保留原有文字转换入口，不能用else丢掉已有功能，by AI.Coding。
+                    // 详情内可一键切入同卡原位编辑；混合记录仍保留原有文字转换入口，by AI.Coding。
+                    if [ClipKind.text, .url].contains(detail.summary.kind), detail.payload.editableText != nil {
+                        Button { model.beginContentEdit(detail.summary.id) } label: { Label("编辑", systemImage: "square.and.pencil") }
+                            .buttonStyle(ToolbarTabStyle(selected: true)).disabled(model.settings.hideContents).help("编辑内容 · ⌘E")
+                    }
                     if detail.summary.kind != .image && (!hasOCR || detail.payload.plainText != nil) {
                         Button { model.showTransformMenu(ids: [detail.summary.id]) } label: { Label("转换", systemImage: "wand.and.stars") }
                             .buttonStyle(ToolbarTabStyle(selected: true)).disabled(detail.payload.plainText == nil).help("转换后粘贴 · ⌘T")

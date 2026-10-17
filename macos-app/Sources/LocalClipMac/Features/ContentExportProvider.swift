@@ -403,8 +403,12 @@ struct HistoryDragBridge: NSViewRepresentable {
         func handle(_ event: NSEvent) -> NSEvent? {
             if nativeSessionActive { return event }
             guard let model else { return event }
-            // 编辑时事件交给原生文本域，不能吞掉定位光标和文字选择，by AI.Coding。
+            // 编辑时事件交给原生文本域，不能吞掉定位光标和文字选择；内容编辑打开时先走取消保护，by AI.Coding。
             if model.renamingID == id { return event }
+            if model.contentEditorPresented {
+                if event.type == .leftMouseDown { model.requestCancelContentEdit() }
+                if model.contentEditorPresented { return nil }
+            }
             if event.type == .leftMouseDown {
                 guard !model.dragActive else { return nil }
                 model.cancelRename()

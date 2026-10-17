@@ -1,6 +1,8 @@
-# LocalClip 0.3.41（构建63）
+# LocalClip 0.3.42（构建64）
 
-新增历史卡片内容编辑：右键“编辑内容…”或底栏“编辑”（⌘E）打开原生多行编辑面板，⌘S保存、Esc取消，放弃未保存修改前需确认。保存后同步更新卡片、详情和全文搜索，保留记录身份、名称、收藏、分类及复制信息。保存失败保留草稿，内容冲突、重复或空内容不会覆盖原记录。支持文本与链接；富文本修改后保存为纯文本并明确提示，图片、文件引用和含附件内容不做文字替换。
+优化历史卡片内容编辑：编辑气泡贴靠目标卡片弹出，不再抬高底栏；卡片底部与详情内增加编辑入口。支持还原原文、等宽字体、字符与行数显示，以及⌘S / ⌘↩保存；切换卡片、打开详情或点击编辑区外部时保护未保存草稿。
+
+已有历史卡片内容编辑：右键“编辑内容…”或底栏“编辑”（⌘E）打开原生多行编辑面板，⌘S保存、Esc取消，放弃未保存修改前需确认。保存后同步更新卡片、详情和全文搜索，保留记录身份、名称、收藏、分类及复制信息。保存失败保留草稿，内容冲突、重复或空内容不会覆盖原记录。支持文本与链接；富文本修改后保存为纯文本并明确提示，图片、文件引用和含附件内容不做文字替换。
 
 Current delivery: every clipboard kind supports an optional persistent display name. Double-click the coloured header or use 重命名 in its context menu; Enter saves, Esc cancels, clearing restores the default. Body double-click retains its existing paste behaviour. The full-history tab says 剪贴板. Names preserve content, ordering, copy identity, selection, categories and favourites; they are stored in `clips.title` (schema v4; other schema versions are refused, no migration) and are searchable. Current storage, interaction defaults and performance baseline: [architecture](docs/architecture.md). The 2026-10-15 review identified five corrective findings; passing automated tests alone does not close the separate native acceptance and release gates. Repeated-search overhead is 23.60 ms (limit 60 ms); initial-cycle overhead is 69.73 ms and remains a concern. Details and user-owned physical checks: [review fixes and evidence](docs/review-fixes-r01-r12.md).
 
