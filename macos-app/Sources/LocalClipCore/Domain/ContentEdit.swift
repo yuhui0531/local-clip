@@ -16,6 +16,9 @@ public enum ContentEditError: Error, Equatable, Sendable {
 }
 
 extension ClipboardPayload {
+    // 固定附件模式只编译一次，保持转义奇偶与HTML判定语义，by AI.Coding。
+    private static let rtfAttachment = try? NSRegularExpression(pattern: #"(\\+)(pict|object)\b"#, options: .caseInsensitive)
+    private static let htmlAttachment = try? NSRegularExpression(pattern: #"<\s*(img|object|embed|svg|video|audio|iframe)\b"#, options: .caseInsensitive)
     /// 所有项目都只能含文字表示；富文本解码不完整或包含附件类型时整体拒绝。
     public var editableText: String? {
         let types: Set<String> = [SupportedType.string, SupportedType.url, SupportedType.rtf, SupportedType.html]
@@ -24,11 +27,13 @@ extension ClipboardPayload {
         for representation in items.flatMap(\.representations) {
             if representation.type == SupportedType.rtf {
                 let source = String(decoding: representation.data, as: UTF8.self)
-                if source.range(of: #"\\(pict|object)\b"#, options: [.regularExpression, .caseInsensitive]) != nil { return nil }
+                // 偶数反斜杠只是文字；奇数末尾仍是附件控制字，不能开放含附件编辑。
+                if let controls = Self.rtfAttachment,
+                   controls.matches(in: source, range: NSRange(source.startIndex..., in: source)).contains(where: { !$0.range(at: 1).length.isMultiple(of: 2) }) { return nil }
             }
             if representation.type == SupportedType.html {
                 let source = String(decoding: representation.data, as: UTF8.self)
-                if source.range(of: #"<\s*(img|object|embed|svg|video|audio|iframe)\b"#, options: [.regularExpression, .caseInsensitive]) != nil { return nil }
+                if Self.htmlAttachment?.firstMatch(in: source, range: NSRange(source.startIndex..., in: source)) != nil { return nil }
             }
         }
         return plainText

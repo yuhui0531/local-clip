@@ -52,9 +52,9 @@ import LocalClipCore
         try await model.start(); model.capture.stop()
         try await until { !model.historyBusy && model.items.count == 5 }
         let first = model.selectedID, expected = try await store.search(.init()).items.map(\.id)
-        for _ in 0..<100 { model.historyScrolled(offset: 0) }
+        for _ in 0..<100 { model.historyScrolled(offset: 0, epoch: model.listState.snapshot.scrollEpoch) }
         try await Task.sleep(for: .milliseconds(60)); #expect(model.items.count == 5)
-        for _ in 0..<100 { model.historyScrolled(offset: 30) }
+        for _ in 0..<100 { model.historyScrolled(offset: 30, epoch: model.listState.snapshot.scrollEpoch) }
         try await until { !model.historyBusy && model.items.count == 15 }
         try await Task.sleep(for: .milliseconds(60))
         #expect(model.items.count == 15); #expect(model.selectedID == first)
@@ -69,9 +69,32 @@ import LocalClipCore
         #expect(model.scrollRestoration?.offset == 0)
         model.query = ""; model.searchChanged(); try await until { !model.historyBusy && model.items.count == 5 }
         #expect(model.items.map(\.id) == Array(expected.prefix(5)))
-        model.select(model.items.last?.id); model.historyScrolled(offset: 30); model.extendNavigation(1)
+        model.select(model.items.last?.id); model.historyScrolled(offset: 30, epoch: model.listState.snapshot.scrollEpoch); model.extendNavigation(1)
         try await until { !model.historyBusy && model.items.count == 15 }
         #expect(model.selectedID == expected[5]); #expect(model.selectedIDs == [expected[4], expected[5]])
+    }
+    /// 旧列表回调不能给新查询预读；新列表的真实滚动仍正常分页，by AI.Coding。
+    @Test func staleScrollCannotPageNewSearch() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try HistoryStore(location: root); try await seed(store, count: 160)
+        let model = makeModel(store); model.configureHistoryViewport(width: 1000, cardWidth: 200)
+        try await model.start(); model.capture.stop()
+        try await until { !model.historyBusy && model.items.count == 5 }
+        let oldEpoch = model.listState.snapshot.scrollEpoch
+        model.query = "page-item-1"; model.searchChanged(debounce: false)
+        model.historyScrolled(offset: 13000, epoch: oldEpoch)
+        try await until { !model.historyBusy && model.items.count == 5 }
+        let expected = model.items.map(\.id), selected = model.selectedID
+        model.historyScrolled(offset: 13000, epoch: oldEpoch)
+        #expect(!model.historyBusy)
+        try await Task.sleep(for: .milliseconds(60))
+        #expect(model.items.map(\.id) == expected && model.selectedID == selected)
+        model.refresh(); try await until { !model.historyBusy }
+        #expect(model.items.count == 5 && model.scrollRestoration?.offset == 0)
+        model.historyScrolled(offset: 30, epoch: model.listState.snapshot.scrollEpoch)
+        try await until { !model.historyBusy && model.items.count == 15 }
+        #expect(Array(model.items.prefix(5)).map(\.id) == expected)
     }
     /// 捕获插入不能移动正在浏览的卡片；详情和多选仍以原ID保存，by AI.Coding。
     @Test func viewportRefreshPreservesScrollAndSelection() async throws {
@@ -81,7 +104,7 @@ import LocalClipCore
         let model = makeModel(store); model.configureHistoryViewport(width: 1000, cardWidth: 200)
         try await model.start(); model.capture.stop(); try await until { !model.historyBusy && model.items.count == 5 }
         model.configureHistoryViewport(width: 1000, cardWidth: 200)
-        model.historyScrolled(offset: 500); try await until { !model.historyBusy && model.items.count == 15 }
+        model.historyScrolled(offset: 500, epoch: model.listState.snapshot.scrollEpoch); try await until { !model.historyBusy && model.items.count == 15 }
         let selected = model.items[2].id, second = model.items[3].id
         model.choose(selected, modifiers: []); model.choose(second, modifiers: .command)
         model.showingDetail = true; model.detailVisibilityChanged()
@@ -91,7 +114,7 @@ import LocalClipCore
         #expect(model.scrollRestoration?.offset == 716)
         #expect(model.selectedID == second); #expect(model.selectedIDs == [selected, second])
         #expect(model.detail?.summary.id == second); #expect(model.items.count == 16)
-        model.historyScrolled(offset: 716)
+        model.historyScrolled(offset: 716, epoch: model.listState.snapshot.scrollEpoch)
         let beforeAnchor = model.items[1].id
         let preview = try await store.preview(.delete([beforeAnchor])); _ = try await store.apply(preview.token)
         try await until { !model.historyBusy && !model.items.contains { $0.id == beforeAnchor } }
@@ -120,12 +143,12 @@ import LocalClipCore
         let store = try HistoryStore(location: root); try await seed(store, count: 100)
         let model = makeModel(store); model.configureHistoryViewport(width: 1000, cardWidth: 200)
         try await model.start(); model.capture.stop(); try await until { !model.historyBusy && model.items.count == 5 }
-        model.historyScrolled(offset: 30); model.edgeSelection(true, extend: false); model.edgeSelection(true, extend: false)
+        model.historyScrolled(offset: 30, epoch: model.listState.snapshot.scrollEpoch); model.edgeSelection(true, extend: false); model.edgeSelection(true, extend: false)
         try await until { !model.historyBusy && !model.hasMore }
         #expect(model.items.count == 100); #expect(Set(model.items.map(\.id)).count == 100)
         #expect(model.selectedID == model.items.last?.id)
         model.searchChanged(); try await until { !model.historyBusy && model.items.count == 5 }
-        model.historyScrolled(offset: 30); model.selectAllResults(); model.selectAllResults()
+        model.historyScrolled(offset: 30, epoch: model.listState.snapshot.scrollEpoch); model.selectAllResults(); model.selectAllResults()
         try await until { !model.historyBusy && !model.hasMore }
         #expect(model.items.count == 100); #expect(Set(model.items.map(\.id)).count == 100)
         #expect(model.selectedIDs.count == 100)

@@ -17,6 +17,7 @@ import LocalClipCore
     private var closed = false
     private let handler: (TextTransform, Bool) -> Void
     var onDismiss: (() -> Void)?
+    var onParentClick: ((NSEvent) -> Bool)?
 
     /// 可用性沿用内容判定；构造不创建窗口，便于无桌面副作用地验证选择与分派，by AI.Coding。
     init(available: Set<TextTransform>, reason: String?, allowsCopyOnly: Bool,
@@ -24,6 +25,8 @@ import LocalClipCore
         self.available = available; self.reason = reason; self.allowsCopyOnly = allowsCopyOnly
         self.handler = handler
         super.init()
+        // 打开即可看到首个可用项；空列表保持无选择，禁用项和排列不变。
+        highlighted = transforms.first { available.contains($0) }
     }
 
     /// 逐行从左到右排布；保留固定顺序和全部禁用项，不因内容不同而跳位，by AI.Coding。
@@ -59,8 +62,10 @@ import LocalClipCore
         let host = NSHostingView(rootView: TransformMenuContent(menu: self))
         host.sizingOptions = []; panel.contentView = host; window = panel
         parent.addChildWindow(panel, ordered: .above)
-        // 监听只负责菜单关闭，不吞掉点击，不读取外部按键，by AI.Coding。
+        // 父面板外点先消费关闭手势；外部应用的操作仍照常，不读取外部按键，by AI.Coding。
         localClicks = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak self] event in
+            if let self, event.type == .leftMouseDown, event.window === self.parent,
+               self.onParentClick?(event) == true { return nil }
             if let self, event.window !== self.window { self.close() }
             return event
         }
@@ -91,7 +96,7 @@ import LocalClipCore
         return true
     }
 
-    /// 水平移动不跨行，垂直移动不换列；首次方向键选中首个可用项，by AI.Coding。
+    /// 水平优先同行，遇禁用项跳到相邻列最近可用行；上下仍保留列与顺序，by AI.Coding。
     func move(keyCode: UInt16, backwards: Bool = false) {
         let enabled = transforms.indices.filter { available.contains(transforms[$0]) }
         guard let first = enabled.first else { return }
@@ -101,10 +106,17 @@ import LocalClipCore
             self.highlighted = transforms[enabled[(index + (backwards ? enabled.count - 1 : 1)) % enabled.count]]
             return
         }
-        let step = keyCode == 123 ? -1 : keyCode == 124 ? 1 : keyCode == 126 ? -2 : 2
+        if keyCode == 123 || keyCode == 124 {
+            let column = keyCode == 123 ? 0 : 1
+            guard current % 2 != column else { return }
+            if let next = enabled.filter({ $0 % 2 == column }).min(by: {
+                abs($0 / 2 - current / 2) < abs($1 / 2 - current / 2)
+            }) { self.highlighted = transforms[next] }
+            return
+        }
+        let step = keyCode == 126 ? -2 : 2
         var next = current + step
         while transforms.indices.contains(next) {
-            if abs(step) == 1, next / 2 != current / 2 { return }
             if available.contains(transforms[next]) { self.highlighted = transforms[next]; return }
             next += step
         }

@@ -19,8 +19,10 @@ public enum SearchNormalizer {
         // NFC及ASCII折叠保持字素次序；按字素序号映射，避免每个字符单独规范化。
         let position = normalized[..<range.lowerBound].count
         let length = normalized[range].count
-        let start = original.index(original.startIndex, offsetBy: max(0, position - 35), limitedBy: original.endIndex) ?? original.endIndex
-        let end = original.index(original.startIndex, offsetBy: position + length + 79, limitedBy: original.endIndex) ?? original.endIndex
+        let startOffset = max(0, position - 35)
+        let start = original.index(original.startIndex, offsetBy: startOffset, limitedBy: original.endIndex) ?? original.endIndex
+        // 从片段起点继续前进，避免尾部命中时再次遍历整篇长文；仍按字素截取。
+        let end = original.index(start, offsetBy: position - startOffset + length + 79, limitedBy: original.endIndex) ?? original.endIndex
         return (start > original.startIndex ? "…" : "") + String(original[start..<end]) + (end < original.endIndex ? "…" : "")
     }
 }
@@ -47,15 +49,24 @@ public enum HTMLText {
         }
         value = value.replacingOccurrences(of: "(?i)<br\\s*/?>|</(?:p|div|li|h[1-6])\\s*>", with: "\n", options: .regularExpression)
         value = value.replacingOccurrences(of: "(?s)<!--.*?-->|<[^>]*>", with: "", options: .regularExpression)
-        let entities = ["&lt;": "<", "&gt;": ">", "&quot;": "\"", "&apos;": "'", "&nbsp;": " "]
-        for (key, replacement) in entities { value = value.replacingOccurrences(of: key, with: replacement) }
-        if let regex = try? NSRegularExpression(pattern: "&#(x[0-9A-Fa-f]+|[0-9]+);") {
-            for match in regex.matches(in: value, range: NSRange(value.startIndex..., in: value)).reversed() {
-                let token = (value as NSString).substring(with: match.range(at: 1))
-                let number = token.hasPrefix("x") ? UInt32(token.dropFirst(), radix: 16) : UInt32(token)
-                if let number, let scalar = UnicodeScalar(number), let range = Range(match.range, in: value) { value.replaceSubrange(range, with: String(scalar)) }
+        // 只匹配原输入的一层实体，顺序拼接，避免重复展开及逐实体搬移整段正文。
+        let entities = ["&lt;": "<", "&gt;": ">", "&quot;": "\"", "&apos;": "'", "&nbsp;": " ", "&amp;": "&"]
+        guard let regex = try? NSRegularExpression(pattern: "&(?:lt|gt|quot|apos|nbsp|amp|#(?:[xX][0-9A-Fa-f]+|[0-9]+));") else { return value }
+        let source = value as NSString
+        var output = "", offset = 0
+        for match in regex.matches(in: value, range: NSRange(location: 0, length: source.length)) {
+            output += source.substring(with: NSRange(location: offset, length: match.range.location - offset))
+            let token = source.substring(with: match.range)
+            if let decoded = entities[token] { output += decoded }
+            else {
+                let digits = token.dropFirst(2).dropLast()
+                let hex = digits.first == "x" || digits.first == "X"
+                let number = UInt32(hex ? String(digits.dropFirst()) : String(digits), radix: hex ? 16 : 10)
+                output += number.flatMap(UnicodeScalar.init).map(String.init) ?? token
             }
+            offset = NSMaxRange(match.range)
         }
-        return value.replacingOccurrences(of: "&amp;", with: "&")
+        output += source.substring(from: offset)
+        return output
     }
 }

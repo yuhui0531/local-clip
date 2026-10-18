@@ -7,20 +7,29 @@ import LocalClipCore
 }
 
 @MainActor final class HistoryFooterState: ObservableObject {
+    /// 文字输出能力只随所选内容变化；元数据回填和分页不应让按钮反复置灰。
+    struct TextCapabilityKey: Equatable {
+        var ids: Set<ClipID> = []
+        var fingerprints: [ClipID: String] = [:]
+    }
     struct Snapshot: Equatable {
         var itemCount = 0
         var selectedCount = 0
+        var selectedIDs: Set<ClipID> = []
         var selectedID: ClipID?
         var selectedItem: ClipSummary?
         var selectedMetadata: ClipMetadata?
         var loading = false
         var hasMore = false
+        var textCapability = TextCapabilityKey()
     }
     @Published private(set) var snapshot = Snapshot()
     fileprivate func update(from list: HistoryListState.Snapshot, metadata: ClipMetadata?) {
-        let value = Snapshot(itemCount: list.items.count, selectedCount: list.selectedIDs.count,
+        let value = Snapshot(itemCount: list.items.count, selectedCount: list.selectedIDs.count, selectedIDs: list.selectedIDs,
             selectedID: list.selectedID, selectedItem: list.items.first { $0.id == list.selectedID },
-            selectedMetadata: metadata, loading: list.loading, hasMore: list.cursor != nil)
+            selectedMetadata: metadata, loading: list.loading, hasMore: list.cursor != nil,
+            textCapability: .init(ids: list.selectedIDs, fingerprints: Dictionary(uniqueKeysWithValues:
+                list.items.filter { list.selectedIDs.contains($0.id) }.map { ($0.id, $0.contentFingerprint ?? "") })))
         if value != snapshot { snapshot = value }
     }
 }

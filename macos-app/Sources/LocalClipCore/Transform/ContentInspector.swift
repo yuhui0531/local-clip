@@ -162,29 +162,33 @@ public enum ContentInspector {
         guard (946_684_800...4_102_444_800).contains(seconds) else { return nil }
         return Date(timeIntervalSince1970: seconds)
     }
+    // 固定颜色模式只编译一次；不增加长度门槛，保留原来支持的空白和数字格式，by AI.Coding。
+    private static let colorHex = try? NSRegularExpression(pattern: "^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$")
+    private static let colorAlpha = "(?:\\s*,\\s*(\\d*\\.?\\d+))?\\s*\\)$"
+    private static let colorRGB = try? NSRegularExpression(pattern: "^rgba?\\(\\s*(\\d{1,3})\\s*,\\s*(\\d{1,3})\\s*,\\s*(\\d{1,3})" + colorAlpha, options: .caseInsensitive)
+    private static let colorHSL = try? NSRegularExpression(pattern: "^hsla?\\(\\s*(\\d{1,3}(?:\\.\\d+)?)\\s*,\\s*(\\d{1,3}(?:\\.\\d+)?)%\\s*,\\s*(\\d{1,3}(?:\\.\\d+)?)%" + colorAlpha, options: .caseInsensitive)
     /// #RGB、#RRGGBB、#RRGGBBAA、rgb()/rgba()、hsl()/hsla()；分量越界即不算颜色。
     public static func color(_ text: String) -> RGBA? {
         let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if value.range(of: "^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$", options: .regularExpression) != nil {
+        if colorHex?.firstMatch(in: value, range: NSRange(value.startIndex..., in: value)) != nil {
             var digits = String(value.dropFirst())
             if digits.count == 3 { digits = digits.map { "\($0)\($0)" }.joined() }
             let bytes = stride(from: 0, to: digits.count, by: 2).map { Int(String(Array(digits)[$0..<$0 + 2]), radix: 16)! }
             return RGBA(red: bytes[0], green: bytes[1], blue: bytes[2], alpha: bytes.count == 4 ? Double(bytes[3]) / 255 : 1)
         }
-        func numbers(_ pattern: String) -> [Double]? {
-            guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive),
+        func numbers(_ regex: NSRegularExpression?) -> [Double]? {
+            guard let regex,
                   let match = regex.firstMatch(in: value, range: NSRange(value.startIndex..., in: value)) else { return nil }
             return (1..<match.numberOfRanges).map { index in
                 Range(match.range(at: index), in: value).flatMap { Double(value[$0]) } ?? -1
             }
         }
-        let alpha = "(?:\\s*,\\s*(\\d*\\.?\\d+))?\\s*\\)$"
-        if let parts = numbers("^rgba?\\(\\s*(\\d{1,3})\\s*,\\s*(\\d{1,3})\\s*,\\s*(\\d{1,3})" + alpha) {
+        if let parts = numbers(colorRGB) {
             let a = parts[3] < 0 ? 1 : parts[3]
             guard parts[0...2].allSatisfy({ $0 <= 255 }), (0...1).contains(a) else { return nil }
             return RGBA(red: Int(parts[0]), green: Int(parts[1]), blue: Int(parts[2]), alpha: a)
         }
-        if let parts = numbers("^hsla?\\(\\s*(\\d{1,3}(?:\\.\\d+)?)\\s*,\\s*(\\d{1,3}(?:\\.\\d+)?)%\\s*,\\s*(\\d{1,3}(?:\\.\\d+)?)%" + alpha) {
+        if let parts = numbers(colorHSL) {
             let a = parts[3] < 0 ? 1 : parts[3]
             guard parts[0] <= 360, parts[1] <= 100, parts[2] <= 100, (0...1).contains(a) else { return nil }
             let s = parts[1] / 100, l = parts[2] / 100, c = (1 - abs(2 * l - 1)) * s
@@ -233,7 +237,14 @@ public enum ContentInspector {
         public var note: String?
         public var actions: [Action] = []
     }
+    /// 详情仍完整识别和展示；超出转换预算只移除不可执行动作。
     public static func inspectFull(_ text: String, language: String?, now: Date = Date()) -> Inspection? {
+        guard var result = inspectFullContent(text, language: language, now: now) else { return nil }
+        if text.utf8.count > TextTransform.byteLimit { result.actions.removeAll() }
+        return result
+    }
+    /// 沿用原有详情识别规则，不因转换限制丢失正文与统计。
+    private static func inspectFullContent(_ text: String, language: String?, now: Date) -> Inspection? {
         let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else { return nil }
         switch inspect(value, truncated: false) {
@@ -253,8 +264,8 @@ public enum ContentInspector {
         }
         if let first = value.first, first == "{" || first == "[" {
             do {
-                try TextTransform.validateJSON(value)
-                let object = try JSONSerialization.jsonObject(with: Data(value.utf8))
+                // 验证与顶层统计共享解析结果，避免大 JSON 在详情中重复解析。
+                let object = try TextTransform.parseJSON(value)
                 let shape = (object as? [String: Any]).map { ("对象", "\($0.count) 个键") } ?? (object as? [Any]).map { ("数组", "\($0.count) 个元素") } ?? ("值", "")
                 return .init(kind: "JSON", rows: [.init("合法", "是"), .init("顶层", shape.0 + (shape.1.isEmpty ? "" : "，" + shape.1))],
                              actions: [.init(title: "格式化后粘贴", transform: .formatJSON)])

@@ -401,8 +401,10 @@ struct ClipContentEditor: View {
                       let hostWindow = self.hostView?.window,
                       let popoverWindow = self.popover?.contentViewController?.view.window else { return event }
                 guard event.window === hostWindow, event.window !== popoverWindow else { return event }
-                model.requestCancelContentEdit()
-                return model.contentEditorPresented ? nil : event
+                if event.type == .leftMouseDown { _ = model.dismissPopoverForBackdropClick(count: event.clickCount, timestamp: event.timestamp) }
+                else { model.requestCancelContentEdit() }
+                // 首次外点仅关闭/确认编辑，后续正常点击仍沿原有卡片与拖拽路径。
+                return nil
             }
         }
 

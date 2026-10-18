@@ -34,7 +34,7 @@ public struct FinderDestination: Equatable, Sendable {
         guard error == nil, let path = result.atIndex(2)?.stringValue, path.hasPrefix("/"),
               let window = result.atIndex(1), window.int32Value > 0 else {
             let code = (error?[NSAppleScript.errorNumber] as? NSNumber)?.intValue
-            return .failure(code == -1743 ? .permission : .unavailable)
+            return .failure(FinderLookupError.from(code: code))
         }
         let directory = URL(fileURLWithPath: path, isDirectory: true)
         var isDirectory: ObjCBool = false
@@ -44,10 +44,13 @@ public struct FinderDestination: Equatable, Sendable {
 }
 
 public enum FinderLookupError: Error, Sendable {
-    case permission, unavailable
+    case permission, timeout, unavailable
+    /// AppleEvent 超时可重试，不能解释为 Finder 虚拟目录。
+    static func from(code: Int?) -> Self { code == -1743 ? .permission : code == -1712 ? .timeout : .unavailable }
     public var message: String {
         switch self {
         case .permission: "请允许LocalClip自动化控制Finder，或在Finder中手动粘贴"
+        case .timeout: "查询Finder超时，请完成自动化授权后重试，或在Finder中手动粘贴"
         case .unavailable: "请打开Finder的实际文件夹后重试；最近使用、搜索等虚拟位置不可作为目标"
         }
     }

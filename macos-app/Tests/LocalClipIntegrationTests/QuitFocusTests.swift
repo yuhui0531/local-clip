@@ -145,4 +145,17 @@ import Testing
         #expect(!AppDelegate.routesHistoryShortcuts(panel, panel: panel, confirming: false, hasModal: true))
         #expect(AppDelegate.routesHistoryShortcuts(panel, panel: panel, confirming: false, hasModal: false))
     }
+
+    /// 标准关闭命令对无标题栏面板沿用收起回调，不销毁窗口或触碰历史。
+    @Test func standardCloseUsesPanelDismissal() throws {
+        _ = NSApplication.shared
+        let delegate = AppDelegate(), menu = delegate.makeMainMenu()
+        let item = try #require(menu.items.compactMap(\.submenu).flatMap(\.items).first { $0.keyEquivalent == "w" })
+        #expect(item.target == nil && item.action == #selector(NSWindow.performClose(_:)))
+        let panel = ClipPanel(contentRect: .init(x: 0, y: 0, width: 100, height: 100), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
+        #expect(panel.validateMenuItem(item))
+        var closed = 0; panel.onCancel = { closed += 1 }
+        #expect(NSApp.sendAction(try #require(item.action), to: panel, from: item))
+        #expect(closed == 1 && !panel.isVisible)
+    }
 }

@@ -7,16 +7,21 @@ enum DragFileStorage {
         guard data.count <= 50 * MiB else { throw StoreError.invalidSettings }
         return try write(VerifiedExportPayload(data), root: root, fileName: fileName)
     }
+    /// 命中缓存先核验字节；已被外部修改的路径保留，新的拖出使用独立副本。
     static func write(_ payload: VerifiedExportPayload, root: URL, fileName: String) throws -> (url: URL, created: Bool) {
         let data = payload.data
         guard !fileName.isEmpty, !fileName.contains("/"), !fileName.hasPrefix("."),
               ["png", "tiff", "jpg"].contains(URL(fileURLWithPath: fileName).pathExtension), data.count <= 50 * MiB else { throw StoreError.invalidSettings }
         let folder = root.appendingPathComponent("DragFiles/" + payload.digest, isDirectory: true)
-        let file = folder.appendingPathComponent(fileName)
+        var file = folder.appendingPathComponent(fileName)
         let fm = FileManager.default
-        if fm.fileExists(atPath: file.path) { return (file, false) }
-        // LC-F02：不同名称必须独立写入；已接受文件可被外部原地编辑，不能共享inode或用它作新导出的数据源。
-        // 同名旧路径继续复用且不覆盖；新路径仍以数据库校验后的原始字节进行空间预检和原子写入。
+        if let attributes = try? fm.attributesOfItem(atPath: file.path) {
+            if attributes[.type] as? FileAttributeType == .typeRegular,
+               attributes[.size] as? Int == data.count,
+               (try? Data(contentsOf: file, options: .mappedIfSafe)) == data { return (file, false) }
+            // 旧路径可能被文档引用，不覆盖、不删除；新副本仍来自已验证原始载荷。
+            file = folder.appendingPathComponent(file.deletingPathExtension().lastPathComponent + "-" + UUID().uuidString).appendingPathExtension(file.pathExtension)
+        }
         let filesystem = try fm.attributesOfFileSystem(forPath: root.path)
         guard let free = filesystem[.systemFreeSize] as? NSNumber,
               free.int64Value > Int64(data.count) * 2 + 8 * MiB else { throw StoreError.diskFull }

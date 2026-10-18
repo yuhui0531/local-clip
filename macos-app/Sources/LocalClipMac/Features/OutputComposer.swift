@@ -35,7 +35,15 @@ public enum OutputComposer {
                 representations.append(.init(SupportedType.html, html))
             }
             let result = ClipboardPayload([.init(representations, plainText: plain)])
-            try OutputBudget.validate([result])
+            do { try OutputBudget.validate([result]) }
+            catch OutputBudget.exceeded {
+                // 纯文字源没有样式可丢；只在附加的合成格式撑爆预算时退回完整正文。
+                // 含真实RTF/HTML的来源仍整体报错，不丢其原格式；普通小输出保留既有合并表示。
+                guard format == .original, items.allSatisfy({ $0.representations.allSatisfy { [SupportedType.string, SupportedType.url].contains($0.type) } }) else { throw OutputBudget.exceeded }
+                let textOnly = ClipboardPayload([.init([representations[0]], plainText: plain)])
+                try OutputBudget.validate([textOnly])
+                return textOnly
+            }
             return result
         }
         // 系统多项消费由目标决定；输出保留完整有序项目。

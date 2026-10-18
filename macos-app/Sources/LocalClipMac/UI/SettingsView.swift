@@ -76,7 +76,11 @@ public struct SettingsView: View {
                             case .installing:
                                 HStack { ProgressView().controlSize(.small); Text("正在准备安装…") }
                             case .manualOnly:
-                                if let release = updates.available { Button("查看版本 \(release.version)…") { NSWorkspace.shared.open(release.page) } }
+                                HStack {
+                                    if let release = updates.available { Button("查看版本 \(release.version)…") { NSWorkspace.shared.open(release.page) } }
+                                    // 资产稍后补齐时可立即重查，仍由用户显式选择安装。
+                                    Button(updates.checking ? "正在检查…" : "重新检查") { Task { await updates.check(manual: true) } }.disabled(updates.checking)
+                                }
                             case .failed, .idle:
                                 Button(updates.checking ? "正在检查…" : "检查更新") { Task { await updates.check(manual: true) } }.disabled(updates.checking)
                             }
@@ -129,7 +133,7 @@ public struct SettingsView: View {
                             if !permitted { Button("开启…") { AccessibilityGuide.shared.show(skipIntro: true) } }
                         }
                     } header: { Text("粘贴方式") } footer: {
-                        Text("⌘C 复制所选，⇧Return 直接粘贴纯文本；搜索框 Return 或 Tab 先进入结果。直接粘贴需要辅助功能权限，仅恢复目标应用，不能保证原输入框或光标位置；没有权限仍可复制后手动粘贴。").settingsFootnote()
+                        Text("⌘C 复制所选，⇧Return 直接粘贴纯文本；搜索框 Return 先进入结果；Tab/Shift-Tab 切换控件焦点。直接粘贴需要辅助功能权限，仅恢复目标应用，不能保证原输入框或光标位置；没有权限仍可复制后手动粘贴。").settingsFootnote()
                     }
                     Section {
                         Toggle("代码文件智能粘贴", isOn: setting(\.smartCodeFilePaste))
@@ -245,6 +249,10 @@ public struct SettingsView: View {
         }
         .onAppear { model.settingsVisibilityChanged(true); model.actualPanelHeight = max(280, model.settings.panelHeight); retention = String(model.settings.retentionDays); quota = String(model.settings.quotaBytes / MiB); refreshLogin(); permitted = MacApplicationClient().permitted }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in refreshLogin(); permitted = MacApplicationClient().permitted }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { notification in
+            // 复用设置窗口重开时应用可能一直激活；仅刷新系统登录项，不覆盖未应用草稿或改动权限。
+            if notification.object is SettingsWindow { refreshLogin() }
+        }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.willCloseNotification)) { notification in
             // 窗口保留用于再次打开；关闭时立即停止录制，不依赖SwiftUI销毁视图。
             if notification.object is SettingsWindow { model.settingsVisibilityChanged(false); stopRecording(); feedback = "" }
@@ -260,8 +268,8 @@ public struct SettingsView: View {
         Binding(get: { model.settings[keyPath: key] }, set: { value in model.updateSettings { $0[keyPath: key] = value } })
     }
     private var windowHeight: CGFloat { headerHeight + min(max(formHeight, 160), 600) + footerHeight }
-    private func applyRetention() { if let days = Int(retention), (1...365).contains(days) { model.change(.retention(days)) } else { model.message = "保留天数需为1–365" } }
-    private func applyQuota() { if let value = Int64(quota), (100...4096).contains(value) { model.change(.quota(value * MiB)) } else { model.message = "容量需为100–4096MiB" } }
+    private func applyRetention() { if let days = Int(retention), (1...365).contains(days) { model.change(.retention(days)) } else { feedback = "保留天数需为1–365"; model.message = feedback } }
+    private func applyQuota() { if let value = Int64(quota), (100...4096).contains(value) { model.change(.quota(value * MiB)) } else { feedback = "容量需为100–4096MiB"; model.message = feedback } }
     /// 应用选择器读取 bundleID，不将名称作为唯一键。
     private func chooseApplication() {
         guard let bundle = chooseBundleID(title: "选择要排除的应用") else { return }
@@ -280,13 +288,15 @@ public struct SettingsView: View {
     }
     /// 只捕获本设置窗口内用户主动录制的一次按键。
     private func recordShortcut(queue: Bool = false) {
+        // 再次点击当前录制按钮取消；切换另一个按钮仍可直接开始录制。
+        if recording && recordingQueue == queue { stopRecording(); return }
         stopRecording(); recording = true; recordingQueue = queue
         let window = NSApp.keyWindow
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak window] event in
             guard let window, event.window === window else { return event }
             if event.keyCode == 53 { stopRecording(); return nil }
             let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-            guard flags.contains(.command) || flags.contains(.option) || flags.contains(.control) else { model.message = "快捷键需包含 Command、Option 或 Control"; return nil }
+            guard flags.contains(.command) || flags.contains(.option) || flags.contains(.control) else { feedback = "快捷键需包含 Command、Option 或 Control"; model.message = feedback; return nil }
             var modifiers: UInt32 = 0
             if flags.contains(.command) { modifiers |= UInt32(cmdKey) }
             if flags.contains(.option) { modifiers |= UInt32(optionKey) }
@@ -294,6 +304,10 @@ public struct SettingsView: View {
             if flags.contains(.control) { modifiers |= UInt32(controlKey) }
             let shortcut = Shortcut(keyCode: UInt32(event.keyCode), modifiers: modifiers)
             let queue = recordingQueue
+            // 重复冲突也直接展示本次反馈，且不先注册覆盖另一个快捷键。
+            if shortcut == (queue ? model.settings.shortcut : model.settings.queueShortcut) {
+                feedback = "面板与队列快捷键不能相同"; model.message = feedback; stopRecording(); return nil
+            }
             stopRecording(); model.updateSettings { if queue { $0.queueShortcut = shortcut } else { $0.shortcut = shortcut } }; return nil
         }
     }

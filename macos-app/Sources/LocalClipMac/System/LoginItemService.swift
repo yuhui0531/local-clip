@@ -2,8 +2,11 @@
 import Foundation
 import ServiceManagement
 @MainActor public final class LoginItemService {
-    public init() {}
-    public var status: SMAppService.Status { SMAppService.mainApp.status }
+    private let readStatus: () -> SMAppService.Status
+    public init() { readStatus = { SMAppService.mainApp.status } }
+    /// 只替换状态读取供隔离验证；注册/注销仍仅由用户操作，by AI.Coding。
+    init(readStatus: @escaping () -> SMAppService.Status) { self.readStatus = readStatus }
+    public var status: SMAppService.Status { readStatus() }
     public var message: String {
         switch status {
         case .enabled: "系统已启用登录启动"

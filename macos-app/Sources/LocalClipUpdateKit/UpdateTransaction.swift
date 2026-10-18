@@ -12,6 +12,8 @@ public final class UpdateTransaction {
     /// 是否已完成应用交换；辅助程序据此区分替换前失败与需要回滚的会话。
     public private(set) var replaced = false
     private var hadData = false
+    private var dataRestored = false
+    private var appRestored = false
 
     /// 候选应用必须与安装目录同卷；真实辅助进程使用安装目录旁的私有工作目录。
     public init(target: URL, candidate: URL, dataDirectory: URL?, backupDirectory: URL) throws {
@@ -45,19 +47,30 @@ public final class UpdateTransaction {
         replaced = true
     }
 
-    /// 仅在新进程确认停止后调用；交换而非删除，让新旧数据均可恢复。
+    /// 仅在新进程停止后调用；分别记住已恢复部分，异常重试不能把旧数据再次换走。
     public func rollback() throws {
         guard replaced else { return }
-        if let dataDirectory {
-            let fm = FileManager.default
-            if hadData {
-                if fm.fileExists(atPath: dataDirectory.path) { try Self.exchange(dataDirectory, dataBackup) }
-                else { try fm.moveItem(at: dataBackup, to: dataDirectory) }
-            } else if fm.fileExists(atPath: dataDirectory.path) {
-                try fm.moveItem(at: dataDirectory, to: dataBackup)
-            }
+        var failure: (any Error)?
+        if !dataRestored {
+            do {
+                if let dataDirectory {
+                    let fm = FileManager.default
+                    if hadData {
+                        if fm.fileExists(atPath: dataDirectory.path) { try Self.exchange(dataDirectory, dataBackup) }
+                        else { try fm.moveItem(at: dataBackup, to: dataDirectory) }
+                    } else if fm.fileExists(atPath: dataDirectory.path) {
+                        try fm.moveItem(at: dataDirectory, to: dataBackup)
+                    }
+                }
+                dataRestored = true
+            } catch { failure = error }
         }
-        try Self.exchange(target, candidate)
+        // 数据恢复失败也尽力恢复应用；抛错仍阻止调用方重启不一致的旧程序。
+        if !appRestored {
+            do { try Self.exchange(target, candidate); appRestored = true }
+            catch { if failure == nil { failure = error } }
+        }
+        if let failure { throw failure }
         replaced = false
     }
 

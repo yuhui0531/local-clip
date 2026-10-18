@@ -51,7 +51,10 @@ import LocalClipCore
     }
     /// 用户可读名称，不显示 Carbon 编码。
     public static func label(_ shortcut: Shortcut) -> String {
-        let keys: [UInt32: String] = [18:"1",19:"2",20:"3",21:"4",23:"5",22:"6",26:"7",28:"8",25:"9",0:"A",1:"S",2:"D",3:"F",4:"H",5:"G",6:"Z",7:"X",8:"C",9:"V",11:"B",12:"Q",13:"W",14:"E",15:"R",16:"Y",17:"T",31:"O",32:"U",34:"I",35:"P",37:"L",38:"J",40:"K",45:"N",46:"M",49:"Space",29:"0",27:"-",24:"=",33:"[",30:"]",41:";",39:"'",42:"\\",43:",",47:".",44:"/",50:"`",36:"↩",48:"⇥"]
+        var keys: [UInt32: String] = [18:"1",19:"2",20:"3",21:"4",23:"5",22:"6",26:"7",28:"8",25:"9",0:"A",1:"S",2:"D",3:"F",4:"H",5:"G",6:"Z",7:"X",8:"C",9:"V",11:"B",12:"Q",13:"W",14:"E",15:"R",16:"Y",17:"T",31:"O",32:"U",34:"I",35:"P",37:"L",38:"J",40:"K",45:"N",46:"M",49:"Space",29:"0",27:"-",24:"=",33:"[",30:"]",41:";",39:"'",42:"\\",43:",",47:".",44:"/",50:"`",36:"↩",48:"⇥"]
+        // 可录入的非字符键也使用可读名称，不改变注册行为，by AI.Coding。
+        for (code, label) in [(kVK_LeftArrow, "←"), (kVK_RightArrow, "→"), (kVK_UpArrow, "↑"), (kVK_DownArrow, "↓"), (kVK_Delete, "⌫"), (kVK_ForwardDelete, "⌦"), (kVK_Escape, "Esc"), (kVK_Home, "Home"), (kVK_End, "End"), (kVK_PageUp, "Page Up"), (kVK_PageDown, "Page Down")] { keys[UInt32(code)] = label }
+        for (index, code) in [kVK_F1,kVK_F2,kVK_F3,kVK_F4,kVK_F5,kVK_F6,kVK_F7,kVK_F8,kVK_F9,kVK_F10,kVK_F11,kVK_F12,kVK_F13,kVK_F14,kVK_F15,kVK_F16,kVK_F17,kVK_F18,kVK_F19,kVK_F20].enumerated() { keys[UInt32(code)] = "F\(index + 1)" }
         return (shortcut.modifiers & UInt32(controlKey) != 0 ? "⌃" : "") + (shortcut.modifiers & UInt32(optionKey) != 0 ? "⌥" : "") +
             (shortcut.modifiers & UInt32(shiftKey) != 0 ? "⇧" : "") + (shortcut.modifiers & UInt32(cmdKey) != 0 ? "⌘" : "") + (keys[shortcut.keyCode] ?? "Key \(shortcut.keyCode)")
     }

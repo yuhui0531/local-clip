@@ -11,7 +11,8 @@ struct FileReferencePreviewVersion: Equatable, Sendable {
     static func read(_ urls: [URL]) -> Self? {
         guard !urls.isEmpty else { return nil }
         var files: [CodeFileReader.Identity] = [], changes: [Int64] = []
-        for url in urls {
+        // 卡片仅显示首项；后续目录或不可读引用不应挡住首项，完整引用数组仍用于顺序与计数。
+        for url in urls.prefix(1) {
             guard url.isFileURL else { return nil }
             let resolved = url.resolvingSymlinksInPath()
             var info = stat()

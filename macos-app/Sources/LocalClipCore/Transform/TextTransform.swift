@@ -70,6 +70,24 @@ public enum TextTransform: String, CaseIterable, Sendable {
         default: return true
         }
     }
+    /// 菜单一次收集适用项，复用同一正文的行、JSON和颜色分析；执行时仍独立复核。
+    public static func applicableTransforms(_ text: String) -> Set<Self> {
+        guard !text.isEmpty, text.utf8.count <= byteLimit else { return [] }
+        let parsedLines = lines(text)
+        let bodyLineCount = parsedLines.count - (parsedLines.count > 1 && parsedLines.last?.content == "" ? 1 : 0)
+        let json = (try? validateJSON(text)) != nil, color = ContentInspector.color(text) != nil
+        return Set(allCases.filter { transform in
+            switch transform {
+            case .dedent: return !commonIndent(parsedLines).isEmpty
+            case .stripPrompt: return parsedLines.contains { promptRange($0.content) != nil }
+            case .stripLineNumbers: return numberedPrefixes(parsedLines) != nil
+            case .sortLines, .uniqueLines: return bodyLineCount >= 2
+            case .formatJSON, .minifyJSON: return json
+            case .colorToRGB, .colorToHex: return color
+            default: return transform.isApplicable(text)
+            }
+        })
+    }
     /// language为highlight.js识别结果，只用于Markdown代码块标识。
     public func apply(_ text: String, language: String? = nil) throws -> String {
         guard text.utf8.count <= Self.byteLimit else { throw TransformError("内容过大（超过 4 MiB），无法转换") }
@@ -218,7 +236,11 @@ public enum TextTransform: String, CaseIterable, Sendable {
 
     // MARK: JSON：用JSONSerialization只校验并取得出错行列，输出按词法重排，保留键顺序、数字原文与转义。
     @discardableResult static func validateJSON(_ text: String) throws -> Bool {
-        do { _ = try JSONSerialization.jsonObject(with: Data(text.utf8), options: [.fragmentsAllowed]); return true }
+        _ = try parseJSON(text); return true
+    }
+    /// 详情统计复用同一次解析及原错误翻译；格式化仍按词法重排，不重写数字和键顺序。
+    static func parseJSON(_ text: String) throws -> Any {
+        do { return try JSONSerialization.jsonObject(with: Data(text.utf8), options: [.fragmentsAllowed]) }
         catch {
             let detail = ((error as NSError).userInfo[NSDebugDescriptionErrorKey] as? String) ?? ""
             let numbers = ["line", "column"].compactMap { key in

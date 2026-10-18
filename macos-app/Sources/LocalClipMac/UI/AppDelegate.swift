@@ -11,6 +11,16 @@ import LocalClipCore
     override var canBecomeMain: Bool { false }
     /// 标准取消命令也关闭历史，不依赖搜索框是否处于编辑状态。
     override func cancelOperation(_ sender: Any?) { onCancel() }
+    /// 无标题栏面板也支持标准关闭命令，沿用收起而非销毁历史窗口，by AI.Coding。
+    override func performClose(_ sender: Any?) {
+        guard attachedSheet == nil, NSApp.modalWindow == nil else { return }
+        onCancel()
+    }
+    /// AppKit 默认按 closable 样式禁用关闭项；本面板虽无标题栏，仍有安全收起动作。
+    override func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(NSWindow.performClose(_:)) { return attachedSheet == nil && NSApp.modalWindow == nil }
+        return super.validateMenuItem(menuItem)
+    }
     /// 非文本第一响应者未消费按键时，窗口兜底处理Esc。
     override func keyDown(with event: NSEvent) {
         if event.keyCode == 53 { cancelOperation(nil) }
@@ -97,6 +107,8 @@ import LocalClipCore
             sourceObserver = sources
             let board = MacPasteboardClient(access: access, observedSource: { sources.source(for: $0) })
             let capture = CaptureCoordinator(board: board, store: store)
+            // 前台暂停按实际区间收尾，不把展示用的来源推断当作可靠排除标记。
+            sources.onDeactivate = { [weak capture] in capture?.applicationDidDeactivate($0) }
             let paste = PasteCoordinator(board: board, applications: applications, store: store, capture: capture)
             let model = HistoryViewModel(store: store, capture: capture, paste: paste, derived: DerivedContentService(store: store))
             self.model = model; lastExternal = applications.target()
@@ -198,12 +210,41 @@ import LocalClipCore
     }
     /// 菜单栏始终保留，即使快捷键或权限不可用。
     private func makeMenu() {
+        NSApp.mainMenu = makeMainMenu()
         status = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         // 与应用图标同一符号，模板渲染随菜单栏明暗；暂停时按系统禁用样式变淡，by AI.Coding。
         status?.button?.image = NSImage(systemSymbolName: "square.on.square", accessibilityDescription: "LocalClip")?
             .withSymbolConfiguration(.init(pointSize: 14, weight: .medium))
         status?.button?.appearsDisabled = model?.settings.captureEnabled == false
         updateMenu()
+    }
+    /// 文本编辑快捷键由原生响应链处理；历史快捷键仍先经过本地监视器。
+    func makeMainMenu() -> NSMenu {
+        let menu = NSMenu()
+        let application = NSMenuItem(title: "LocalClip", action: nil, keyEquivalent: "")
+        let applicationMenu = NSMenu(title: "LocalClip")
+        let quit = applicationMenu.addItem(withTitle: "退出 LocalClip", action: #selector(quitApplication(_:)), keyEquivalent: "q")
+        quit.target = self; application.submenu = applicationMenu; menu.addItem(application)
+        let edit = NSMenuItem(title: "编辑", action: nil, keyEquivalent: "")
+        let editMenu = NSMenu(title: "编辑")
+        for (title, action, key, modifiers) in [
+            ("撤销", "undo:", "z", NSEvent.ModifierFlags.command),
+            ("重做", "redo:", "z", [.command, .shift]),
+            ("剪切", "cut:", "x", .command),
+            ("复制", "copy:", "c", .command),
+            ("粘贴", "paste:", "v", .command),
+            ("全选", "selectAll:", "a", .command)
+        ] {
+            let item = editMenu.addItem(withTitle: title, action: NSSelectorFromString(action), keyEquivalent: key)
+            item.keyEquivalentModifierMask = modifiers
+        }
+        edit.submenu = editMenu; menu.addItem(edit)
+        // 标准窗口响应链关闭当前窗口，历史面板保留其既有生命周期。
+        let window = NSMenuItem(title: "窗口", action: nil, keyEquivalent: "")
+        let windowMenu = NSMenu(title: "窗口")
+        windowMenu.addItem(withTitle: "关闭窗口", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        window.submenu = windowMenu; menu.addItem(window)
+        return menu
     }
     /// 状态在打开菜单前同步，所有操作指向真实服务。
     private func updateMenu() { status?.menu = makeStatusMenu() }
@@ -354,7 +395,7 @@ import LocalClipCore
         let screen = targetScreen()
         let rect = screen?.frame ?? NSRect(x: 0, y: 0, width: 1400, height: 380)
         let panelHeight = Self.clampedPanelHeight(model.settings.panelHeight, screenHeight: rect.height)
-        model.configureHistoryViewport(width: rect.width, cardWidth: HistoryView.cardSide(height: panelHeight, filtered: model.sourceFilter != nil || model.dateFilterEnabled))
+        model.configureHistoryViewport(width: rect.width, cardWidth: HistoryView.cardSide(height: panelHeight, filtered: model.hasFilterStrip))
         model.panelVisibilityChanged(true)
         model.target = lastExternal
         model.revalidateVisibleContent()
@@ -607,8 +648,10 @@ import LocalClipCore
             }
         }
         activatedObserver = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] notification in
-            let activatedPID = (notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.processIdentifier
+            let activated = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+            let activatedPID = activated?.processIdentifier, activatedBundleID = activated?.bundleIdentifier
             MainActor.assumeIsolated {
+                self?.model?.capture.applicationDidActivate(activatedBundleID)
                 guard let self, activatedPID != ProcessInfo.processInfo.processIdentifier else { return }
                 if let target = self.applications.target() {
                     // 外部应用切换使旧面板的目标失效；不能沿用旧textarea去抢焦点粘贴。
@@ -640,6 +683,12 @@ import LocalClipCore
             // 编辑器接管文字按键；Esc优先收起页内放弃确认或取消编辑，⌘S/⌘↩显式保存，IME候选期间交给文本域，by AI.Coding。
             if let editorState = self.model?.contentEditor, self.model?.contentEditorPresented == true {
                 let textEditor = event.window?.firstResponder as? NSTextView
+                // ⌘W 与取消编辑共用草稿保护，不能绕过未保存确认关闭弹窗。
+                if event.modifierFlags.intersection([.command, .option, .control, .shift]) == [.command],
+                   event.keyCode == 13, event.window !== self.settingsWindow {
+                    if textEditor?.hasMarkedText() != true { self.model?.requestCancelContentEdit() }
+                    return nil
+                }
                 if textEditor?.hasMarkedText() == true { return event }
                 if event.keyCode == 53 {
                     if editorState.confirmingDiscard { editorState.confirmingDiscard = false }

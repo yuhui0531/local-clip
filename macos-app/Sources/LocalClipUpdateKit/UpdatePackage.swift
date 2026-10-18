@@ -53,10 +53,12 @@ public enum UpdatePackage {
               info["CFBundleShortVersionString"] as? String == manifest.version,
               (info["CFBundleVersion"] as? String).flatMap(Int.init) == manifest.build,
               info["LSMinimumSystemVersion"] as? String == manifest.minimumSystemVersion else { throw UpdateFailure.invalid("更新应用身份或版本不匹配") }
-        let root = app.resolvingSymlinksInPath().path + "/"
+        guard let resolvedRoot = UpdateLocations.realPath(app) else { throw UpdateFailure.invalid("无法读取更新应用") }
+        let root = resolvedRoot + "/"
         guard let iterator = FileManager.default.enumerator(at: app, includingPropertiesForKeys: [.isSymbolicLinkKey], options: []) else { throw UpdateFailure.invalid("无法读取更新应用") }
         for case let url as URL in iterator {
-            guard url.resolvingSymlinksInPath().path.hasPrefix(root) else { throw UpdateFailure.invalid("更新应用包含外部链接") }
+            // realpath 失败（含悬空/循环链接）也拒绝；合法内部 Framework 链接仍可通过。
+            guard let resolved = UpdateLocations.realPath(url), resolved.hasPrefix(root) else { throw UpdateFailure.invalid("更新应用包含外部链接") }
         }
         _ = try runTool("/usr/bin/codesign", ["--verify", "--deep", "--strict", app.path])
         let archs = try runTool("/usr/bin/lipo", ["-archs", app.appendingPathComponent("Contents/MacOS/LocalClip").path]).split(whereSeparator: { $0.isWhitespace }).map(String.init)

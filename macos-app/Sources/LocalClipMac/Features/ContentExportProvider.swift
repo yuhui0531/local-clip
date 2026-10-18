@@ -298,10 +298,11 @@ private final class ClipWriter: NSObject, NSPasteboardWriting {
         Task { @MainActor in GUIAcceptanceProbe.exportRequest("native-promise-write", id: access.id, type: plan.fileType, provided: true, bytes: -1, at: at) }
         #endif
         let box = CompletionBox(completionHandler)
+        // 悬空符号链接也占用名称；不跟随链接判冲突，沿用自动编号且不覆盖。
         if let source = sourceFile {
             do {
                 try access.checkValid()
-                guard let target = ContentInspector.availableURL(url, exists: { FileManager.default.fileExists(atPath: $0.path) }) else { throw CocoaError(.fileWriteFileExists) }
+                guard let target = ContentInspector.availableURL(url, exists: { (try? FileManager.default.attributesOfItem(atPath: $0.path)) != nil }) else { throw CocoaError(.fileWriteFileExists) }
                 try FileManager.default.copyItem(at: source, to: target)
                 box.callback(nil)
             } catch { box.callback(error) }
@@ -316,7 +317,7 @@ private final class ClipWriter: NSObject, NSPasteboardWriting {
                     defer { try? FileManager.default.removeItem(at: lease) }
                     try access.checkValid()
                     // 同名文件不覆盖，改写为"名称 2.ext"；copyItem遇到并发出现的同名文件同样失败而不覆盖。
-                    guard let target = ContentInspector.availableURL(url, exists: { FileManager.default.fileExists(atPath: $0.path) }) else { throw CocoaError(.fileWriteFileExists) }
+                    guard let target = ContentInspector.availableURL(url, exists: { (try? FileManager.default.attributesOfItem(atPath: $0.path)) != nil }) else { throw CocoaError(.fileWriteFileExists) }
                     try FileManager.default.copyItem(at: lease, to: target)
                     box.callback(nil)
                 } catch { box.callback(error) }
@@ -383,6 +384,11 @@ struct HistoryDragBridge: NSViewRepresentable {
                     }
                     // 按在卡片按钮上时整段手势交给按钮，不选择、不拖动、不触发双击粘贴。
                     if let view = Self.active {
+                        // 卡片内联按钮也属于浮层背后；在按钮透传判断前消费关闭手势。
+                        if view.model?.dismissPopoverForBackdropClick(count: event.clickCount, timestamp: event.timestamp) == true {
+                            view.down = nil; view.pressedID = nil; view.dragged = false; Self.active = nil
+                            return nil
+                        }
                         let point = view.convert(event.locationInWindow, from: nil)
                         if view.passThroughRect.contains(CGPoint(x: point.x, y: view.isFlipped ? point.y : view.bounds.height - point.y)) { Self.active = nil }
                     }
@@ -403,11 +409,18 @@ struct HistoryDragBridge: NSViewRepresentable {
         func handle(_ event: NSEvent) -> NSEvent? {
             if nativeSessionActive { return event }
             guard let model else { return event }
+            // 在卡片选择/改名前消费浮层关闭手势，包括紧随其后的双击第二下。
+            if event.type == .leftMouseDown, model.dismissPopoverForBackdropClick(count: event.clickCount, timestamp: event.timestamp) {
+                down = nil; pressedID = nil; dragged = false
+                return nil
+            }
             // 编辑时事件交给原生文本域，不能吞掉定位光标和文字选择；内容编辑打开时先走取消保护，by AI.Coding。
             if model.renamingID == id { return event }
             if model.contentEditorPresented {
+                // 外点只取消编辑；清掉整段手势，不能让同一次 mouseUp 选择或双击粘贴。
+                down = nil; pressedID = nil; dragged = false
                 if event.type == .leftMouseDown { model.requestCancelContentEdit() }
-                if model.contentEditorPresented { return nil }
+                return nil
             }
             if event.type == .leftMouseDown {
                 guard !model.dragActive else { return nil }

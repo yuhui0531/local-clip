@@ -63,7 +63,8 @@ struct SyntaxText: View {
     }()
 
     static func content(_ text: String, highlight: SyntaxHighlight, size: CGFloat, dark: Bool, spacing: CGFloat) -> NSAttributedString {
-        let spanKey = highlight.spans.map { "\($0.range.location):\($0.range.length):\($0.style)" }.joined(separator: ";")
+        // 身份只替代范围串；全文、字号与主题仍参与键，防止同前缀不同正文串缓存。
+        let spanKey = highlight.cacheIdentity
         let key = NSString(string: "\(text)\u{1f}\(highlight.language)\u{1f}\(spanKey)\u{1f}\(dark)\u{1f}\(size.bitPattern)\u{1f}\(spacing.bitPattern)")
         if let cached = cache.object(forKey: key) { return cached.content }
 

@@ -1,5 +1,5 @@
 #!/bin/bash
-# 制作 macOS 安装磁盘映像 (DMG) 与 ZIP 压缩包
+# 制作 macOS 安装磁盘映像与 ZIP，校验既有发布构建而不覆盖签名，by AI.Coding。
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "$0")" && pwd)"
@@ -13,7 +13,17 @@ if [ ! -d "$app_path" ]; then
     bash "$script_dir/build-app.sh" release
 fi
 
-version="$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$plist_path" 2>/dev/null || echo "1.0.0")"
+# 已有 App 必须来自当前输入的 release 构建；不静默重建覆盖预签名产物。
+expected="release $(python3 "$script_dir/build-inputs.py")"
+[ -f "$dist_dir/.localclip-build-inputs" ] && [ "$(cat "$dist_dir/.localclip-build-inputs")" = "$expected" ] || {
+    echo "安装包不是当前源码的发布构建，请先运行 build-app.sh release" >&2; exit 1;
+}
+for key in CFBundleShortVersionString CFBundleVersion; do
+    [ "$(/usr/libexec/PlistBuddy -c "Print :$key" "$plist_path")" = "$(/usr/libexec/PlistBuddy -c "Print :$key" "$app_path/Contents/Info.plist")" ] || {
+        echo "安装包版本与源码不一致，请重新构建" >&2; exit 1;
+    }
+done
+version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app_path/Contents/Info.plist")"
 # tag 与安装包只用版本号（如 v0.3.17），构建号仍写在 Info.plist 与 Release 标题中，by AI.Coding。
 full_version="v${version}"
 

@@ -7,6 +7,8 @@ import LocalClipCore
     private var sampledCount: Int
     private var sampledSource = SourceAttribution.unknown
     private var observer: NSObjectProtocol?
+    /// 前台区间结束只用于推进暂停采集基线，不改变来源归因的可信度。
+    public var onDeactivate: ((String?) -> Void)?
     private static let icons = NSCache<NSString, NSImage>()
 
     public init(changeCount: @escaping () -> Int) {
@@ -16,14 +18,17 @@ import LocalClipCore
         observer = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didDeactivateApplicationNotification, object: nil, queue: .main
         ) { [weak self] notification in
-            // 只把可发送的PID带入MainActor，不跨隔离域传递Notification.userInfo。
-            let pid = (notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.processIdentifier
+            // 只带入可发送的身份值；进程已退出也保留通知中的排除身份。
+            let eventApplication = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+            let pid = eventApplication?.processIdentifier, bundleID = eventApplication?.bundleIdentifier
             MainActor.assumeIsolated {
                 guard let self else { return }
+                let application = pid.flatMap { NSRunningApplication(processIdentifier: $0) }
+                self.onDeactivate?(bundleID)
                 let count = self.changeCount()
                 guard count != self.sampledCount else { return }
                 self.sampledCount = count
-                self.sampledSource = Self.attribution(pid.flatMap { NSRunningApplication(processIdentifier: $0) })
+                self.sampledSource = Self.attribution(application)
             }
         }
     }

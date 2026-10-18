@@ -25,7 +25,7 @@ public struct HistoryView: View {
             let dense = viewport.size.height < 300
             let toolbarHeight = Self.toolbarHeight(dense: dense)
             let footerHeight = Self.footerHeight(dense: dense)
-            let filterHeight: CGFloat = model.sourceFilter != nil || model.dateFilterEnabled || !model.queryConditions.isEmpty || !model.queryProblems.isEmpty || model.pasteQueueActive ? 22 : 0
+            let filterHeight: CGFloat = model.hasFilterStrip ? 22 : 0
             // 正方形宽高一起收缩，完整边界始终留在实际视口内。
             let cardHeight = Self.cardSide(height: viewport.size.height, filtered: filterHeight > 0)
             VStack(spacing: 0) {
@@ -50,7 +50,7 @@ public struct HistoryView: View {
                     }
                     HistorySearchInput(model: model, input: model.queryState, focus: model.focusRequest).frame(width: compact ? 160 : 240, height: 30)
                     HStack(spacing: 2) {
-                        let filtering = model.sourceFilter != nil || model.dateFilterEnabled
+                        let filtering = model.hasFilterSelection
                         ToolbarIconButton(symbol: filtering ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle", tint: filtering ? .accentColor : nil, help: "筛选") { model.showingFilters.toggle() }
                             .popover(isPresented: $model.showingFilters) { FilterEditor(model: model) }
                         // 监控开关收进更多菜单，停止状态由底栏状态与“开始监控”入口提示，by AI.Coding。
@@ -228,7 +228,7 @@ private struct HistoryStrip: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 // 换筛选整组重建滚动区，新列表首帧就在最左侧，不先按旧偏移绘制再跳回，by AI.Coding。
-                HistoryScroller(strip: self, list: list).id(list.snapshot.scrollEpoch)
+                HistoryScroller(strip: self, list: list, epoch: list.snapshot.scrollEpoch).id(list.snapshot.scrollEpoch)
             }
         }.frame(maxWidth: .infinity).frame(height: cardHeight + 20).clipped()
         // 隐藏状态用明确占位替代整层模糊，避免正文轮廓泄露及持续模糊合成，by AI.Coding。
@@ -251,7 +251,7 @@ private struct HistoryStrip: View {
             EmptyView()
             #endif
         }
-        .onChange(of: list.snapshot.selectedID) { _, _ in if model.showingDetail { model.showingDetail = false } }
+
     }
 }
 /// 滚动位置与滚轮状态随滚动区身份重建；列表就地刷新时身份不变，保持浏览位置，by AI.Coding。
@@ -259,6 +259,7 @@ private struct HistoryScroller: View {
     let strip: HistoryStrip
     /// 列表就地刷新必须重算本视图，不能依赖父视图传入的值相等判断。
     @ObservedObject var list: HistoryListState
+    let epoch: Int
     @State private var scrollPosition = ScrollPosition(edge: .leading)
     @State private var scrollWheelState = HistoryScrollWheel.State()
     var body: some View {
@@ -266,7 +267,7 @@ private struct HistoryScroller: View {
             ScrollView(.horizontal) {
                 LazyHStack(spacing: 16) {
                     ForEach(Array(strip.model.items.enumerated()), id: \.element.id) { index, item in
-                        ClipCard(item: item, index: index, selected: strip.model.selectedIDs.contains(item.id) || (strip.model.contentEditorPresented && strip.model.contentEditor?.id == item.id), dragging: strip.draggedIDs.contains(item.id), editing: strip.renamingID == item.id, hidden: strip.hideContents, quickModifiers: strip.model.settings.quickModifiers, height: strip.cardHeight, categoryID: strip.categoryID, categories: strip.categories, target: strip.target, model: strip.model, previewGeneration: strip.focusRequest).equatable().id(item.id)
+                        ClipCard(item: item, index: index, selected: strip.model.selectedIDs.contains(item.id) || (strip.model.contentEditorPresented && strip.model.contentEditor?.id == item.id), dragging: strip.draggedIDs.contains(item.id), editing: strip.renamingID == item.id, hidden: strip.hideContents, quickModifiers: strip.model.settings.quickModifiers, height: strip.cardHeight, categoryID: strip.categoryID, categories: strip.categories, target: strip.target, selectionCount: strip.model.selectedIDs.contains(item.id) ? strip.model.selectedIDs.count : 0, selectionHasNonText: strip.model.items.contains { strip.model.selectedIDs.contains($0.id) && ($0.kind == .image || $0.kind == .mixed) }, queueShortcut: strip.model.settings.queueShortcut, model: strip.model, previewGeneration: strip.focusRequest).equatable().id(item.id)
                             // 详情贴着所选卡片弹出，而不是远在底栏右侧的按钮，by AI.Coding。
                             // 详情内容备好后才弹出，弹出即最终尺寸，by AI.Coding。
                             .popover(isPresented: Binding(get: { strip.showingDetail && strip.model.selectedID == item.id && strip.model.detail?.summary.id == item.id }, set: { if !$0 { strip.model.showingDetail = false } }), attachmentAnchor: .rect(.bounds), arrowEdge: .top) {
@@ -287,7 +288,7 @@ private struct HistoryScroller: View {
                 .scrollPosition($scrollPosition)
                 .onScrollGeometryChange(for: HistoryScrollMetrics.self) { geometry in
                     HistoryScrollMetrics(offset: max(0, geometry.contentOffset.x), maximum: max(0, geometry.contentSize.width - geometry.containerSize.width), viewport: geometry.containerSize.width)
-                } action: { _, metrics in scrollWheelState.update(metrics); strip.model.historyScrolled(offset: metrics.offset) }
+                } action: { _, metrics in scrollWheelState.update(metrics); strip.model.historyScrolled(offset: metrics.offset, epoch: epoch) }
                 .background(HistoryScrollWheel(state: scrollWheelState) { x in scrollPosition.scrollTo(x: x) })
                 .onChange(of: strip.model.selectedID) { _, id in
                     if let id, let index = strip.model.items.firstIndex(where: { $0.id == id }), scrollWheelState.needsReveal(index: index, cardWidth: strip.cardHeight) {
@@ -348,10 +349,31 @@ private struct HistoryListStatistics: View {
         }
     }
 }
+/// 底栏次要按钮统一悬停与按下反馈，保留系统按钮的键盘及禁用行为，by AI.Coding。
+private struct FooterButtonStyle: ButtonStyle {
+    var prominent = false
+    func makeBody(configuration: Configuration) -> some View { Surface(configuration: configuration, prominent: prominent) }
+    private struct Surface: View {
+        let configuration: ButtonStyleConfiguration
+        let prominent: Bool
+        @Environment(\.isEnabled) private var enabled
+        @State private var hovering = false
+        var body: some View {
+            configuration.label
+                .padding(.horizontal, prominent ? 0 : 4).padding(.vertical, prominent ? 0 : 3)
+                .frame(minWidth: 24, minHeight: 24)
+                .contentShape(RoundedRectangle(cornerRadius: 5))
+                .background(Color.primary.opacity(!prominent && enabled ? (configuration.isPressed ? 0.14 : hovering ? 0.07 : 0) : 0), in: RoundedRectangle(cornerRadius: 5))
+                .opacity(prominent && configuration.isPressed ? 0.8 : 1)
+                .onHover { hovering = $0 }
+        }
+    }
+}
 private struct HistorySelectionActions: View {
     @ObservedObject var model: HistoryViewModel
     @ObservedObject var footer: HistoryFooterState
     let compact: Bool
+    @State private var canCopyText = false
     var body: some View {
         let value = footer.snapshot
         Group {
@@ -363,30 +385,36 @@ private struct HistorySelectionActions: View {
                         if let selected { model.change(.favorites(model.orderedSelection, !selected.isFavorite)) }
                     }.disabled(selected == nil || !model.canDisplayContents)
                     Button("纯文本复制") { model.perform(.plainText, action: .copy) }
-                        .disabled(value.selectedMetadata?.hasTextRepresentations != true || selected == nil)
+                        .disabled(!canCopyText || selected == nil)
                 } label: { Label("更多", systemImage: "ellipsis.circle") }
                     .menuStyle(.borderlessButton).fixedSize().disabled(selected == nil)
             } else {
                 Menu { categoryItems(value, divided: true) } label: { Label("分类", systemImage: "folder") }
                     .menuStyle(.borderlessButton).fixedSize().disabled(selected == nil || !model.canDisplayContents || value.selectedMetadata?.summary.id != selected?.id)
-                Button { if let selected { model.change(.favorites(model.orderedSelection, !selected.isFavorite)) } } label: { Image(systemName: selected?.isFavorite == true ? "star.fill" : "star").foregroundStyle(selected?.isFavorite == true ? Color.orange : Color.secondary).frame(width: 18) }.buttonStyle(.plain).help("收藏/取消收藏").accessibilityLabel(selected?.isFavorite == true ? "取消收藏" : "收藏").disabled(!model.canDisplayContents)
+                Button { if let selected { model.change(.favorites(model.orderedSelection, !selected.isFavorite)) } } label: { Image(systemName: selected?.isFavorite == true ? "star.fill" : "star").foregroundStyle(selected?.isFavorite == true ? Color.orange : Color.secondary).frame(width: 18) }.buttonStyle(FooterButtonStyle()).help("收藏/取消收藏").accessibilityLabel(selected?.isFavorite == true ? "取消收藏" : "收藏").disabled(!model.canDisplayContents)
             }
-            Button { model.showingDetail.toggle() } label: { if compact { Image(systemName: "info.circle") } else { Label("详情", systemImage: "info.circle") } }.buttonStyle(.plain)
+            Button { model.showingDetail.toggle() } label: { if compact { Image(systemName: "info.circle") } else { Label("详情", systemImage: "info.circle") } }.buttonStyle(FooterButtonStyle())
                 .accessibilityLabel("详情").help("详情 · ⌘I").disabled(!model.canDisplayContents)
             // 编辑与详情并列，紧凑模式沿用图标按钮；多选不隐式修改其中一张。
             Button { if let id = value.selectedID { model.beginContentEdit(id) } } label: {
                 if compact { Image(systemName: "square.and.pencil") } else { Label("编辑", systemImage: "square.and.pencil") }
-            }.buttonStyle(.plain).accessibilityLabel("编辑内容").help("编辑内容 · ⌘E")
+            }.buttonStyle(FooterButtonStyle()).accessibilityLabel("编辑内容").help("编辑内容 · ⌘E")
                 .disabled(!model.canDisplayContents || value.selectedCount != 1 || ![ClipKind.text, .url].contains(selected?.kind ?? .mixed))
             Divider().frame(height: 20)
             if !compact {
                 Button { model.perform(.plainText, action: .copy) } label: { Label("纯文本复制", systemImage: "doc.plaintext") }
-                    .disabled(value.selectedMetadata?.hasTextRepresentations != true).buttonStyle(.plain).foregroundStyle(.secondary).help("纯文本复制")
+                    .disabled(!canCopyText).buttonStyle(FooterButtonStyle()).foregroundStyle(.secondary).help("纯文本复制")
             }
             // Enter执行的动作作为主按钮并标↩，另一个为次按钮，图标与按键行为一致。
             if model.settings.defaultAction == .directPaste { copyButton(primary: false); pasteButton(primary: true) }
             else { pasteButton(primary: false); copyButton(primary: true) }
         }.disabled(value.selectedID == nil)
+        // 只有真实换选/内容变化才重查能力；不能沿用旧组结果，也不因分页或元数据回填闪烁。
+        .task(id: value.textCapability) {
+            canCopyText = false
+            let allowed = await model.canCopyAsText(value.selectedIDs)
+            if !Task.isCancelled { canCopyText = allowed }
+        }
     }
     /// 勾选所选记录已属分类，点按切换；紧凑菜单与分类菜单共用。
     @ViewBuilder private func categoryItems(_ value: HistoryFooterState.Snapshot, divided: Bool = false) -> some View {
@@ -409,14 +437,14 @@ private struct HistorySelectionActions: View {
     @ViewBuilder private func pasteButton(primary: Bool) -> some View {
         Button { model.perform(action: .directPaste) } label: {
             if primary { primaryLabel("粘贴", "↩") } else { Label("直接粘贴", systemImage: "arrow.right.doc.on.clipboard") }
-        }.buttonStyle(.plain)
+        }.buttonStyle(FooterButtonStyle(prominent: primary))
             .help("粘贴到：\(MacApplicationClient.targetName(model.target))；请确认目标输入位置")
             .accessibilityLabel("直接粘贴到：\(MacApplicationClient.targetName(model.target))")
     }
     @ViewBuilder private func copyButton(primary: Bool) -> some View {
         Button { model.perform(action: .copy) } label: {
             if primary { primaryLabel("复制", "↩") } else { Label("复制 ⌘C", systemImage: "doc.on.doc") }
-        }.buttonStyle(.plain).keyboardShortcut("c", modifiers: .command)
+        }.buttonStyle(FooterButtonStyle(prominent: primary)).keyboardShortcut("c", modifiers: .command)
     }
 }
 private struct CategoryEditor: View {
@@ -463,6 +491,10 @@ private struct ClipCard: View, Equatable {
     let categoryID: String?
     let categories: [ClipCategory]
     let target: TargetToken?
+    // 菜单结构依赖作为值传入；其他卡片加入多选也会使当前卡菜单更新。
+    let selectionCount: Int
+    let selectionHasNonText: Bool
+    let queueShortcut: Shortcut
     let model: HistoryViewModel
     let previewGeneration: UUID
     @State private var checkedFileGeneration: UUID?
@@ -524,6 +556,7 @@ private struct ClipCard: View, Equatable {
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.item == rhs.item && lhs.index == rhs.index && lhs.selected == rhs.selected && lhs.dragging == rhs.dragging && lhs.editing == rhs.editing && lhs.hidden == rhs.hidden && lhs.quickModifiers == rhs.quickModifiers && lhs.height == rhs.height
             && lhs.categoryID == rhs.categoryID && lhs.categories == rhs.categories && lhs.target == rhs.target
+            && lhs.selectionCount == rhs.selectionCount && lhs.selectionHasNonText == rhs.selectionHasNonText && lhs.queueShortcut == rhs.queueShortcut
             && (lhs.item.kind != .file || lhs.previewGeneration == rhs.previewGeneration)
     }
     private var code: Bool { item.kind == .text && detectedLanguage != nil }
@@ -581,7 +614,9 @@ private struct ClipCard: View, Equatable {
     private var cardTitle: some View {
         Group {
             if editing {
-                TextField("名称", text: $nameDraft).textFieldStyle(.plain).focused($nameFocused)
+                TextField("名称", text: Binding(get: { nameDraft }, set: {
+                    if nameDraft != $0 { nameDraft = $0; model.renameDraftChanged(id: item.id) }
+                })).textFieldStyle(.plain).focused($nameFocused)
                     .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 3))
                     .onSubmit { model.saveRename(id: item.id, title: nameDraft) }
                     .onExitCommand { model.cancelRename() }
@@ -644,7 +679,7 @@ private struct ClipCard: View, Equatable {
                                 Image(systemName: "square.and.pencil").font(.system(size: 12.5)).frame(width: 18, height: 18).contentShape(Rectangle())
                             }.buttonStyle(.plain).foregroundStyle(Color.accentColor).help("编辑内容 · ⌘E").accessibilityLabel("编辑内容")
                         }
-                        Button { model.select(item.id); DispatchQueue.main.async { model.showingDetail = true } } label: {
+                        Button { model.showDetail(id: item.id) } label: {
                             Image(systemName: "info.circle").font(.system(size: 13)).frame(width: 18, height: 18).contentShape(Rectangle())
                         }.buttonStyle(.plain).foregroundStyle(Color.accentColor).help("详情 · ⌘I").accessibilityLabel("详情")
                     }
@@ -710,12 +745,15 @@ private struct ClipCard: View, Equatable {
     private var menuCard: some View {
         interactiveCard.contextMenu {
                 Button("原格式复制") { if !model.selectedIDs.contains(item.id) { model.select(item.id) }; model.perform(.original, action: .copy) }
+                // 与原格式复制共用选择规则和输出管线；无文本项由整组校验拒绝，绝不静默跳过。
+                Button("纯文本复制") { if !model.selectedIDs.contains(item.id) { model.select(item.id) }; model.perform(.plainText, action: .copy) }.disabled(hidden)
+                Button("直接粘贴") { if !model.selectedIDs.contains(item.id) { model.select(item.id) }; model.perform(action: .directPaste) }.disabled(hidden)
                 Button("转换后粘贴… · ⌘T") { if !model.selectedIDs.contains(item.id) { model.select(item.id) }; model.showTransformMenu() }
                     .disabled(item.kind == .image || item.kind == .file)
                 if item.kind == .image || item.kind == .mixed || isImageFile { Button("复制图中文字") { model.copyImageText(id: item.id) }.disabled(hidden) }
                 // 多选时才出现；换行沿用原有合并（含原格式），其余只输出纯文本；含图片时整组置灰，by AI.Coding。
-                if model.selectedIDs.count > 1 && model.selectedIDs.contains(item.id) {
-                    let blocked = model.items.contains { model.selectedIDs.contains($0.id) && ($0.kind == .image || $0.kind == .mixed) }
+                if selectionCount > 1 && selected {
+                    let blocked = selectionHasNonText
                     Menu("合并粘贴") {
                         ForEach(JoinStyle.allCases, id: \.self) { style in
                             Button(style.title) { style == .newline ? model.perform() : model.perform(.plainText, join: style) }
@@ -742,8 +780,8 @@ private struct ClipCard: View, Equatable {
                 Divider()
                 Button("在历史中定位 · ⌘G") { model.select(item.id); model.jumpToHistory() }
                 Menu("在分类中定位") { ForEach(categories) { category in Button(category.name) { model.select(item.id); model.jumpToHistory(category: category.id) } } }
-                // 选择变化会关闭旧详情；等选择生效后再打开，避免刚打开即被关闭。
-                Button("详情") { model.select(item.id); DispatchQueue.main.async { model.showingDetail = true } }
+                // 显式详情入口同步完成选择，再开启目标详情。
+                Button("详情") { model.showDetail(id: item.id) }
                 Button("预览 · Space") { model.select(item.id); model.quickLook() }
                 Button("打开 · ⌘O") { model.select(item.id); model.openSelected() }
                 if item.kind != .file { Button("存储为文件…") { model.select(item.id); model.saveSelectedToFile() } }
@@ -952,7 +990,7 @@ struct ClipInspector: View {
                             .buttonStyle(ToolbarTabStyle(selected: true)).disabled(model.settings.hideContents).help("识别图片中的文字并复制")
                     }
                     // 详情内可一键切入同卡原位编辑；混合记录仍保留原有文字转换入口，by AI.Coding。
-                    if [ClipKind.text, .url].contains(detail.summary.kind), detail.payload.editableText != nil {
+                    if [ClipKind.text, .url].contains(detail.summary.kind), model.detailEditable {
                         Button { model.beginContentEdit(detail.summary.id) } label: { Label("编辑", systemImage: "square.and.pencil") }
                             .buttonStyle(ToolbarTabStyle(selected: true)).disabled(model.settings.hideContents).help("编辑内容 · ⌘E")
                     }

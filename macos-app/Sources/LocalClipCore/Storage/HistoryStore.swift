@@ -281,7 +281,10 @@ public actor HistoryStore: HistoryRepository {
                         else { try db.run("INSERT INTO blobs VALUES(?,?,?)", [.text(digest), .integer(Int64(representation.data.count)), .blob(representation.data)]) }
                         try db.run("INSERT INTO representations VALUES(?,?,?,?)", [.text(id), .integer(Int64(index)), .text(representation.type), .text(digest)])
                     }
-                    if let text = extractedText(item) {
+                    let extracted = extractedText(item)
+                    // 与旧索引修复规则一致：无法解码的文字保留原字节，并登记空索引避免反复补建。
+                    if extracted != nil || item.representations.contains(where: { [SupportedType.fileURL, SupportedType.string, SupportedType.url, SupportedType.rtf, SupportedType.html].contains($0.type) }) {
+                        let text = extracted ?? ""
                         try db.run("INSERT INTO text_content VALUES(?,?,?,?)", [.text(id), .integer(Int64(index)), .text(text.utf8.count > MiB && item.representations.contains(where: { $0.type == SupportedType.string }) ? "" : text), .text(SearchNormalizer.normalize(text))])
                     }
                 }
@@ -561,9 +564,10 @@ public actor HistoryStore: HistoryRepository {
             // 仅第一页需要候选缓存；候选JSON只随首行返回，by AI.Coding。
             let collectCandidates = request.cursor == nil && includeMatchContext
             let candidateProjection = collectCandidates ? "CASE WHEN page.id IS (SELECT id FROM page ORDER BY matchRank,lastCopiedAtMs DESC,id LIMIT 1) THEN (SELECT candidateIDs FROM candidate_ids) END" : "NULL"
+            // 大库匹配/排序只物化身份与排序字段，分页后在同一快照回取完整元数据，避免重复搬运预览等宽列。
             let sql = """
             WITH matches AS MATERIALIZED (
-                SELECT clips.*, (\(protectedSQL)) AS isProtected,
+                SELECT clips.id, clips.lastCopiedAtMs,
                 -- 自定义名称命中与正文开头同级；正文排名规则不变，by AI.Coding。
                 MIN(CASE WHEN instr(normalizedTitle,?1)>0 THEN 1 ELSE 4 END, clip_literal_rank(
                     (SELECT CAST(group_concat(normalizedText,char(10)) AS BLOB)
@@ -579,8 +583,9 @@ public actor HistoryStore: HistoryRepository {
                     THEN (SELECT json_group_array(id) FROM candidate_set) END AS candidateIDs
             ), page AS MATERIALIZED (
                 SELECT * FROM matching ORDER BY matchRank,lastCopiedAtMs DESC,id LIMIT ? OFFSET ?
-            ) SELECT page.*,\(candidateProjection) AS candidateIDs
+            ) SELECT clips.*, (\(protectedSQL)) AS isProtected, page.matchRank,\(candidateProjection) AS candidateIDs
               FROM (SELECT 1) LEFT JOIN page ON true
+              LEFT JOIN clips ON clips.id=page.id
               ORDER BY page.matchRank,page.lastCopiedAtMs DESC,page.id
             """
             let rows = try db.rows(sql, [.text(needle)] + filters + [.integer(Int64(size + 1)), .integer(Int64(offset))])
@@ -594,18 +599,21 @@ public actor HistoryStore: HistoryRepository {
                 if !includeMatchContext { return summary(row) }
                 let key = SearchContextKey(id: row.text("id"), literal: needle)
                 if useContextCache, let cached = searchContexts[key] { return summary(row, context:cached) }
-                let context: String
+                var context: String
                 if row.int("matchRank") == 3 { context = row.text("sourceName") }
                 else {
                     let texts = try db.rows("SELECT plainText,normalizedText FROM \(indexed) WHERE clipID=? ORDER BY itemIndex", [.text(row.text("id"))])
                     if texts.contains(where: { $0.text("plainText").isEmpty }) {
                         let body = try readPayload(db, id: row.text("id")).items.compactMap(\.plainText).joined(separator: "\n")
-                        context = SearchNormalizer.context(body, literal: request.literal)
+                        // 单项大文本已有完整规范化索引；多项可能含无法解码的占位，保留原拼接语义。
+                        context = SearchNormalizer.context(body, normalized: texts.count == 1 ? texts[0].text("normalizedText") : SearchNormalizer.normalize(body), literal: request.literal)
                     } else {
                         context = SearchNormalizer.context(texts.map { $0.text("plainText") }.joined(separator: "\n"),
                             normalized: texts.map { $0.text("normalizedText") }.joined(separator: "\n"), literal: request.literal)
                     }
                 }
+                // 空命中摘要不抹掉旧记录已有的预览；来源/正文非空片段保持原样。
+                if context.isEmpty { context = row.text("previewText") }
                 // 仅缓存有界命中片段；修订变更清空，筛选、可见性及排序仍每次查询，by AI.Coding。
                 if useContextCache, searchContexts.count < 256, context.utf8.count <= 4096 { searchContexts[key] = context }
                 return summary(row, context:context)
@@ -641,7 +649,14 @@ public actor HistoryStore: HistoryRepository {
     }
     /// 变更预览带数据库/设置版本，确认过期必须重新预览。
     public func preview(_ change: HistoryChange) throws -> ChangePreview {
-        let settings = try settings(); let at = clock.now()
+        let result = try makePreview(change, at: clock.now())
+        if previews.count >= 64 { previews.removeAll() }
+        previews[result.token] = result
+        return result
+    }
+    /// 同一评估时刻复用预览规则；执行前检查纯时间变化，不创建额外确认令牌。
+    private func makePreview(_ change: HistoryChange, at: Instant) throws -> ChangePreview {
+        let settings = try settings()
         var message = "删除后立即移除；30秒内、合计50MiB以内可在本会话撤销。超出预算不可撤销。"
         var confirmation = true; var count = 0
         var protectedCount = 0; var canUndo: Bool?; var undoUnavailableReason: String?
@@ -655,7 +670,7 @@ public actor HistoryStore: HistoryRepository {
                 confirmation = !value && expired && !otherProtection; count = confirmation ? 1 : 0
                 message = confirmation ? "取消收藏后将按保留规则删除" : "更改收藏"
             case .favorites(let ids, let value):
-                count = try expiredUnprotectedCount(db, ids: ids, removingCategory: nil, removingFavorite: !value, settings: settings, at: at)
+                count = value ? 0 : try expiredUnprotectedCount(db, ids: ids, removingCategory: nil, removingFavorite: true, settings: settings, at: at)
                 confirmation = !value && count > 0; message = "批量更改收藏；失去最后保护的到期记录将删除"
             case .category(let ids, let category, let included):
                 guard try db.scalarInt("SELECT COUNT(*) FROM categories WHERE id=?", [.text(category)]) == 1 else { throw CategoryError.notFound }
@@ -708,8 +723,6 @@ public actor HistoryStore: HistoryRepository {
         }
         let preview = ChangePreview(token: UUID(), operation: change, storeRevision: revision, settingsRevision: settings.revision,
             affectedCount: count, estimatedReclaimBytes: estimated, requiresConfirmation: confirmation, message: message, protectedCount: protectedCount, canUndo: canUndo, undoUnavailableReason: undoUnavailableReason)
-        if previews.count >= 64 { previews.removeAll() }
-        previews[preview.token] = preview
         return preview
     }
     /// 用户取消不会调用 apply；token 单次且重新校验版本。
@@ -719,6 +732,14 @@ public actor HistoryStore: HistoryRepository {
         let current = try strategy.read { try self.revision($0) }
         guard preview.storeRevision == current, preview.settingsRevision == settings.revision else { throw StoreError.stalePreview }
         let before = try usage().measuredTotal; let oldCount = try strategy.read { try $0.scalarInt("SELECT COUNT(*) FROM clips") }; let at = clock.now()
+        // 数据库版本不含时钟；删除集合只会随到期边界扩展，数量改变必须重新确认。
+        switch preview.operation {
+        case .delete, .clearOrdinary: break
+        default:
+            let latest = try makePreview(preview.operation, at: at)
+            guard latest.affectedCount == preview.affectedCount,
+                  latest.requiresConfirmation == preview.requiresConfirmation else { throw StoreError.stalePreview }
+        }
         if case .quota(let bytes) = preview.operation { settings.quotaBytes = bytes }
         if case .retention(let days) = preview.operation { settings.retentionDays = days }
         let undoCandidate = try makeUndo(preview.operation)
@@ -733,7 +754,7 @@ public actor HistoryStore: HistoryRepository {
                 }
             case .favorites(let ids, let value):
                 for id in Set(ids) { try db.run("UPDATE clips SET isFavorite=? WHERE id=?", [.integer(value ? 1 : 0), .text(id)]) }
-                try removeExpired(db, settings: settings, at: at)
+                if !value { try removeExpired(db, settings: settings, at: at, ids: ids) }
             case .category(let ids, let category, let included):
                 // 多选拖入保持原有从左到右顺序，不能经Set迭代随机打乱，by AI.Coding。
                 var seen: Set<ClipID> = []
@@ -743,10 +764,11 @@ public actor HistoryStore: HistoryRepository {
                     if !included { try db.run("DELETE FROM clip_categories WHERE categoryID=? AND clipID=?", [.text(category), .text(id)]) }
                 }
                 if included { try prependCategoryItems(ordered, categoryID: category, db: db) }
-                try removeExpired(db, settings: settings, at: at)
+                if !included { try removeExpired(db, settings: settings, at: at, ids: ordered) }
             case .deleteCategory(let category):
+                let ids = try db.rows("SELECT clipID FROM clip_categories WHERE categoryID=?", [.text(category)]).map { $0.text("clipID") }
                 try db.run("DELETE FROM categories WHERE id=?", [.text(category)])
-                try removeExpired(db, settings: settings, at: at)
+                try removeExpired(db, settings: settings, at: at, ids: ids)
             case .delete(let ids): for id in Set(ids) { try db.run("DELETE FROM clips WHERE id=?", [.text(id)]) }
             case .clearOrdinary: try db.exec("DELETE FROM clips WHERE \(ordinarySQL)")
             case .retention, .quota:
@@ -884,6 +906,13 @@ public actor HistoryStore: HistoryRepository {
         guard let cutoff = retentionCutoff(settings: settings, at: at) else { return }
         try db.run("DELETE FROM clips WHERE \(ordinarySQL) AND lastCopiedAtMs<=?", [.integer(cutoff)])
     }
+    /// 局部保护变更只清理该次目标；全库定时清理仍使用原入口。
+    private func removeExpired(_ db: SQLiteConnection, settings: SettingsSnapshot, at: Instant, ids: [ClipID]) throws {
+        guard let cutoff = retentionCutoff(settings: settings, at: at) else { return }
+        for id in Set(ids) {
+            try db.run("DELETE FROM clips WHERE id=? AND \(ordinarySQL) AND lastCopiedAtMs<=?", [.text(id), .integer(cutoff)])
+        }
+    }
     /// 最后保护移除前仅计数，供用户确认，不读取正文。
     private func expiredUnprotectedCount(_ db: SQLiteConnection, ids: [ClipID], removingCategory: String?, removingFavorite: Bool, settings: SettingsSnapshot, at: Instant) throws -> Int {
         guard let cutoff = retentionCutoff(settings: settings, at: at) else { return 0 }
@@ -1015,14 +1044,20 @@ public actor HistoryStore: HistoryRepository {
                 }
             }
         }
+        // 撤销包可能来自尚未补建索引的旧记录，不能继承删除期间的完整标记。
+        noMissingTextContentRevision = nil
         undoPacket = nil; undoExpiry?.cancel(); undoExpiry = nil
     }
 
     /// 只公开只读延迟导出句柄，拖拽开始只查询类型和版本，不读取图片正文。
     public func exportAccess(id: ClipID) throws -> ClipExportAccess {
         let metadata = try metadata(id: id, at: clock.now())
-        let types = try strategy.read { try $0.rows("SELECT DISTINCT type FROM representations WHERE clipID=? ORDER BY type", [.text(id)]).map { $0.text("type") } }
-        return ClipExportAccess(database: strategy.databaseURL, id: id, revision: metadata.revision, types: types, contentHash: try strategy.read { try $0.scalarText("SELECT contentHash FROM clips WHERE id=?", [.text(id)]) }, clock: clock)
+        // 同一只读连接取得类型与内容身份，保留此前元数据可见性检查。
+        let (types, hash) = try strategy.read { db in
+            (try db.rows("SELECT DISTINCT type FROM representations WHERE clipID=? ORDER BY type", [.text(id)]).map { $0.text("type") },
+             try db.scalarText("SELECT contentHash FROM clips WHERE id=?", [.text(id)]))
+        }
+        return ClipExportAccess(database: strategy.databaseURL, id: id, revision: metadata.revision, types: types, contentHash: hash, clock: clock)
     }
     /// 导出仅占用自有临时空间，拒绝超配额，不淘汰历史；10分钟内文件租约保留。
     public func writeExport(_ data: Data, id: ClipID, revision: Int64, fileExtension: String = "png") throws -> URL {

@@ -97,4 +97,39 @@ struct FileCardPreviewTests {
         #expect(try await store.thumbnail(id: id, at: now) == nil) // 外部文件缩略图不写入持久缓存。
         #expect(try Data(contentsOf: url) == original)
     }
+
+    /// 图形不可用时保留 SVG 源码，图形成功时优先显示，原件始终不改写。
+    @Test(arguments: [false, true]) func svgKeepsTextFallback(_ succeeds: Bool) async throws {
+        let root = try directory(); defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("drawing.svg")
+        let text = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"10\" height=\"10\"><rect width=\"10\" height=\"10\"/></svg>"
+        try Data(text.utf8).write(to: url)
+        let rendered = await FileCardPreview.render(fileAt: url, document: { _ in succeeds ? .image(Data([1])) : .unavailable })
+        switch rendered {
+        case .image: #expect(succeeds)
+        case .text(let actual): #expect(!succeeds && actual == text)
+        case .unavailable: Issue.record("SVG fallback lost")
+        }
+        #expect(try String(contentsOf: url, encoding: .utf8) == text)
+    }
+    /// 取消先于安装、晚于安装和成功之后都只能完成一次，迟到回调不能复活内容。
+    @Test func previewCancellationCompletesExactlyOnce() async {
+        for early in [true, false] {
+            let completion = PreviewCompletion()
+            if early { completion.cancel() }
+            let result: FileCardPreview = await withCheckedContinuation { continuation in
+                if completion.install(continuation) {
+                    completion.cancel(); completion.finish(.image(Data([1])))
+                }
+            }
+            guard case .unavailable = result else { Issue.record("cancelled preview published"); continue }
+            #expect(completion.isCancelled)
+        }
+        let completion = PreviewCompletion()
+        let result: FileCardPreview = await withCheckedContinuation { continuation in
+            _ = completion.install(continuation); completion.finish(.image(Data([2]))); completion.cancel()
+        }
+        guard case .image(let data) = result else { Issue.record("completed preview lost"); return }
+        #expect(data == Data([2]))
+    }
 }

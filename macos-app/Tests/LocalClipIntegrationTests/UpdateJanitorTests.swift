@@ -317,7 +317,7 @@ struct UpdateJanitorTests {
     }
 
     /// 维护先开始时，手动检查等待清理结束，之后新建的下载目录仍在且可进入就绪态。
-    @MainActor @Test func manualCheckWaitsForMaintenance() async throws {
+    @MainActor @Test(.timeLimit(.minutes(1))) func manualCheckWaitsForMaintenance() async throws {
         let fixture = try Fixture(); defer { fixture.cleanUp() }
         let suite = "LocalClip.UpdateTests." + UUID().uuidString
         let defaults = try #require(UserDefaults(suiteName: suite))
@@ -325,7 +325,7 @@ struct UpdateJanitorTests {
         let gate = UpdateMaintenanceGate()
         defer { Task { await gate.release() } }
         let download = fixture.locations.updatesCache.appendingPathComponent(UUID().uuidString)
-        var fetched = false, prepared = false, checkStarted = false
+        var fetched = false, prepared = false
         let checker = UpdateChecker(defaults: defaults, fetch: { request in
             fetched = true
             let base = "https://github.com/yuhui0531/local-clip/releases/"
@@ -342,12 +342,12 @@ struct UpdateJanitorTests {
             _ = UpdateJanitor.run(locations, excludedDownloads: excluded)
         })
         let maintenance = Task { await checker.maintain() }
-        let deadline = ContinuousClock.now + .seconds(3)
-        while await !gate.entered, ContinuousClock.now < deadline { await Task.yield() }
-        try #require(await gate.entered)
-        let check = Task { checkStarted = true; await checker.check(manual: true) }
-        while !checkStarted, ContinuousClock.now < deadline { await Task.yield() }
-        try #require(checkStarted)
+        // 满负载时MainActor调度很慢，用确定性信号代替共享deadline轮询；超时由timeLimit兜底。
+        await gate.waitForEntry()
+        let (started, signalStarted) = AsyncStream<Void>.makeStream()
+        // check在首次挂起前同步置checking，信号回到测试时它已在等待维护。
+        let check = Task { signalStarted.finish(); await checker.check(manual: true) }
+        for await _ in started {}
         #expect(!fetched && !prepared && checker.checking)
         await checker.maintain()
         #expect(!fetched && !prepared && checker.checking)
@@ -429,10 +429,15 @@ private actor UpdateMaintenanceGate {
     private(set) var entered = false
     private(set) var entries = 0
     private var continuation: CheckedContinuation<Void, Never>?
-    func noteEntry() { entered = true }
+    private var entryWaiters: [CheckedContinuation<Void, Never>] = []
+    func noteEntry() { entered = true; resumeEntryWaiters() }
     func pause() async {
-        entered = true; entries += 1
+        entered = true; entries += 1; resumeEntryWaiters()
         await withCheckedContinuation { continuation = $0 }
     }
+    func waitForEntry() async {
+        if !entered { await withCheckedContinuation { entryWaiters.append($0) } }
+    }
+    private func resumeEntryWaiters() { entryWaiters.forEach { $0.resume() }; entryWaiters = [] }
     func release() { continuation?.resume(); continuation = nil }
 }

@@ -5,15 +5,25 @@ import LocalClipCore
 
 public struct SyntaxSpan: Sendable { public let range: NSRange; public let style: String }
 public struct SyntaxHighlight: Sendable {
+    // 同一高亮结果复用身份，渲染缓存不必每次拼接全部范围。
+    let cacheIdentity: String
     public let language: String
     public let spans: [SyntaxSpan]
     public let analyzedUTF16Count: Int
+    /// 不可变范围仅构造一次缓存身份，等价结果仍命中原渲染缓存，by AI.Coding。
+    init(language: String, spans: [SyntaxSpan], analyzedUTF16Count: Int) {
+        self.language = language; self.spans = spans; self.analyzedUTF16Count = analyzedUTF16Count
+        cacheIdentity = spans.map { "\($0.range.location):\($0.range.length):\($0.style)" }.joined(separator: ";")
+    }
 }
 public actor SyntaxHighlighter {
     public static let shared = SyntaxHighlighter()
     // 详情独立引擎，长文不会阻塞卡片高亮。
     public static let detail = SyntaxHighlighter()
     public static let characterLimit = 8192
+    private enum LanguageResult { case detected(String), none }
+    private var languageCache: [String: LanguageResult] = [:]
+    private var languageOrder: [String] = []
     private var context: JSContext?
     private var attemptedLoad = false
     private var cache: [String: SyntaxHighlight] = [:]
@@ -29,19 +39,35 @@ public actor SyntaxHighlighter {
               let result = function.call(withArguments: [prefix, languageHint ?? "", sample]), !result.isUndefined,
               let object = result.toDictionary(), let language = object["language"] as? String,
               let html = object["value"] as? String else { remember(key, result: nil); return nil }
-        let parser = SpanParser(); let xml = XMLParser(data: Data(("<root>" + html.replacingOccurrences(of: "\r", with: "&#13;") + "</root>").utf8))
+        let parser = SpanParser(); let xml = XMLParser(data: Data(("<root>" + Self.xmlCompatible(html).replacingOccurrences(of: "\r", with: "&#13;") + "</root>").utf8))
         xml.delegate = parser; xml.shouldResolveExternalEntities = false
-        guard xml.parse(), parser.text == prefix, !parser.spans.isEmpty else { remember(key, result: nil); return nil }
+        guard xml.parse(), parser.text == Self.xmlCompatible(prefix), !parser.spans.isEmpty else { remember(key, result: nil); return nil }
         let highlighted = SyntaxHighlight(language: language, spans: parser.spans, analyzedUTF16Count: prefix.utf16.count)
         remember(key, result: highlighted); return highlighted
+    }
+    /// 只替换解析副本中的 XML 非法单码元字符，保留所有 UTF-16 偏移及原始正文。
+    private static func xmlCompatible(_ value: String) -> String {
+        String(String.UnicodeScalarView(value.unicodeScalars.map { scalar in
+            let code = scalar.value
+            return (code >= 0x20 && code != 0xFFFE && code != 0xFFFF) || [9, 10, 13].contains(code) ? scalar : " "
+        }))
     }
     /// 只识别语言、不生成着色范围，阈值与卡片相同；导出文件在拖动开始时据此决定扩展名。
     /// 识别耗时随样本长度增长（2048字符约50ms），调用方可取较短样本，by AI.Coding。
     public func language(of text: String, sample: Int = 2048) -> String? {
-        guard let (_, detection) = Self.bounded(text, languageHint: nil), let context = engine(),
-              let function = context.objectForKeyedSubscript("localClipLanguage"),
-              let result = function.call(withArguments: [detection, sample]), result.isString else { return nil }
-        return result.toString()
+        guard let (_, detection) = Self.bounded(text, languageHint: nil) else { return nil }
+        // 样本长度也参与身份；缓存未识别结果，不保存原始正文。
+        let key = "\(sample):" + ContentFingerprint.hash(Data(detection.utf8))
+        if let cached = languageCache[key] {
+            if case .detected(let value) = cached { return value }
+            return nil
+        }
+        let result = engine()?.objectForKeyedSubscript("localClipLanguage")?.call(withArguments: [detection, sample])
+        let language = result?.isString == true ? result?.toString() : nil
+        languageCache[key] = language.map(LanguageResult.detected) ?? LanguageResult.none
+        languageOrder.append(key)
+        if languageOrder.count > 64 { languageCache.removeValue(forKey: languageOrder.removeFirst()) }
+        return language
     }
     /// 有界前缀不截断代理对；单行URL、纯路径与中文正文不参加语言猜测，防止被识别为Ruby/Swift代码。
     /// 返回着色用前缀与语言猜测样本（已抹掉路径）；有语言提示时样本不用。

@@ -42,10 +42,10 @@ import Testing
         #expect(!AppDelegate.routesHistoryShortcuts(menu, panel: history, confirming: false, hasModal: false))
     }
 
-    /// 上下跳过同列禁用项，左右不越行；Tab能访问另一列的全部可用项，by AI.Coding。
+    /// 初始高亮与上下同列保持固定顺序；Tab仍能遍历全部可用项，by AI.Coding。
     @Test func keyboardNavigationSkipsUnavailableOptions() {
         let menu = TransformMenuController(available: [.markdownCodeBlock, .stripLineNumbers, .formatJSON], reason: nil, allowsCopyOnly: true) { _, _ in }
-        menu.move(keyCode: 125); #expect(menu.highlighted == .markdownCodeBlock)
+        #expect(menu.highlighted == .markdownCodeBlock)
         menu.move(keyCode: 125); #expect(menu.highlighted == .stripLineNumbers)
         menu.move(keyCode: 124); #expect(menu.highlighted == .formatJSON)
         menu.move(keyCode: 124); #expect(menu.highlighted == .formatJSON)
@@ -80,5 +80,13 @@ import Testing
             #expect(choices.first?.0 == .uppercase)
             #expect(choices.first?.1 == (allowsCopyOnly && option))
         }
+    }
+
+    /// 相邻列同行不可用时直接到最近可用项，仍保留双列固定位置及回程。
+    @Test func horizontalNavigationFindsNearestEnabledRow() {
+        let menu = TransformMenuController(available: [.markdownCodeBlock, .formatJSON], reason: nil, allowsCopyOnly: true) { _, _ in }
+        #expect(menu.highlighted == .markdownCodeBlock)
+        menu.move(keyCode: 124); #expect(menu.highlighted == .formatJSON)
+        menu.move(keyCode: 123); #expect(menu.highlighted == .markdownCodeBlock)
     }
 }

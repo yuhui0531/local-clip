@@ -189,6 +189,7 @@ public enum UpdateJanitor {
         }
         // 调用者自己的会话已由其按当次结论处理，这里只参与快照保留与记录回收。
         for index in records.indices where records[index].id != ownSessionID {
+            confirmAbandonedStartup(&records[index], locations, excluded: excluded, now: now, report: &report)
             process(&records[index], locations, excluded: excluded, report: &report)
         }
         pruneSnapshots(&records, locations, policy: policy, now: now, report: &report)
@@ -198,6 +199,45 @@ public enum UpdateJanitor {
             if (try? FileManager.default.removeItem(at: UpdateSessionStore.url(record.id, locations))) != nil { locks[record.id]?.removeWhileHeld() }
         }
         return report
+    }
+
+    /// 仅持锁且辅助程序退出后，依据两代应用和本会话启动回执补记成功；保存失败仍保留全部材料。
+    private static func confirmAbandonedStartup(_ record: inout UpdateSessionRecord, _ locations: UpdateLocations,
+                                                excluded: Set<String>, now: Date, report: inout UpdateJanitorReport) {
+        guard !record.legacy, record.trash.isEmpty, [.awaitingReceipt, .swapping].contains(record.phase),
+              let build = record.targetBuild, build > record.sourceBuild, let target = record.target, let workspace = record.workspace,
+              let path = record.download else { return }
+        // 补记成功要求真实两代目录；异常链接不能借用外部App身份让恢复快照进入淘汰。
+        func plainEntry(_ url: URL, _ kind: mode_t) -> Bool {
+            var info = stat()
+            return lstat(url.path, &info) == 0 && info.st_mode & S_IFMT == kind
+        }
+        let targetURL = URL(fileURLWithPath: target), candidateRoot = workspace.appendingPathComponent("candidate")
+        let candidateApp = candidateRoot.appendingPathComponent("LocalClip.app")
+        guard plainEntry(workspace, mode_t(S_IFDIR)), plainEntry(candidateRoot, mode_t(S_IFDIR)),
+              [targetURL, candidateApp].allSatisfy({ app in
+                  plainEntry(app, mode_t(S_IFDIR)) && plainEntry(app.appendingPathComponent("Contents"), mode_t(S_IFDIR))
+                    && plainEntry(app.appendingPathComponent("Contents/Info.plist"), mode_t(S_IFREG))
+              }), appBuild(targetURL) == build, appBuild(candidateApp) == record.sourceBuild else { return }
+        let download = URL(fileURLWithPath: path), receipt = download.appendingPathComponent("startup-ok")
+        guard plainEntry(download, mode_t(S_IFDIR)), UpdateSessionStore.isDownloadName(download.lastPathComponent), locations.isTrustedReceipt(receipt),
+              !excluded.contains(download.resolvingSymlinksInPath().path), !helperRunning(in: download) else { return }
+        // 不跟随回执符号链接；从同一普通文件描述符限长读取，拒绝目录、额外字节与错误构建。
+        let fd = Darwin.open(receipt.path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK)
+        guard fd >= 0 else { return }
+        defer { Darwin.close(fd) }
+        let expected = Array(String(build).utf8)
+        var info = stat(), bytes = [UInt8](repeating: 0, count: expected.count + 1)
+        guard fstat(fd, &info) == 0, info.st_mode & S_IFMT == S_IFREG, info.st_size == expected.count,
+              Darwin.read(fd, &bytes, bytes.count) == expected.count, Array(bytes.prefix(expected.count)) == expected else { return }
+        var completed = record
+        completed.phase = .succeeded; completed.finishedAt = now; completed.updatedAt = now
+        completed.result = "更新成功：已确认新版启动；数据快照按现有保留策略管理"
+        do {
+            // 先持久化副本，再改变参与后续快照清理的内存状态。
+            try UpdateSessionStore.save(completed, in: locations)
+            record = completed
+        } catch { report.failures.append(record.id + "：无法保存启动确认，保留恢复材料") }
     }
 
     /// 锁前枚举仅用于发现会话；拿锁后重读，避免辅助程序刚完成时用旧阶段覆盖其终态与待删除登记。

@@ -57,7 +57,8 @@ public enum CodeFileReader {
             do {
                 defer { close(fd) }
                 var info = stat()
-                guard fstat(fd, &info) == 0, info.st_mode & S_IFMT == S_IFREG else { throw CodeFileReadError.unavailable }
+                guard fstat(fd, &info) == 0 else { throw CodeFileReadError.unavailable }
+                guard info.st_mode & S_IFMT == S_IFREG else { throw CodeFileReadError.unsupported }
                 guard info.st_size >= 0, info.st_size <= perFileLimit, total + info.st_size <= totalLimit else { throw CodeFileReadError.tooLarge }
                 identity = Identity(url: url, info: info)
             }

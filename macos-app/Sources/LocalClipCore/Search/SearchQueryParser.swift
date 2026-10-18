@@ -25,6 +25,12 @@ public enum SearchQueryParser {
         var result = ParsedQuery(literal: text)
         var removals: [Range<String.Index>] = [], replacements: [(Range<String.Index>, String)] = []
         var categoryNames: [String] = []
+        var labelIndices: [String: Int] = [:]
+        // 单值条件保持后值生效，同时原位更新其显示标签。
+        func label(_ key: String, _ value: String) {
+            if let index = labelIndices[key] { result.labels[index] = value }
+            else { labelIndices[key] = result.labels.count; result.labels.append(value) }
+        }
         var index = text.startIndex
         while index < text.endIndex {
             guard !text[index].isWhitespace else { index = text.index(after: index); continue }
@@ -38,7 +44,7 @@ public enum SearchQueryParser {
             switch name {
             case "type":
                 guard let kind = kinds[value.lowercased()] else { continue }
-                result.kind = kind; result.labels.append("类型 " + kindNames[kind]!)
+                result.kind = kind; label(name, "类型 " + kindNames[kind]!)
             case "is":
                 guard ["fav", "favorite", "favorites", "收藏"].contains(value.lowercased()) else { continue }
                 result.favorites = true; result.labels.append("收藏")
@@ -47,7 +53,7 @@ public enum SearchQueryParser {
                 let exact = sources.filter { $0.name.lowercased() == needle || $0.bundleID?.lowercased() == needle }
                 let matches = exact.isEmpty ? sources.filter { $0.name.lowercased().hasPrefix(needle) || $0.bundleID?.lowercased().hasPrefix(needle) == true } : exact
                 if matches.count == 1, let source = matches.first {
-                    result.sourceBundleID = source.bundleID ?? ""; result.labels.append("来源 " + source.name)
+                    result.sourceBundleID = source.bundleID ?? ""; label(name, "来源 " + source.name)
                 } else if matches.isEmpty { result.problems.append("未找到来源 " + value) }
                 else { result.problems.append("来源“\(value)”匹配多个：" + matches.prefix(5).map(\.name).joined(separator: "、")) }
             case "in":
@@ -57,7 +63,7 @@ public enum SearchQueryParser {
             default:
                 guard let bound = date(value, now: now, after: name == "after") else { continue }
                 if name == "after" { result.from = bound.instant } else { result.until = bound.instant }
-                result.labels.append(bound.label)
+                label(name, bound.label)
             }
             removals.append(range)
         }

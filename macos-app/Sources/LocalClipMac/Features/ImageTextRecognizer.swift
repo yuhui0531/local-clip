@@ -13,7 +13,7 @@ public enum ImageTextRecognizer {
         let image = try decode(payload)
         let box = RequestBox()
         try await withTaskCancellationHandler {
-            try await Task.detached { try VNImageRequestHandler(cgImage: image).perform([box.request]) }.value
+            try await Task.detached { try VNImageRequestHandler(cgImage: image.image, orientation: image.orientation).perform([box.request]) }.value
         } onCancel: { box.request.cancel() }
         try Task.checkCancellation()
         let lines = (box.request.results ?? []).compactMap { $0.topCandidates(1).first?.string }.filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
@@ -21,16 +21,19 @@ public enum ImageTextRecognizer {
         return lines
     }
     /// 逐项优先真实图片文件，再尝试内嵌表示；损坏或超限候选不遮蔽后续有效图，禁用ImageIO全局缓存，by AI.Coding。
-    private static func decode(_ payload: ClipboardPayload) throws -> CGImage {
+    static func decode(_ payload: ClipboardPayload) throws -> (image: CGImage, orientation: CGImagePropertyOrientation) {
         let options = [kCGImageSourceShouldCache: false] as CFDictionary
         var found = false, exceeded = false
-        func image(_ source: CGImageSource?) -> CGImage? {
+        func image(_ source: CGImageSource?) -> (image: CGImage, orientation: CGImagePropertyOrientation)? {
             guard let source,
                   let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
                   let width = properties[kCGImagePropertyPixelWidth] as? Int,
                   let height = properties[kCGImagePropertyPixelHeight] as? Int, width > 0, height > 0 else { return nil }
             guard width <= pixelLimit / height else { exceeded = true; return nil }
-            return CGImageSourceCreateImageAtIndex(source, 0, options)
+            guard let decoded = CGImageSourceCreateImageAtIndex(source, 0, options) else { return nil }
+            // 原图像素不旋转，交由 Vision 按同一帧的 EXIF 方向识别（包含镜像方向）。
+            let orientation = (properties[kCGImagePropertyOrientation] as? NSNumber).flatMap { CGImagePropertyOrientation(rawValue: $0.uint32Value) } ?? .up
+            return (decoded, orientation)
         }
         for item in payload.items {
             // LC-F03/F04：混合记录也枚举每项合法文件URL，文件图标不能抢占实际图片；不改变fileURLs的全文件契约。

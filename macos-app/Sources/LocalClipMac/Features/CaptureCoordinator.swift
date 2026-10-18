@@ -69,6 +69,18 @@ import LocalClipCore
     public func rebaseline() {
         captureEpoch = UUID(); baseline = board.changeCount; queue.removeAll(); queueBytes = 0
     }
+    /// 离开排除应用时推进计数，覆盖两次轮询之间的复制；关闭该选项时不影响采集。
+    public func applicationDidDeactivate(_ bundleID: String?) {
+        guard policy.pauseWhenExcludedFrontmost, let bundleID, policy.excludedBundleIDs.contains(bundleID) else { return }
+        // 已通过过滤的队列仍须入库，只跳过离开前尚未读取的剪贴板世代。
+        baseline = board.changeCount
+    }
+    /// 激活事实只刷新滞留文案，不修改采集基线；排除应用之间切换仍保留提示，by AI.Coding。
+    func applicationDidActivate(_ bundleID: String?) {
+        guard state == "排除应用在前台，未采集", let bundleID,
+              !policy.excludedBundleIDs.contains(bundleID) else { return }
+        setState(capacityBlocked ? "容量已满" : "正常")
+    }
     /// 用户请求暂停即阻止在途快照，持久化完成前不假装配置已经保存，by AI.Coding。
     public func requestPause() { startupResumeAllowed = false; pausePending = true; rebaseline(); setState("正在暂停") }
     /// 写入阶段同步在 MainActor 内完成，计数与指纹是精确收据。
@@ -101,9 +113,9 @@ import LocalClipCore
     /// 系统IPC等待期间不占主线程；暂停世代失效后不发布旧读取结果。
     public func poll() async {
         guard readyToRead() else { return }
-        let epoch = captureEpoch
-        let outcome = await board.captureAsync(after: baseline, policy: policy)
-        guard !Task.isCancelled, epoch == captureEpoch, !pausePending, policy.captureEnabled else { return }
+        let epoch = captureEpoch, readBaseline = baseline
+        let outcome = await board.captureAsync(after: readBaseline, policy: policy)
+        guard !Task.isCancelled, epoch == captureEpoch, readBaseline == baseline, !pausePending, policy.captureEnabled else { return }
         handle(outcome)
     }
     private func handle(_ outcome: CaptureOutcome) {

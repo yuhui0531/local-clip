@@ -1,5 +1,7 @@
 // F21图片文字识别：用测试内绘制的合成截图验证中英文、行序与无文字提示；不读取用户图片或剪贴板，by AI.Coding。
 import AppKit
+import ImageIO
+import CoreImage
 import Testing
 @testable import LocalClipCore
 @testable import LocalClipMac
@@ -120,4 +122,21 @@ import Testing
         capture.tick(); try await Task.sleep(for: .milliseconds(150)); capture.stop()
         #expect(try await store.search(.init()).items.isEmpty)
     }
+    /// 用反向旋转/镜像的合成像素配合 EXIF，验证实际 Vision 识别而非仅解码属性。
+    @Test(arguments: Array(1...8))
+    func recognizesEveryEXIFOrientation(_ orientation: Int) async throws {
+        let source = try #require(CGImageSourceCreateWithData(Self.png(lines: ["ORIENTATION 4242"]) as CFData, nil))
+        let original = try #require(CGImageSourceCreateImageAtIndex(source, 0, nil))
+        let inverse: Int32 = orientation == 6 ? 8 : orientation == 8 ? 6 : Int32(orientation)
+        let rotated = CIImage(cgImage: original).oriented(forExifOrientation: inverse)
+        let pixels = try #require(CIContext(options: [.useSoftwareRenderer: true]).createCGImage(rotated, from: rotated.extent))
+        let bytes = NSMutableData()
+        let destination = try #require(CGImageDestinationCreateWithData(bytes, SupportedType.tiff as CFString, 1, nil))
+        CGImageDestinationAddImage(destination, pixels, [kCGImagePropertyOrientation: orientation] as CFDictionary)
+        try #require(CGImageDestinationFinalize(destination))
+        let payload = ClipboardPayload([.init([.init(SupportedType.tiff, bytes as Data)])])
+        let recognized = try await ImageTextRecognizer.recognize(payload).joined(separator: " ")
+        #expect(recognized.contains("ORIENTATION") && recognized.contains("4242"), "orientation=\(orientation): \(recognized)")
+    }
+
 }

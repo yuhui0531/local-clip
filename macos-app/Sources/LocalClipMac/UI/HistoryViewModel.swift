@@ -47,10 +47,16 @@ import LocalClipCore
     @Published public var categoryFilters: Set<String> = []
     @Published public var sourceFilter: String?
     @Published public var dateFilterEnabled = false
+    /// 同一筛选状态用于图标与预布局预算，分类条件也属于筛选，by AI.Coding。
+    var hasFilterSelection: Bool { sourceFilter != nil || dateFilterEnabled || !categoryFilters.isEmpty }
+    var hasFilterStrip: Bool { sourceFilter != nil || dateFilterEnabled || !queryConditions.isEmpty || !queryProblems.isEmpty || pasteQueueActive }
     @Published public var dateFrom = Date()
     @Published public var dateUntil = Date()
     @Published public var showingFilters = false {
-        didSet { if showingFilters && !oldValue { requestSourceSuggestions() } }
+        didSet {
+            if showingFilters && !oldValue { requestSourceSuggestions() }
+            if oldValue && !showingFilters { rememberNativePopoverDismissal() }
+        }
     }
     @Published public private(set) var sourceSuggestions: [SourceAttribution] = []
     public private(set) var selectedIDs: Set<ClipID> { get { listState[\.selectedIDs] } set { listState[\.selectedIDs] = newValue } }
@@ -86,6 +92,7 @@ import LocalClipCore
     /// 识别结果与正文高亮随详情同批发布，弹窗首帧即最终内容与尺寸，by AI.Coding。
     @Published private(set) var detailInspection: ContentInspector.Inspection?
     @Published private(set) var detailHighlight: SyntaxHighlight?
+    @Published private(set) var detailEditable = false
     @Published public private(set) var previewMessage = ""
     @Published public var status = "准备中"
     @Published public var message = ""
@@ -147,6 +154,7 @@ import LocalClipCore
     func previewImageSize(id: ClipID) async throws -> (bytes: Int64, items: Int)? { try await store.imageByteCount(id: id, at: clock.now()) }
     @Published public var showingDetail = false {
         didSet {
+            if oldValue && !showingDetail { rememberNativePopoverDismissal() }
             if showingDetail && !canDisplayContents { showingDetail = false; return }
             if showingDetail, let editor = contentEditor {
                 if !editor.hasChanges && !editor.saving { discardContentEdit() }
@@ -157,8 +165,32 @@ import LocalClipCore
     private var contentGeneration = UUID()
     private var transformMenuRequest = UUID()
     private var transformMenu: TransformMenuController?
+    private var dismissedPopoverClickSequence = false
+    private var dismissedPopoverEventTime: TimeInterval?
+    /// AppKit可能先关闭transient浮层再派发原点击；记住该事件，防止同一次按下穿透。
+    private func rememberNativePopoverDismissal() {
+        guard let event = NSApp?.currentEvent, event.type == .leftMouseDown, event.window is ClipPanel else { return }
+        dismissedPopoverClickSequence = true; dismissedPopoverEventTime = event.timestamp
+    }
+    /// 浮层外的左键只关闭浮层；同一双击序列的后续按下也消费，避免误粘贴。
+    func dismissPopoverForBackdropClick(count: Int, timestamp: TimeInterval? = nil) -> Bool {
+        if count <= 1, timestamp == nil || timestamp != dismissedPopoverEventTime { dismissedPopoverClickSequence = false }
+        if dismissedPopoverClickSequence { return true }
+        guard contentEditorPresented || showingDetail || showingFilters || showingCategoryEditor || transformMenu != nil else { return false }
+        dismissedPopoverClickSequence = true
+        dismissedPopoverEventTime = timestamp
+        if contentEditorPresented { requestCancelContentEdit(); return true }
+        if showingCategoryEditor && savingCategory { return true }
+        if showingDetail { showingDetail = false }
+        if showingFilters { showingFilters = false }
+        if showingCategoryEditor { showingCategoryEditor = false }
+        transformMenu?.close()
+        return true
+    }
     private var quickLookTask: Task<Void, Never>?
-    @Published public var showingCategoryEditor = false
+    @Published public var showingCategoryEditor = false {
+        didSet { if oldValue && !showingCategoryEditor { rememberNativePopoverDismissal() } }
+    }
     @Published public private(set) var categoryBeingEdited: ClipCategory?
     @Published public var categoryDraft = ""
     @Published public private(set) var categoryError = ""
@@ -229,7 +261,7 @@ import LocalClipCore
     /// 列表先刷新；来源和空间仅在相关入口读取，事实仍来自存储，by AI.Coding。
     public func start(resumeCapture: Bool = false) async throws {
         settings = try await store.settings()
-        configureHistoryViewport(width: historyViewport, cardWidth: HistoryView.cardSide(height: settings.panelHeight, filtered: sourceFilter != nil || dateFilterEnabled))
+        configureHistoryViewport(width: historyViewport, cardWidth: HistoryView.cardSide(height: settings.panelHeight, filtered: hasFilterStrip))
         categories = try await store.categories()
         capture.onState = { [weak self] state in self?.acceptCaptureState(state) }
         capture.onSourcePending = { [weak self] source in
@@ -391,12 +423,14 @@ import LocalClipCore
     /// 输入防抖；点击筛选是一次性动作，不等防抖直接查询，by AI.Coding。
     public func searchChanged(debounce: Bool = true) {
         // 同一在途请求合并分类行的多个属性观察，不打断定位或重复查询，by AI.Coding。
+        if locatedSearchSignature == currentSearchSignature { return }
         if queryPending, activeSearchSignature == currentSearchSignature { return }
         if let recordUndoQuery, recordUndoQuery != query { self.recordUndoQuery = nil }
         search(debounce: debounce)
     }
     /// 捕获/删除/到期刷新不额外防抖。
     public func refresh() { search(debounce: false, preserveWindow: true) }
+    private var locatedSearchSignature: String?
     private var currentSearchSignature: String { searchRequest(sources: querySources).signature }
     /// 搜索框前缀条件与筛选面板合成一份请求；同一维度前缀优先，前缀不写回面板，清空搜索框即失效，by AI.Coding。
     private func searchRequest(sources: [SourceAttribution], cursor: SearchCursor? = nil, queryID: UUID = UUID(), pageSize: Int = 50) -> SearchRequest {
@@ -423,6 +457,7 @@ import LocalClipCore
     }
     /// 查询乱序保护与清晰加载/失败状态。
     private func search(debounce: Bool, preserveWindow: Bool = false) {
+        locatedSearchSignature = nil
         #if DEBUG
         if preserveWindow { historyWindowRefreshCount += 1 }
         #endif
@@ -490,6 +525,7 @@ import LocalClipCore
                     if !preserveWindow {
                         selectedIDs.removeAll()
                         anchorID = nil
+                        scrollAnchor = nil; historyOffset = 0
                         scrollRestoration = .init(offset: 0)
                         listState[\.scrollEpoch] += 1
                     }
@@ -527,7 +563,9 @@ import LocalClipCore
         if started, !historyBusy, hasMore, items.count < viewportPageSize { loadMore(advanceSelection: false, pageSize: viewportPageSize - items.count) }
     }
     /// 只在实际滚动后预读一屏距离内的下一批；首屏布局/卡片appear不能级联加载，by AI.Coding。
-    func historyScrolled(offset: CGFloat) {
+    func historyScrolled(offset: CGFloat, epoch: Int) {
+        // 已移除列表的排队回调不能污染新查询的锚点或触发额外分页，by AI.Coding。
+        guard epoch == listState.snapshot.scrollEpoch else { return }
         guard historyViewport > 0, offset.isFinite else { return }
         historyOffset = max(0, offset)
         if !items.isEmpty {
@@ -589,6 +627,8 @@ import LocalClipCore
             }
             return
         }
+        // 普通选卡同步关闭旧详情，显式详情入口随后打开目标，避免视图异步回调误关闭新弹窗。
+        if showingDetail { showingDetail = false }
         invalidateSelection(); selectedID = id
         guard let id else { return }
         let generation = selectionGeneration
@@ -604,6 +644,12 @@ import LocalClipCore
             catch { if generation == selectionGeneration { selectedMetadata = nil } }
         }
         if showingDetail { loadDetail() }
+    }
+    /// 明确打开指定卡片详情；不依赖主队列与 SwiftUI onChange 的先后顺序，by AI.Coding。
+    func showDetail(id: ClipID) {
+        guard canDisplayContents, contains(id), !dragActive else { return }
+        select(id); showingDetail = true
+        detailVisibilityChanged()
     }
     /// 详情显示才加载完整格式；关闭时释放大内容，保留轻量选择状态。
     public func detailVisibilityChanged() {
@@ -623,6 +669,8 @@ import LocalClipCore
                 let detail = try await store.detail(id: id, at: clock.now())
                 guard !Task.isCancelled, generation == detailID, canDisplayContents, selectedID == id, showingDetail else { return }
                 guard isVisible(detail.summary) else { revalidateVisibleContent(); return }
+                // 附件检查可能扫描大富文本，后台计算后与详情同世代发布；保存仍重新校验。
+                async let editable = Task.detached { detail.payload.editableText != nil }.value
                 let rich = await Task.detached { () -> AttributedString in
                     let result = NSMutableAttributedString(string: "")
                     for (index, item) in detail.payload.items.enumerated() { if index > 0 { result.append(NSAttributedString(string: "\n")) }; result.append(RichContent.attributed(item)) }
@@ -638,11 +686,12 @@ import LocalClipCore
                 async let highlight = previewString.isEmpty ? nil : SyntaxHighlighter.detail.highlight(previewString)
                 var inspection: ContentInspector.Inspection?
                 if let text = detail.payload.plainText, !detail.payload.hasFileReferences {
-                    let language = await SyntaxHighlighter.shared.language(of: text)
+                    let language = await SyntaxHighlighter.detail.language(of: text)
                     inspection = await Task.detached { ContentInspector.inspectFull(text, language: language) }.value
                 }
                 let bytes = kind == .image || kind == .mixed ? await Task.detached { RichContent.fullImage(detail.payload) }.value : nil
                 let readyHighlight = await highlight
+                let readyEditable = await editable
                 guard !Task.isCancelled, generation == detailID, canDisplayContents, selectedID == id else { return }
                 let latest = try await store.metadata(id: id, at: clock.now())
                 guard generation == detailID, canDisplayContents, selectedID == id, isVisible(latest.summary), !pendingDeletion.contains(id) else { return }
@@ -655,6 +704,7 @@ import LocalClipCore
                     image = bytes.flatMap(NSImage.init(data:))
                     if image == nil { previewMessage = "原图预览不可用或超过40MP；原始格式仍保留" }
                 }
+                detailEditable = readyEditable
                 self.detail = detail; detailLoading = false
             } catch { if generation == detailID { invalidateDetail() } }
         }
@@ -670,6 +720,7 @@ import LocalClipCore
         quickLookTask?.cancel(); quickLookTask = nil; contentGeneration = UUID(); filePreview.close()
         // 选择/内容变更时关闭旧转换菜单，避免继续对失效的快照执行操作，by AI.Coding。
         transformMenuRequest = UUID(); transformMenu?.close()
+        if detailEditable { detailEditable = false }
         if detail != nil { detail = nil }; if image != nil { image = nil }; if richPreview != nil { richPreview = nil }
         if detailInspection != nil { detailInspection = nil }; if detailHighlight != nil { detailHighlight = nil }
         if !previewMessage.isEmpty { previewMessage = "" }; if detailLoading { detailLoading = false }
@@ -720,6 +771,20 @@ import LocalClipCore
             await recordUse(ids, result)
         }
     }
+    /// 按完整选择检查，不能由当前主卡片代表其它所选项目，by AI.Coding。
+    func canCopyAsText(_ ids: Set<ClipID>) async -> Bool {
+        guard !ids.isEmpty else { return false }
+        do {
+            for id in ids {
+                try Task.checkCancellation()
+                guard try await store.metadata(id: id, at: clock.now()).hasTextRepresentations else { return false }
+            }
+            try Task.checkCancellation()
+            return true
+        } catch { return false }
+    }
+    private var renameGeneration = UUID()
+    private var renameTask: Task<Void, Never>?
     @Published public private(set) var renamingID: ClipID?
     @Published private(set) var contentEditor: ClipContentEditorState?
     private var contentEditRequest = UUID()
@@ -792,20 +857,34 @@ import LocalClipCore
     /// 只编辑指定卡片的名称，不改变单选/多选与当前滚动窗口，by AI.Coding。
     public func beginRename(_ id: ClipID) {
         guard !dragActive, contains(id), contentEditor == nil else { return }
-        renamingID = id
+        renameGeneration = UUID(); renamingID = id
     }
     /// 取消仅移除编辑状态，不写库，by AI.Coding。
     public func cancelRename(id: ClipID? = nil) {
         if let id, id != renamingID { return }
-        renamingID = nil
+        renameGeneration = UUID(); renamingID = nil
     }
-    /// 提交捕获的名称；持久事件负责刷新，不重复发起列表查询，by AI.Coding。
+    /// 本地输入变动只推进草稿版本，不发布全局状态或改写已提交的名称。
+    func renameDraftChanged(id: ClipID) {
+        guard renamingID == id else { return }
+        renameGeneration = UUID()
+    }
+    /// 按提交顺序保存；旧结果不得关闭用户继续编辑或再次提交的新草稿。
     public func saveRename(id: ClipID, title: String) {
         guard renamingID == id else { return }
-        renamingID = nil
-        Task {
-            do { try await store.renameClip(id: id, title: title); notice("已重命名") }
-            catch { message = "重命名失败：名称需为单行且不超过1024字节，记录和容量仍须有效" }
+        renameGeneration = UUID()
+        let generation = renameGeneration, previous = renameTask
+        renameTask = Task {
+            await previous?.value
+            do {
+                try await store.renameClip(id: id, title: title)
+                guard generation == renameGeneration else { return }
+                renamingID = nil
+                notice("已重命名")
+            }
+            catch {
+                if generation == renameGeneration { message = "重命名失败：名称需为单行且不超过1024字节，记录和容量仍须有效" }
+            }
         }
     }
     /// 双击恢复原格式后向原应用焦点粘贴；Finder文件对象仍复制到其当前实际目录。
@@ -1224,7 +1303,7 @@ import LocalClipCore
         guard let wanted = selectedID else { return }
         searching?.cancel(); paging?.cancel(); paging = nil; pendingPageNavigation = nil
         queryID = UUID(); let generation = queryID
-        query = ""; favorites = false; kind = nil; sourceFilter = nil; dateFilterEnabled = false; categoryID = category; categoryFilters = Set(category.map { [$0] } ?? [])
+        let targetCategories = Set(category.map { [$0] } ?? [])
         activeSearchSignature = currentSearchSignature; beginQueryLoading(generation)
         // 定位也拥有完整查询生命周期；取消、失败和空结果都释放逻辑忙碌状态，by AI.Coding。
         searching = Task {
@@ -1236,11 +1315,20 @@ import LocalClipCore
                 try Task.checkCancellation(); guard generation == queryID else { return }
                 var next: SearchCursor?; var found: [ClipSummary] = []
                 repeat {
-                    let page = try await store.search(SearchRequest(cursor: next, queryID: generation, categoryIDs: activeCategories))
+                    let page = try await store.search(SearchRequest(cursor: next, queryID: generation, categoryIDs: targetCategories))
                     guard !Task.isCancelled, generation == queryID else { return }; found += page.items; next = page.next
                 } while !found.contains(where: { $0.id == wanted }) && next != nil
-                guard found.contains(where: { $0.id == wanted }) else { message = "记录已删除、到期或离开分类"; return }
-                listState.update { items = found.filter(isVisible); cursor = next; loading = false; select(wanted) }
+                let visible = found.filter(isVisible)
+                guard let index = visible.firstIndex(where: { $0.id == wanted }) else { message = "记录已删除、到期或离开分类"; return }
+                // 查到目标后才提交筛选；同一选择也发布独立滚动请求，by AI.Coding。
+                query = ""; favorites = false; kind = nil; sourceFilter = nil; dateFilterEnabled = false
+                categoryID = category; categoryFilters = targetCategories
+                queryConditions = []; queryProblems = []
+                activeSearchSignature = currentSearchSignature; locatedSearchSignature = currentSearchSignature
+                listState.update {
+                    items = visible; cursor = next; loading = false; select(wanted)
+                    scrollRestoration = .init(offset: max(0, 24 + CGFloat(index) * historyStride))
+                }
                 focusResults?()
             } catch is CancellationError { }
             catch { if generation == queryID { message = "无法定位：记录已变化" } }
@@ -1403,7 +1491,11 @@ import LocalClipCore
                 point = parent.convertPoint(toScreen: view.convert(NSPoint(x: 12, y: view.isFlipped ? 12 : view.bounds.height - 12), to: nil))
             }
             let menu = makeTransformMenu(ids: ids, available: available, reason: reason)
-            menu.onDismiss = { [weak self] in self?.transformMenu = nil }
+            menu.onDismiss = { [weak self] in
+                self?.rememberNativePopoverDismissal()
+                self?.transformMenu = nil
+            }
+            menu.onParentClick = { [weak self] event in self?.dismissPopoverForBackdropClick(count: event.clickCount, timestamp: event.timestamp) ?? false }
             transformMenu = menu
             menu.present(parent: parent, at: point)
         }
@@ -1418,7 +1510,7 @@ import LocalClipCore
     nonisolated static func transformAvailability(_ records: [ClipboardPayload]) -> (Set<TextTransform>, String?) {
         guard !records.contains(where: \.hasFileReferences), let text = try? OutputComposer.combine(records, format: .plainText).plainText else { return ([], "所选内容不含文本，无法转换") }
         guard text.utf8.count <= TextTransform.byteLimit else { return ([], "内容过大（超过 4 MiB），无法转换") }
-        return (Set(TextTransform.allCases.filter { $0.isApplicable(text) }), nil)
+        return (TextTransform.applicableTransforms(text), nil)
     }
     /// 单项记录另存为文件，沿用拖出的格式规则；富文本可改选纯文本、RTF或HTML，链接存为.webloc。文件引用本身就是文件，不提供此操作，by AI.Coding。
     public func saveSelectedToFile() {

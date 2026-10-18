@@ -59,6 +59,13 @@ private enum PreservationImages {
     }
 }
 
+/// 满负载时后台解码与入库可超过3秒；等提交信号代替固定deadline轮询，超时由timeLimit兜底。
+@MainActor private func commits(of capture: CaptureCoordinator) -> AsyncStream<Void> {
+    let (stream, continuation) = AsyncStream<Void>.makeStream()
+    capture.onCommit = { continuation.yield() }
+    return stream
+}
+
 @MainActor struct ImagePreservationTests {
     @Test(arguments: [1, 2])
     func realImagesSurviveCaptureStorageMaintenanceAndReopen(pages: Int) async throws {
@@ -235,7 +242,7 @@ private enum PreservationImages {
         #expect(try await store.search(.init()).items.isEmpty)
     }
 
-    @Test(arguments: [false, true])
+    @Test(.timeLimit(.minutes(1)), arguments: [false, true])
     func selfWritesAvoidImageBodyReadsAndDoNotSwallowNextCopy(asynchronous: Bool) async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -249,13 +256,13 @@ private enum PreservationImages {
         #expect(raw.reads == [NativePasteboardAccess.ownType])
         #expect(try await store.search(.init()).items.isEmpty)
         raw.user("USER-AFTER-IMAGE")
+        let committed = commits(of: capture)
         if asynchronous { await capture.poll() } else { capture.tick() }
-        let deadline = ContinuousClock.now + .seconds(3)
-        while try await store.search(.init()).items.isEmpty, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
+        for await _ in committed { break }
         #expect(try await store.search(.init()).items.map(\.preview) == ["USER-AFTER-IMAGE"])
     }
 
-    @Test func userCopyDuringSelfWriteMarkerReadIsNotSkipped() async throws {
+    @Test(.timeLimit(.minutes(1))) func userCopyDuringSelfWriteMarkerReadIsNotSkipped() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let raw = RawBoard(), client = MacPasteboardClient(access: raw), store = try HistoryStore(location: root)
@@ -270,9 +277,11 @@ private enum PreservationImages {
                 raw.items[0][NativePasteboardAccess.ownType] = Data(payload.fingerprint.utf8)
             }
         }
+        let committed = commits(of: capture)
         await capture.poll()
-        let deadline = ContinuousClock.now + .seconds(3)
-        while try await store.search(.init()).items.isEmpty, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
+        // 被误判为自写时不会入库，直接失败而不是等到timeLimit。
+        guard capture.lastIgnored == nil else { Issue.record("User copy was skipped as self-write"); return }
+        for await _ in committed { break }
         #expect(try await store.search(.init()).items.map(\.preview) == ["USER-DURING-MARKER"])
     }
 

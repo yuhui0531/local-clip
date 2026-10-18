@@ -15,22 +15,33 @@ struct UpdateQuitCancelled: Error, LocalizedError {
     static func begin(_ update: DownloadedUpdate) async throws {
         let fm = FileManager.default, bundle = Bundle.main.bundleURL
         guard bundle.pathExtension == "app", try bundle.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink == false else { throw UpdateFailure.invalid("请先将 LocalClip 安装到可写的应用程序目录") }
-        _ = try UpdatePackage.authenticate(directory: update.directory, installedApp: bundle, currentBuild: Int(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "0") ?? 0)
-        let source = bundle.appendingPathComponent("Contents/Helpers/LocalClipUpdater")
-        let helper = update.directory.appendingPathComponent("LocalClipUpdater")
-        for name in attemptFiles {
-            let file = update.directory.appendingPathComponent(name)
-            if fm.fileExists(atPath: file.path) { try fm.removeItem(at: file) }
+        let build = Int(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "0") ?? 0
+        let request = InstallRequest(target: bundle, downloadDirectory: update.directory, parentPID: ProcessInfo.processInfo.processIdentifier, currentBuild: build)
+        let files = attemptFiles
+        // 验签、复制和 codesign 均为阻塞 I/O；只把准备工作移出主线程，退出仍在主线程。
+        let worker = Task.detached(priority: .userInitiated) {
+            try Task.checkCancellation()
+            _ = try UpdatePackage.authenticate(directory: request.downloadDirectory, installedApp: request.target, currentBuild: request.currentBuild)
+            let helper = request.downloadDirectory.appendingPathComponent("LocalClipUpdater")
+            for name in files {
+                let file = request.downloadDirectory.appendingPathComponent(name)
+                if FileManager.default.fileExists(atPath: file.path) { try FileManager.default.removeItem(at: file) }
+            }
+            try Task.checkCancellation()
+            try FileManager.default.copyItem(at: request.target.appendingPathComponent("Contents/Helpers/LocalClipUpdater"), to: helper)
+            _ = try UpdatePackage.runTool("/usr/bin/codesign", ["--verify", "--strict", helper.path])
+            let requestURL = request.downloadDirectory.appendingPathComponent("request.json")
+            try JSONEncoder().encode(request).write(to: requestURL, options: .atomic)
+            return (helper, requestURL)
         }
-        try fm.copyItem(at: source, to: helper)
-        _ = try UpdatePackage.runTool("/usr/bin/codesign", ["--verify", "--strict", helper.path])
-        let request = InstallRequest(target: bundle, downloadDirectory: update.directory, parentPID: ProcessInfo.processInfo.processIdentifier, currentBuild: Int(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "0") ?? 0)
-        let requestURL = update.directory.appendingPathComponent("request.json")
-        try JSONEncoder().encode(request).write(to: requestURL, options: .atomic)
+        let (helper, requestURL) = try await withTaskCancellationHandler { try await worker.value } onCancel: { worker.cancel() }
+        try Task.checkCancellation()
         let process = Process()
         process.executableURL = helper; process.arguments = [requestURL.path]
         process.standardOutput = FileHandle.nullDevice; process.standardError = FileHandle.nullDevice
         try process.run()
+        // 取消或异常离开准备流程时不遗留仍等待父进程的安装器。
+        defer { if process.isRunning { process.terminate() } }
         UserDefaults.standard.set(update.directory.path, forKey: lastAttemptKey)
         let deadline = Date().addingTimeInterval(60)
         while !fm.fileExists(atPath: update.directory.appendingPathComponent("installer-ready").path) {
