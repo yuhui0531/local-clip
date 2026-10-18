@@ -1,4 +1,4 @@
-// 定位与编辑只驱动模型，不创建面板或发送桌面事件，by AI.Coding。
+// 使用模型与不显示的原生控件验证交互，不打开面板或发送桌面事件，by AI.Coding。
 import Foundation
 import AppKit
 import Testing
@@ -21,6 +21,71 @@ import LocalClipCore
         let model = HistoryViewModel(store: store, capture: capture, paste: PasteCoordinator(board: board, applications: FakeApplications(), store: store, capture: capture), derived: DerivedContentService(store: store))
         try await model.start(); capture.stop(); try await wait { !model.historyBusy && model.items.count > 1 }
         return (root, store, model)
+    }
+    /// 搜索方向键交接结果焦点，等待新查询和空结果时不跳离搜索，by AI.Coding。
+    @Test func searchNavigationEntersResultsOnlyWhenReady() async throws {
+        let (root, _, model) = try await setup()
+        defer { try? FileManager.default.removeItem(at: root) }
+        var entries = 0
+        model.focusResults = { entries += 1 }
+        let second = model.items[1].id
+        model.navigateFromSearch(1)
+        #expect(model.selectedID == second && entries == 1)
+        model.query = "no-such-fixture"; model.searchChanged()
+        model.navigateFromSearch(-1)
+        #expect(entries == 1 && model.selectedID == second)
+        try await wait { !model.historyBusy && model.items.isEmpty }
+        model.navigateFromSearch(1)
+        #expect(entries == 1)
+        model.query = "row"; model.searchChanged(debounce: false)
+        try await wait { !model.historyBusy && model.items.count > 1 }
+        let first = model.items[0].id
+        model.navigateFromSearch(-1)
+        #expect(entries == 2 && model.selectedID == first)
+    }
+    /// 使用真实但不显示的原生field editor，验证快捷键作用对象、IME与查询等待保护，by AI.Coding。
+    @Test func searchRecordCommandsKeepTextAndIMEOwnership() async throws {
+        _ = NSApplication.shared
+        let (root, _, model) = try await setup()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let window = NSWindow(contentRect: .init(x: 0, y: 0, width: 300, height: 100), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil; window.close() }
+        let search = NSSearchField(frame: .init(x: 0, y: 0, width: 260, height: 30))
+        window.contentView = search
+        try #require(window.makeFirstResponder(search))
+        let editor = try #require(search.currentEditor() as? NSTextView)
+        #expect(AppDelegate.isHistorySearchEditor(editor) && !window.isVisible)
+        func key(_ code: UInt16, flags: NSEvent.ModifierFlags = .command) throws -> NSEvent {
+            try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0,
+                windowNumber: window.windowNumber, context: nil, characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: code))
+        }
+        #expect(AppDelegate.handleRecordCommand(try key(34), responder: editor, model: model))
+        #expect(model.showingDetail)
+        #expect(AppDelegate.handleRecordCommand(try key(34), responder: editor, model: model))
+        #expect(!model.showingDetail)
+        // 全选/复制/撤销和非Command组合仍交给文本控件，不写剪贴板或触发记录操作。
+        for code: UInt16 in [0, 8, 6, 36] { #expect(!AppDelegate.handleRecordCommand(try key(code), responder: editor, model: model)) }
+        #expect(!AppDelegate.handleRecordCommand(try key(34, flags: [.command, .shift]), responder: editor, model: model))
+        editor.setMarkedText("拼", selectedRange: .init(location: 1, length: 0), replacementRange: .init(location: NSNotFound, length: 0))
+        for code: UInt16 in [5, 31, 14, 34, 17] { #expect(!AppDelegate.handleRecordCommand(try key(code), responder: editor, model: model)) }
+        #expect(!model.showingDetail && model.contentEditor == nil)
+        editor.unmarkText()
+        model.query = "row"; model.searchChanged()
+        #expect(AppDelegate.handleRecordCommand(try key(34), responder: editor, model: model))
+        #expect(!model.showingDetail)
+        try await wait { !model.historyBusy }
+        model.panelVisibilityChanged(true)
+        let selected = model.selectedID
+        #expect(AppDelegate.handleRecordCommand(try key(14), responder: editor, model: model))
+        try await wait { model.contentEditor?.id == selected }
+        model.discardContentEdit()
+        let name = NSTextField(frame: search.frame); window.contentView = name
+        try #require(window.makeFirstResponder(name))
+        let nameEditor = try #require(name.currentEditor() as? NSTextView)
+        #expect(!AppDelegate.isHistorySearchEditor(nameEditor))
+        for code: UInt16 in [5, 31, 14, 34, 17] { #expect(!AppDelegate.handleRecordCommand(try key(code), responder: nameEditor, model: model)) }
+        #expect(!model.showingDetail && model.contentEditor == nil && !window.isVisible)
     }
     /// 定位相同ID也必须发出滚动请求；失败保持原查询和列表。
     @Test func locationPublishesRevealAndFailureKeepsFilters() async throws {

@@ -133,7 +133,7 @@ public struct SettingsView: View {
                             if !permitted { Button("开启…") { AccessibilityGuide.shared.show(skipIntro: true) } }
                         }
                     } header: { Text("粘贴方式") } footer: {
-                        Text("⌘C 复制所选，⇧Return 直接粘贴纯文本；搜索框 Return 先进入结果；Tab/Shift-Tab 切换控件焦点。直接粘贴需要辅助功能权限，仅恢复目标应用，不能保证原输入框或光标位置；没有权限仍可复制后手动粘贴。").settingsFootnote()
+                        Text("搜索中 ↑/↓ 选择并进入结果，Return 先进入结果；结果中 Return 执行默认动作、⌘C 复制所选，⇧Return 直接粘贴纯文本。搜索中也可用 ⌘I/E/T/O/G 操作所选记录；Tab/Shift-Tab 切换控件焦点。直接粘贴需要辅助功能权限，仅恢复目标应用，不能保证原输入框或光标位置；没有权限仍可复制后手动粘贴。").settingsFootnote()
                     }
                     Section {
                         Toggle("代码文件智能粘贴", isOn: setting(\.smartCodeFilePaste))

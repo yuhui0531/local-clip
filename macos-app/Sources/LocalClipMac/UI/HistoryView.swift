@@ -380,7 +380,9 @@ private struct HistorySelectionActions: View {
             let selected = value.selectedItem
             if compact {
                 Menu {
-                    Section("分类") { categoryItems(value) }.disabled(!model.canDisplayContents)
+                    // 分类状态尚未到达时不能把未知归属当成未加入；只禁用分类，不影响收藏和复制，by AI.Coding。
+                    Section("分类") { categoryItems(value) }
+                        .disabled(!model.canDisplayContents || value.selectedMetadata?.summary.id != selected?.id)
                     Button(selected?.isFavorite == true ? "取消收藏" : "收藏") {
                         if let selected { model.change(.favorites(model.orderedSelection, !selected.isFavorite)) }
                     }.disabled(selected == nil || !model.canDisplayContents)

@@ -543,6 +543,30 @@ import LocalClipCore
         guard let firstResponder, firstResponder !== resultsResponder, !(firstResponder is NSTextView) else { return false }
         return event.modifierFlags.intersection([.command, .control, .option]).isEmpty
     }
+    /// 仅搜索框的原生field editor可借用记录快捷键，其他文字编辑仍由原控件处理，by AI.Coding。
+    static func isHistorySearchEditor(_ responder: NSResponder?) -> Bool {
+        guard let editor = responder as? NSTextView, editor.isEditable, editor.isFieldEditor else { return false }
+        return editor.delegate is NSSearchField
+    }
+    /// 搜索和结果共享明确的记录动作；不接管复制、全选、撤销及输入法候选，by AI.Coding。
+    static func handleRecordCommand(_ event: NSEvent, responder: NSResponder?, model: HistoryViewModel) -> Bool {
+        guard event.modifierFlags.intersection([.command, .option, .control, .shift]) == [.command],
+              [UInt16(5), 31, 14, 34, 17].contains(event.keyCode) else { return false }
+        let editor = responder as? NSTextView
+        guard editor?.hasMarkedText() != true,
+              editor?.isEditable != true || isHistorySearchEditor(responder) else { return false }
+        // 搜索结果尚未更新时不对旧记录执行新开放的快捷键。
+        if isHistorySearchEditor(responder), model.historyBusy { return true }
+        switch event.keyCode {
+        case 5: model.jumpToHistory()
+        case 31: model.openSelected()
+        case 14: model.editSelectedContent()
+        case 34: if model.canDisplayContents, model.selectedID != nil { model.showingDetail.toggle() }
+        case 17: model.showTransformMenu(atSelectedCard: true)
+        default: return false
+        }
+        return true
+    }
     /// 粘贴回退显示短暂非激活提示，不让关闭历史面板隐藏失败原因。
     private func showPasteFeedback(_ message: String, failed: Bool) {
         feedbackTask?.cancel()
@@ -749,18 +773,12 @@ import LocalClipCore
             if flags == [.command], event.keyCode == 43 { model.openSettings?(); return nil }
             // 搜索文字未改变且最后动作是记录删除时，仍可撤销该记录。
             if flags == [.command], event.keyCode == 6, editing, model.canUndoFromSearch { model.undoDeletion(); return nil }
+            if Self.handleRecordCommand(event, responder: panel.firstResponder, model: model) { return nil }
             if flags == [.command] && !editing {
                 switch event.keyCode {
                 case 0: model.selectAllResults(); return nil
                 case 8: model.perform(action: .copy); return nil
                 case 6: model.undoDeletion(); return nil
-                case 5: model.jumpToHistory(); return nil
-                case 31: model.openSelected(); return nil
-                case 14: model.editSelectedContent(); return nil
-                // ⌘I 是macOS“显示简介”的通用快捷键，在所选卡片上方切换详情，by AI.Coding。
-                case 34: if model.canDisplayContents, model.selectedID != nil { model.showingDetail.toggle() }; return nil
-                // ⌘T在所选卡片处弹出转换菜单，Esc只关闭菜单，by AI.Coding。
-                case 17: model.showTransformMenu(atSelectedCard: true); return nil
                 default: return event
                 }
             }
@@ -779,8 +797,11 @@ import LocalClipCore
             }
             switch event.keyCode {
             case 36, 76: if editing { model.focusResults?() } else { model.perform() }; return nil
-            case 125: model.navigate(1); return nil
-            case 126: model.navigate(-1); return nil
+            case 125, 126:
+                let delta = event.keyCode == 125 ? 1 : -1
+                if flags.isEmpty, Self.isHistorySearchEditor(panel.firstResponder) { model.navigateFromSearch(delta) }
+                else { model.navigate(delta) }
+                return nil
             case 123, 124:
                 if let editor = self.panel?.firstResponder as? NSTextView, !editor.string.isEmpty { return event }
                 model.navigate(event.keyCode == 123 ? -1 : 1); return nil

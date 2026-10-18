@@ -753,6 +753,12 @@ import LocalClipCore
             self.revalidateVisibleContent()
         }
     }
+    /// 搜索上下键选择记录后进入结果，下一次Return可直接执行；空结果或查询中保留输入焦点，by AI.Coding。
+    func navigateFromSearch(_ delta: Int) {
+        guard !historyBusy, !items.isEmpty, !dragActive else { return }
+        navigate(delta)
+        focusResults?()
+    }
     /// 搜索焦点中的方向键导航与默认Enter操作。
     public func navigate(_ delta: Int) {
         guard !items.isEmpty else { return }
