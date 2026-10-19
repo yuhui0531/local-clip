@@ -205,6 +205,7 @@ private struct HistorySearchInput: View {
 }
 private struct HistoryStrip: View {
     let model: HistoryViewModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var list: HistoryListState
     let cardHeight: CGFloat
     let categoryID: String?
@@ -225,8 +226,11 @@ private struct HistoryStrip: View {
             } else {
                 // 换筛选整组重建滚动区，新列表首帧就在最左侧，不先按旧偏移绘制再跳回，by AI.Coding。
                 HistoryScroller(strip: self, list: list, epoch: list.snapshot.scrollEpoch).id(list.snapshot.scrollEpoch)
+                    // 换筛选只淡入新列表，不给卡片重排加动画，by AI.Coding。
+                    .transition(.opacity)
             }
         }.frame(maxWidth: .infinity).frame(height: cardHeight + 20).clipped()
+        .animation(reduceMotion ? nil : .easeIn(duration: 0.12), value: list.snapshot.scrollEpoch)
         // 隐藏状态用明确占位替代整层模糊，避免正文轮廓泄露及持续模糊合成，by AI.Coding。
         .opacity(hideContents ? 0 : 1).allowsHitTesting(!hideContents).accessibilityHidden(hideContents)
         .overlay {
@@ -264,6 +268,7 @@ private struct HistoryScroller: View {
                 LazyHStack(spacing: HistoryView.cardSpacing) {
                     ForEach(Array(strip.model.items.enumerated()), id: \.element.id) { index, item in
                         ClipCard(item: item, index: index, selected: strip.model.selectedIDs.contains(item.id) || (strip.model.contentEditorPresented && strip.model.contentEditor?.id == item.id), dragging: strip.draggedIDs.contains(item.id), editing: strip.renamingID == item.id, hidden: strip.hideContents, quickModifiers: strip.model.settings.quickModifiers, height: strip.cardHeight, categoryID: strip.categoryID, categories: strip.categories, target: strip.target, selectionCount: strip.model.selectedIDs.contains(item.id) ? strip.model.selectedIDs.count : 0, selectionHasNonText: strip.model.items.contains { strip.model.selectedIDs.contains($0.id) && ($0.kind == .image || $0.kind == .mixed) }, queueShortcut: strip.model.settings.queueShortcut, model: strip.model, previewGeneration: strip.focusRequest, detailPending: strip.detailPending && strip.model.selectedID == item.id, showsQuickBadge: strip.quickBadges).equatable().id(item.id)
+                            .transition(.opacity.combined(with: .scale(scale: 0.92)))
                             // 详情贴着所选卡片弹出，而不是远在底栏右侧的按钮，by AI.Coding。
                             // 详情内容备好后才弹出，弹出即最终尺寸，by AI.Coding。
                             .popover(isPresented: Binding(get: { strip.showingDetail && strip.model.selectedID == item.id && strip.model.detail?.summary.id == item.id }, set: { if !$0 { strip.model.showingDetail = false } }), attachmentAnchor: .rect(.bounds), arrowEdge: .top) {
@@ -272,9 +277,10 @@ private struct HistoryScroller: View {
                     }
                     if strip.model.hasMore {
                         Button(action: strip.model.loadMore) {
+                            // 自动加载时只显示转圈；失败才显示可点的重试，by AI.Coding。
                             VStack(spacing: 10) {
-                                if strip.model.loading { ProgressView() } else { Image(systemName: "arrow.right").font(.title2) }
-                                Text(strip.model.loading ? "正在读取…" : "更多历史")
+                                if strip.model.loading { ProgressView().accessibilityLabel("正在读取") }
+                                else { Image(systemName: strip.model.loadMoreFailed ? "arrow.clockwise" : "arrow.right").font(.title2); Text(strip.model.loadMoreFailed ? "重试" : "更多历史") }
                             }.frame(width: 130, height: strip.cardHeight)
                         }.buttonStyle(.plain)
                     }
@@ -756,8 +762,11 @@ struct ClipCard: View, Equatable {
                     .background(Color.white.opacity(0.2), in: RoundedRectangle(cornerRadius: LCStyle.Radius.control))
                     .onSubmit { model.saveRename(id: item.id, title: nameDraft) }
                     .onExitCommand { model.cancelRename() }
-            } else { Text(item.title ?? languageTitle ?? HistoryView.kindName(item.kind)) }
-        }.font(.system(size: tiny ? 10 : height < 150 ? 12 : 14, weight: .semibold)).lineLimit(1)
+            } else { Text(item.title ?? languageTitle ?? HistoryView.kindName(item.kind)).help("双击标题重命名 · ⌘R") }
+        }
+            // 只有标题文字区双击重命名，头部其他区域双击与正文一致为粘贴，by AI.Coding。
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(item.id)) } action: { headerRect = $0 }
+            .font(.system(size: tiny ? 10 : height < 150 ? 12 : 14, weight: .semibold)).lineLimit(1)
     }
     /// 识别出代码语言时以语言名替换"文本"；隐藏内容时不透露，by AI.Coding。
     private var languageTitle: String? {
@@ -792,9 +801,6 @@ struct ClipCard: View, Equatable {
                 }.frame(width: iconSize, height: iconSize).help(sourceDescription)
             }.foregroundStyle(.white).padding(.leading, tiny ? 8 : 14).padding(.trailing, tiny ? 6 : 10)
                 .frame(height: headerHeight).background(headerColor)
-                .help("双击标题栏重命名卡片")
-                // 整个彩色标题栏双击均重命名，时间/图标/留白不能误发粘贴，by AI.Coding。
-                .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(item.id)) } action: { headerRect = $0 }
             // 正文独占剩余区域；长文件名和多行文字只能在正文内截断，不挤掉标题和底栏。
             GeometryReader { region in
                 cardContent.frame(width: region.size.width, height: region.size.height, alignment: .topLeading).clipped()
@@ -847,6 +853,7 @@ struct ClipCard: View, Equatable {
             .overlay {
                 if selected { RoundedRectangle(cornerRadius: cardRadius + 4, style: .continuous).strokeBorder(Color.accentColor, lineWidth: 2).padding(-4) }
             }
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: selected)
             .shadow(color: .black.opacity(cardShadow.opacity), radius: cardShadow.radius, y: cardShadow.y)
             .onHover { hovering = $0 }
             .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: hovering)

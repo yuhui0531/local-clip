@@ -322,6 +322,8 @@ import LocalClipCore
     @Published var panelEntrance: CGFloat = 0
     /// 修饰键恰好等于快速粘贴修饰键时显示⌘N角标，by AI.Coding。
     @Published var quickBadgesVisible = false
+    /// 追加页读取失败时“更多历史”显示重试；下一次读取开始即清除，by AI.Coding。
+    @Published private(set) var loadMoreFailed = false
     public var openSettings: (() -> Void)?
     public var quitApplication: (() -> Void)?
     public var registerShortcut: ((Shortcut) -> Bool)?
@@ -663,7 +665,7 @@ import LocalClipCore
             if advanceSelection, paging != nil { pendingPageNavigation = (selectedID, extend) }
             return
         }
-        let id = queryID; loading = true
+        let id = queryID; loading = true; loadMoreFailed = false
         let previousCount = items.count, previousSelection = selectedID
         let request = pageRequest(cursor: cursor, queryID: id, pageSize: pageSize ?? min(50, max(8, viewportPageSize * 2)))
         // 一个在途分页任务合并连续滚动；查询切换立即取消，旧页不能混入新筛选，by AI.Coding。
@@ -680,7 +682,7 @@ import LocalClipCore
                 scheduleVisibilityDeadline()
                 fillHistoryViewport()
             } catch is CancellationError { }
-            catch { if id == queryID { loading = false; refresh() } }
+            catch { if id == queryID { loading = false; loadMoreFailed = true; refresh() } }
         }
     }
     /// 高亮立即更新；快速连续选择取消旧元数据请求，完整正文仅在详情打开时读取。
@@ -1038,7 +1040,8 @@ import LocalClipCore
                 if case .delete(let ids) = change {
                     // 确认后仅撤销被删记录，保留相邻卡片；在途旧查询也受删除集合过滤。
                     let previous = items.firstIndex(where: { $0.id == selectedID }) ?? 0
-                    selectedIDs.subtract(ids); pendingDeletion.formUnion(ids); items.removeAll { pendingDeletion.contains($0.id) }
+                    selectedIDs.subtract(ids); pendingDeletion.formUnion(ids)
+                    withAnimation(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? nil : .snappy(duration: 0.2)) { items.removeAll { pendingDeletion.contains($0.id) } }
                     select(items.isEmpty ? nil : items[min(previous, items.count - 1)].id)
                 } else { selectedMetadata = nil }
                 let result = try await store.apply(preview.token)

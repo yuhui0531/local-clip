@@ -90,8 +90,9 @@ private final class RenameClock: ClipClock, @unchecked Sendable {
         func bridges(_ v: NSView) -> [HistoryDragBridge.DragView] { (v as? HistoryDragBridge.DragView).map { [$0] } ?? v.subviews.flatMap(bridges) }
         try await wait { bridges(host).first?.headerRect.width ?? 0 > 0 }
         let view = try #require(bridges(host).first)
-        #expect(abs(view.headerRect.width - view.bounds.width) < 1)
-        #expect(view.headerRect.height >= 28 && view.headerRect.minY < 1)
+        // 命中区收窄到标题文字：宽度远小于整行，位于头部顶端内，by AI.Coding。
+        #expect(view.headerRect.width > 0 && view.headerRect.width < view.bounds.width / 2)
+        #expect(view.headerRect.minY < 28 && view.headerRect.maxY <= 40)
         // 可选输出是真实托管像素，仍不显示窗口或读取系统剪贴板，by AI.Coding。
         if let path = ProcessInfo.processInfo.environment["LOCALCLIP_RENAME_RENDER_DIR"] {
             let directory = URL(fileURLWithPath: path); try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -112,7 +113,8 @@ private final class RenameClock: ClipClock, @unchecked Sendable {
             NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: 1, windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 2, pressure: 1)!
         }
         let count = raw.count
-        for local in [NSPoint(x: 20, y: view.bounds.height - 10), .init(x: view.bounds.width - 20, y: view.bounds.height - 10), .init(x: 20, y: view.bounds.height - 33), .init(x: view.bounds.midX, y: view.bounds.height - 25)] {
+        let title = NSPoint(x: view.headerRect.midX, y: view.bounds.height - view.headerRect.midY)
+        for local in [title, .init(x: view.headerRect.minX + 2, y: view.bounds.height - view.headerRect.midY)] {
             let point = view.convert(local, to: nil)
             #expect(view.handle(event(.leftMouseDown, point)) == nil)
             #expect(view.handle(event(.leftMouseUp, point)) == nil)
@@ -121,9 +123,15 @@ private final class RenameClock: ClipClock, @unchecked Sendable {
             #expect(view.handle(editing) === editing)
             model.cancelRename()
         }
+        // 头部图标与时间行不再重命名，双击与正文一致走粘贴。
+        let icon = view.convert(NSPoint(x: view.bounds.width - 20, y: view.bounds.height - 18), to: nil)
+        _ = view.handle(event(.leftMouseDown, icon)); _ = view.handle(event(.leftMouseUp, icon))
+        #expect(model.renamingID == nil)
+        try await wait { raw.count > count }
+        let pasted = raw.count
         #expect(view.handle(event(.leftMouseDown, view.convert(.init(x: 20, y: view.bounds.midY), to: nil))) == nil)
         #expect(view.handle(event(.leftMouseUp, view.convert(.init(x: 20, y: view.bounds.midY), to: nil))) == nil)
-        try await wait { raw.count > count }
+        try await wait { raw.count > pasted }
         #expect(raw.items.first?[SupportedType.string] == Data("original-body".utf8))
     }
 }

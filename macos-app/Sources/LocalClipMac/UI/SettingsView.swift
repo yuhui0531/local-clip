@@ -119,7 +119,7 @@ public struct SettingsView: View {
                             Text("直接粘贴").tag(PasteAction.directPaste); Text("仅复制").tag(PasteAction.copy)
                         }
                         Picker("默认输出格式", selection: setting(\.defaultFormat)) { Text("原格式").tag(OutputFormat.original); Text("纯文本").tag(OutputFormat.plainText) }
-                        Toggle("复制或粘贴后移到最前", isOn: setting(\.moveUsedToFront))
+                        Toggle("复制或粘贴后移到最前", isOn: setting(\.moveUsedToFront)).help("开启后，用过的记录排到历史第一位")
                         Picker("数字 1–9 快捷粘贴", selection: setting(\.quickModifiers)) { Text("⌘ + 数字").tag(UInt32(256)); Text("⌥ + 数字").tag(UInt32(2048)); Text("⌃ + 数字").tag(UInt32(4096)); Text("⌘⇧ + 数字").tag(UInt32(768)) }
                         Picker("切换／新建分类", selection: setting(\.boardModifiers)) { Text("⌘⇧ + ← / → / N").tag(UInt32(768)); Text("⌘⌥ + ← / → / N").tag(UInt32(2304)); Text("⌃⌥ + ← / → / N").tag(UInt32(6144)) }
                         // 只在粘贴队列进行中注册，平时不占用该组合键，by AI.Coding。
@@ -133,7 +133,8 @@ public struct SettingsView: View {
                             if !permitted { Button("开启…") { AccessibilityGuide.shared.show(skipIntro: true) } }
                         }
                     } header: { Text("粘贴方式") } footer: {
-                        Text("搜索中 ↑/↓ 选择并进入结果，Return 先进入结果；结果中 Return 执行默认动作、⌘C 复制所选，⇧Return 直接粘贴纯文本。搜索中也可用 ⌘I/E/T/O/G 操作所选记录；Tab/Shift-Tab 切换控件焦点。直接粘贴需要辅助功能权限，仅恢复目标应用，不能保证原输入框或光标位置；没有权限仍可复制后手动粘贴。").settingsFootnote()
+                        Text("结果中按 Return 执行上面的默认操作，⇧Return 直接粘贴纯文本。直接粘贴需要辅助功能权限，仅恢复目标应用，不能保证原输入框或光标位置；没有权限仍可复制后手动粘贴。").settingsFootnote()
+                        settingsLimits("搜索中 ↑/↓ 选择并进入结果，Return 先进入结果；结果中 ⌘C 复制所选。搜索中也可用 ⌘I/E/T/O/G/R 操作所选记录；Tab/Shift-Tab 切换控件焦点。")
                     }
                     Section {
                         Toggle("代码文件智能粘贴", isOn: setting(\.smartCodeFilePaste))
@@ -142,14 +143,15 @@ public struct SettingsView: View {
                         }
                         Button("添加可识别的编辑器应用…", action: chooseSmartPasteEditor)
                     } header: { Text("代码") } footer: {
-                        Text("默认关闭。开启后，确认是文本编辑目标时粘贴代码文件正文；Finder、未知目标或读取失败仍保留原文件。拖出代码文件时提供正文，拖到编辑器插入代码，拖到Finder仍复制原文件。代码片段语法高亮始终启用。多文件按顺序用换行分隔；每文件最多4MiB，合计8MiB。仅将所选应用未暴露文本控件的AXWindow视为编辑器；所选应用的窗口（包括其中未被识别为终端的终端面板）可能收到文件正文，终端应用及已标记的终端上下文仍被排除。默认没有应用获准。").settingsFootnote()
+                        Text("开启后，粘贴到列表中的编辑器时插入代码文件正文；Finder、未知目标或读取失败仍粘贴原文件。默认关闭，默认没有应用获准。").settingsFootnote()
+                        settingsLimits("确认是文本编辑目标时才粘贴正文。拖出代码文件时提供正文，拖到编辑器插入代码，拖到Finder仍复制原文件。代码片段语法高亮始终启用。多文件按顺序用换行分隔；每文件最多4MiB，合计8MiB。仅将所选应用未暴露文本控件的AXWindow视为编辑器；所选应用的窗口（包括其中未被识别为终端的终端面板）可能收到文件正文，终端应用及已标记的终端上下文仍被排除。")
                     }
                 }
                 if section == .privacy {
                     Section {
-                        Toggle("隐藏历史内容", isOn: setting(\.hideContents))
-                        Toggle("限制系统窗口共享读取", isOn: setting(\.excludeFromSharing))
-                        Toggle("排除应用位于前台时停止监控", isOn: setting(\.pauseWhenExcludedFrontmost))
+                        Toggle("隐藏历史内容", isOn: setting(\.hideContents)).help("开启后面板、预览与队列浮窗不显示正文；复制与粘贴照常")
+                        Toggle("限制系统窗口共享读取", isOn: setting(\.excludeFromSharing)).help("开启后截图、录屏与共享通常看不到 LocalClip 的窗口")
+                        Toggle("排除应用位于前台时停止监控", isOn: setting(\.pauseWhenExcludedFrontmost)).help("开启后，排除列表中的应用在前台期间复制的内容都不记录")
                         // 保留声明来源契约，将普通应用的排除前提放在列表旁，by AI.Coding。
                         if !model.settings.excludedBundleIDs.isEmpty && !model.settings.pauseWhenExcludedFrontmost {
                             VStack(alignment: .leading, spacing: 6) {
@@ -163,7 +165,8 @@ public struct SettingsView: View {
                         }
                         Button("添加要排除的应用…", action: chooseApplication)
                     } footer: {
-                        Text("排除仅按 org.nspasteboard.source 声明的 bundleID 匹配；前台推断与未知来源不参与应用排除，需要停止记录时请停止监控。开启“前台时停止监控”后，排除应用处于前台的整个区间都不记录，退出区间不补采。敏感/临时标记在正文读取前整次过滤，不能识别所有密码。共享限制使用公开 NSWindow 属性，不能保证所有录屏方式隐藏本窗口。新增排除不会删除已有历史；数据保存在本机，未宣称加密，不上传剪贴板内容。").settingsFootnote()
+                        Text("排除只对声明来源的应用生效；要停止记录某个应用，请开启“前台时停止监控”。新增排除不会删除已有历史；数据保存在本机，未宣称加密，不上传剪贴板内容。").settingsFootnote()
+                        settingsLimits("排除仅按 org.nspasteboard.source 声明的 bundleID 匹配；前台推断与未知来源不参与应用排除，需要停止记录时请停止监控。开启“前台时停止监控”后，排除应用处于前台的整个区间都不记录，退出区间不补采。敏感/临时标记在正文读取前整次过滤，不能识别所有密码。共享限制使用公开 NSWindow 属性，不能保证所有录屏方式隐藏本窗口。")
                     }
                 }
                 if section == .storage {
@@ -201,7 +204,8 @@ public struct SettingsView: View {
                             Button("清空普通历史…", role: .destructive) { model.change(.clearOrdinary) }
                         }
                     } footer: {
-                        Text("拖出图片文件是拖进编辑器时提供的图片副本，长期保留以免文档图片失效，不计入容量，仅可手动清理。期限按最近有效用户复制起算；浏览和自身恢复不续期。收藏或任一自定义分类的记录不参与期限和自动淘汰，但计入容量。无法容纳新内容时保留旧历史，跳过新增。降低设置需预览确认。1MiB = 1,048,576 字节。").settingsFootnote()
+                        Text("收藏或加入自定义分类的记录不会因期限或自动淘汰被删除，但计入容量；容量满时保留旧历史、跳过新增。降低设置前会预览确认。").settingsFootnote()
+                        settingsLimits("拖出图片文件是拖进编辑器时提供的图片副本，长期保留以免文档图片失效，不计入容量，仅可手动清理。期限按最近有效用户复制起算；浏览和自身恢复不续期。1MiB = 1,048,576 字节。")
                     }
                 }
                 if section == .advanced {
@@ -338,6 +342,10 @@ private struct BundleRow: View {
             Button("移除", action: remove)
         }
     }
+}
+/// 技术细节默认折叠，影响判断的说明仍就地可见，by AI.Coding。
+@MainActor @ViewBuilder func settingsLimits(_ text: String) -> some View {
+    DisclosureGroup("了解限制") { Text(text).settingsFootnote().padding(.top, 2) }.font(.caption).foregroundStyle(.secondary)
 }
 extension View {
     func settingsFootnote() -> some View {

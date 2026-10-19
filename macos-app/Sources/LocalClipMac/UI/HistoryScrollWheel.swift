@@ -118,7 +118,9 @@ struct HistoryScrollMetrics: Equatable {
                 let scale: CGFloat = event.hasPreciseScrollingDeltas ? 1 : 36
                 let next = min(self.state.metrics.maximum, max(0, (self.state.pendingOffset ?? self.state.metrics.offset) - y * scale))
                 self.state.pendingOffset = next
-                self.onScroll?(next)
+                // 离散滚轮短动画平滑跳格；触控板沿用逐像素即时跟随，by AI.Coding。
+                if event.hasPreciseScrollingDeltas || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion { self.onScroll?(next) }
+                else { withAnimation(.smooth(duration: 0.15)) { self.onScroll?(next) } }
                 return nil
             }
         }
