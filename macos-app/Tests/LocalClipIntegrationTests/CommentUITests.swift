@@ -1,6 +1,7 @@
 // 使用模型与不显示的原生控件验证交互，不打开面板或发送桌面事件，by AI.Coding。
 import Foundation
 import AppKit
+import Carbon
 import SwiftUI
 import Testing
 import LocalClipCore
@@ -444,6 +445,25 @@ import LocalClipCore
         model.startPasteQueue(model.items.prefix(2).map(\.id))
         #expect(closes == [false])
         model.stopPasteQueue()
+    }
+    /// ⌘N角标：修饰键恰好等于快速粘贴修饰键才显示，by AI.Coding。
+    @Test func quickBadgeModifierMatching() {
+        let command = UInt32(cmdKey), commandOption = UInt32(cmdKey | optionKey)
+        #expect(AppDelegate.showsQuickBadges(.command, quickModifiers: command))
+        #expect(AppDelegate.showsQuickBadges([.command, .capsLock], quickModifiers: command))
+        #expect(!AppDelegate.showsQuickBadges([], quickModifiers: command))
+        #expect(!AppDelegate.showsQuickBadges([.command, .shift], quickModifiers: command))
+        #expect(!AppDelegate.showsQuickBadges(.option, quickModifiers: command))
+        #expect(AppDelegate.showsQuickBadges([.command, .option], quickModifiers: commandOption))
+        #expect(!AppDelegate.showsQuickBadges(.command, quickModifiers: commandOption))
+        #expect(!AppDelegate.showsQuickBadges([], quickModifiers: 0))
+    }
+    /// 卡片VoiceOver命名动作：原底栏5个入口，隐藏内容与无文本时按原底栏规则收起，by AI.Coding。
+    @Test func cardVoiceOverActionsMatchFooter() {
+        #expect(ClipCard.voiceOverActions(kind: .text, hidden: false, favorite: false) == ["详情", "收藏", "原格式复制", "纯文本复制", "直接粘贴"])
+        #expect(ClipCard.voiceOverActions(kind: .url, hidden: false, favorite: true) == ["详情", "取消收藏", "原格式复制", "纯文本复制", "直接粘贴"])
+        #expect(ClipCard.voiceOverActions(kind: .image, hidden: false, favorite: false) == ["详情", "收藏", "原格式复制", "直接粘贴"])
+        #expect(ClipCard.voiceOverActions(kind: .text, hidden: true, favorite: false) == ["原格式复制"])
     }
     /// 状态槽优先级：错误 > 监控异常 > 队列 > 通知 > 提示；旧通知计时器不能清掉同文字的新错误，by AI.Coding。
     @Test func statusSlotPriorityAndSeverity() async throws {

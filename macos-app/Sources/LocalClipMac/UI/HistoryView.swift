@@ -54,7 +54,7 @@ public struct HistoryView: View {
                 }.padding(.horizontal, Self.cardInset).frame(height: Self.toolbarHeight)
                 HistoryStrip(model: model, list: model.listState, cardHeight: cardHeight,
                     categoryID: model.categoryID, categories: model.categories,
-                    target: model.target, draggedIDs: model.draggedIDs, hideContents: model.settings.hideContents, focusRequest: model.focusRequest, renamingID: model.renamingID, showingDetail: model.showingDetail && model.detail != nil, detailPending: model.detailSlow)
+                    target: model.target, draggedIDs: model.draggedIDs, hideContents: model.settings.hideContents, focusRequest: model.focusRequest, renamingID: model.renamingID, showingDetail: model.showingDetail && model.detail != nil, detailPending: model.detailSlow, quickBadges: model.quickBadgesVisible)
             // 顶部保留圆角，底边与屏幕贴合，不留可拖动的悬浮窗口边距。
             }.frame(width: viewport.size.width, height: viewport.size.height, alignment: .top)
                 .background { ZStack { HistoryBackdrop(); Color(nsColor: .windowBackgroundColor).opacity(0.76) } }
@@ -216,6 +216,7 @@ private struct HistoryStrip: View {
     let renamingID: ClipID?
     let showingDetail: Bool
     let detailPending: Bool
+    let quickBadges: Bool
     var body: some View {
         ZStack {
             if model.items.isEmpty {
@@ -262,7 +263,7 @@ private struct HistoryScroller: View {
             ScrollView(.horizontal) {
                 LazyHStack(spacing: HistoryView.cardSpacing) {
                     ForEach(Array(strip.model.items.enumerated()), id: \.element.id) { index, item in
-                        ClipCard(item: item, index: index, selected: strip.model.selectedIDs.contains(item.id) || (strip.model.contentEditorPresented && strip.model.contentEditor?.id == item.id), dragging: strip.draggedIDs.contains(item.id), editing: strip.renamingID == item.id, hidden: strip.hideContents, quickModifiers: strip.model.settings.quickModifiers, height: strip.cardHeight, categoryID: strip.categoryID, categories: strip.categories, target: strip.target, selectionCount: strip.model.selectedIDs.contains(item.id) ? strip.model.selectedIDs.count : 0, selectionHasNonText: strip.model.items.contains { strip.model.selectedIDs.contains($0.id) && ($0.kind == .image || $0.kind == .mixed) }, queueShortcut: strip.model.settings.queueShortcut, model: strip.model, previewGeneration: strip.focusRequest, detailPending: strip.detailPending && strip.model.selectedID == item.id).equatable().id(item.id)
+                        ClipCard(item: item, index: index, selected: strip.model.selectedIDs.contains(item.id) || (strip.model.contentEditorPresented && strip.model.contentEditor?.id == item.id), dragging: strip.draggedIDs.contains(item.id), editing: strip.renamingID == item.id, hidden: strip.hideContents, quickModifiers: strip.model.settings.quickModifiers, height: strip.cardHeight, categoryID: strip.categoryID, categories: strip.categories, target: strip.target, selectionCount: strip.model.selectedIDs.contains(item.id) ? strip.model.selectedIDs.count : 0, selectionHasNonText: strip.model.items.contains { strip.model.selectedIDs.contains($0.id) && ($0.kind == .image || $0.kind == .mixed) }, queueShortcut: strip.model.settings.queueShortcut, model: strip.model, previewGeneration: strip.focusRequest, detailPending: strip.detailPending && strip.model.selectedID == item.id, showsQuickBadge: strip.quickBadges).equatable().id(item.id)
                             // 详情贴着所选卡片弹出，而不是远在底栏右侧的按钮，by AI.Coding。
                             // 详情内容备好后才弹出，弹出即最终尺寸，by AI.Coding。
                             .popover(isPresented: Binding(get: { strip.showingDetail && strip.model.selectedID == item.id && strip.model.detail?.summary.id == item.id }, set: { if !$0 { strip.model.showingDetail = false } }), attachmentAnchor: .rect(.bounds), arrowEdge: .top) {
@@ -603,6 +604,8 @@ struct ClipCard: View, Equatable {
     let previewGeneration: UUID
     /// 详情读取超过100ms时在本卡详情位置显示小转圈，by AI.Coding。
     var detailPending = false
+    /// 按住快速粘贴修饰键时才显示⌘N角标，by AI.Coding。
+    var showsQuickBadge = false
     @State private var checkedFileGeneration: UUID?
     @State private var fileVersion: FileReferencePreviewVersion?
     @State private var characterCount: (fingerprint: String?, count: Int)?
@@ -664,6 +667,7 @@ struct ClipCard: View, Equatable {
             && lhs.categoryID == rhs.categoryID && lhs.categories == rhs.categories && lhs.target == rhs.target
             && lhs.selectionCount == rhs.selectionCount && lhs.selectionHasNonText == rhs.selectionHasNonText && lhs.queueShortcut == rhs.queueShortcut
             && (lhs.item.kind != .file || lhs.previewGeneration == rhs.previewGeneration) && lhs.detailPending == rhs.detailPending
+            && lhs.showsQuickBadge == rhs.showsQuickBadge
     }
     private var code: Bool { item.kind == .text && detectedLanguage != nil }
     /// 代码上限12.5pt，普通文本沿用原字号与紧凑布局，by AI.Coding。
@@ -774,31 +778,35 @@ struct ClipCard: View, Equatable {
             HStack(spacing: 4) {
                 Text(footerText).lineLimit(1)
                 Spacer(minLength: 2)
-                // 编辑与详情入口跟随卡片：悬停或选中时出现，点按在本卡上方就地弹出，by AI.Coding。
-                if (hovering || selected || detailPending) && !tiny && !hidden {
-                    HStack(spacing: 2) {
-                        if [ClipKind.text, .url].contains(item.kind) {
-                            Button {
-                                if !model.selectedIDs.contains(item.id) { model.select(item.id) }
-                                model.beginContentEdit(item.id)
-                            } label: {
-                                Image(systemName: "square.and.pencil").font(.system(size: 12.5)).frame(width: 18, height: 18).contentShape(Rectangle())
-                            }.buttonStyle(.plain).foregroundStyle(Color.accentColor).help("编辑内容 · ⌘E").accessibilityLabel("编辑内容")
+                // 编辑、详情、收藏三个固定槽位始终占位，悬停或选中才显示，度量文字与角标位置不随之移动，by AI.Coding。
+                if !tiny {
+                    HStack(spacing: 0) {
+                        Group {
+                            if [ClipKind.text, .url].contains(item.kind) {
+                                Button {
+                                    if !model.selectedIDs.contains(item.id) { model.select(item.id) }
+                                    model.beginContentEdit(item.id)
+                                } label: { slotIcon("square.and.pencil") }
+                                    .buttonStyle(.plain).foregroundStyle(Color.accentColor).help("编辑内容 · ⌘E").accessibilityLabel("编辑内容")
+                            } else { Color.clear.frame(width: 24, height: 24) }
+                            Button { model.showDetail(id: item.id) } label: {
+                                if detailPending { ProgressView().controlSize(.mini).frame(width: 24, height: 24) } else { slotIcon("info.circle") }
+                            }.buttonStyle(.plain).foregroundStyle(Color.accentColor).help("详情 · ⌘I").accessibilityLabel(detailPending ? "正在准备预览" : "详情")
+                            Button { model.change(.favorites(model.selectedIDs.contains(item.id) ? model.orderedSelection : [item.id], !item.isFavorite)) } label: {
+                                slotIcon(item.isFavorite ? "star.fill" : "star")
+                            }.buttonStyle(.plain).foregroundStyle(item.isFavorite ? Color.orange : Color.accentColor).help(item.isFavorite ? "取消收藏" : "收藏").accessibilityLabel(item.isFavorite ? "取消收藏" : "收藏")
                         }
-                        Button { model.showDetail(id: item.id) } label: {
-                            if detailPending { ProgressView().controlSize(.mini).frame(width: 18, height: 18) }
-                            else { Image(systemName: "info.circle").font(.system(size: 13)).frame(width: 18, height: 18).contentShape(Rectangle()) }
-                        }.buttonStyle(.plain).foregroundStyle(Color.accentColor).help("详情 · ⌘I").accessibilityLabel(detailPending ? "正在准备预览" : "详情")
-                    }
+                    }.opacity(slotsVisible ? 1 : 0).allowsHitTesting(slotsVisible).accessibilityHidden(!slotsVisible)
                         .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(item.id)) } action: { infoRect = $0 }
-                        .onDisappear { infoRect = .zero }
                 }
                 if index < 9 && !tiny {
                     Text(HotKeyService.label(Shortcut(keyCode: [18,19,20,21,23,22,26,28,25][index], modifiers: quickModifiers)))
                         .font(.system(size: 10, weight: .medium, design: .monospaced))
                         .padding(.horizontal, 4).padding(.vertical, 1)
                         .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 3))
-                        .help("快捷粘贴第\(index + 1)条记录")
+                        .opacity(showsQuickBadge ? 1 : 0)
+                        .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: showsQuickBadge)
+                        .accessibilityHidden(true)
                 }
             }.font(.system(size: 10)).foregroundStyle(.secondary).padding(.horizontal, tiny ? 8 : 12)
                 .frame(height: footerHeight)
@@ -822,7 +830,7 @@ struct ClipCard: View, Equatable {
     private var interactiveCard: some View {
         cardBody
             // 原生桥必须有明确卡片尺寸，否则透明NSView会占满滚动视口并误认其他卡片，by AI.Coding。
-            .background(HistoryDragBridge(model: model, id: item.id, headerRect: headerRect, passThroughRect: infoRect).frame(width: height, height: height))
+            .background(HistoryDragBridge(model: model, id: item.id, headerRect: headerRect, passThroughRect: slotsVisible ? infoRect : .zero).frame(width: height, height: height))
             .background {
                 #if DEBUG
                 if GUIAcceptanceProbe.configuration != nil, index == 0 {
@@ -835,7 +843,7 @@ struct ClipCard: View, Equatable {
             .scaleEffect(dragging ? 0.96 : 1)
             .opacity(dragging ? 0.55 : 1)
             .animation(reduceMotion ? nil : .spring(response: 0.22, dampingFraction: 0.82), value: dragging)
-            .help(item.kind == .file ? "双击复制到Finder当前目录或原应用" : "单击选择，双击粘贴到：\(MacApplicationClient.targetName(model.target))")
+            .help((item.kind == .file ? "双击复制到Finder当前目录或原应用" : "单击选择，双击粘贴到：\(MacApplicationClient.targetName(model.target))") + quickPasteHelp)
             // 隐藏内容时辅助功能也不朗读正文，与界面模糊保持同一隐私承诺，by AI.Coding。
             // 每张卡片只暴露一个可操作元素；重命名时保留原生输入框，by AI.Coding。
             .accessibilityElement(children: editing ? .contain : .ignore)
@@ -844,9 +852,38 @@ struct ClipCard: View, Equatable {
             .accessibilityAction(named: Text("复制并粘贴")) { model.doubleClick(item.id) }
             .accessibilityAction(named: Text("重命名")) { model.beginRename(item.id) }
             .accessibilityAction(named: Text("编辑内容")) { model.beginContentEdit(item.id) }
+            // 原底栏按钮迁为卡片命名动作，可用性与原底栏一致，by AI.Coding。
+            .accessibilityActions {
+                ForEach(Self.voiceOverActions(kind: item.kind, hidden: hidden, favorite: item.isFavorite), id: \.self) { name in
+                    Button(name) { performVoiceOverAction(name) }
+                }
+            }
             .onChange(of: editing) { _, active in if active { startNameEditing() } else { nameFocused = false } }
             .onChange(of: nameFocused) { _, focused in if !focused && model.renamingID == item.id { model.cancelRename() } }
             .onAppear { if editing { startNameEditing() } }
+    }
+    private var slotsVisible: Bool { (hovering || selected || detailPending) && !hidden }
+    private func slotIcon(_ symbol: String) -> some View {
+        Image(systemName: symbol).font(.system(size: 13)).frame(width: 24, height: 24).contentShape(Rectangle())
+    }
+    /// 角标只在按住修饰键时出现，悬停说明仍写明快速粘贴键，可发现性不降为零，by AI.Coding。
+    private var quickPasteHelp: String {
+        index < 9 ? "\n\(HotKeyService.label(Shortcut(keyCode: [18,19,20,21,23,22,26,28,25][index], modifiers: quickModifiers))) 快速粘贴第 \(index + 1) 条" : ""
+    }
+    /// 隐藏内容只留原格式复制；无文本类型不提供纯文本复制，by AI.Coding。
+    static func voiceOverActions(kind: ClipKind, hidden: Bool, favorite: Bool) -> [String] {
+        if hidden { return ["原格式复制"] }
+        return ["详情", favorite ? "取消收藏" : "收藏", "原格式复制"] + (kind == .image ? [] : ["纯文本复制"]) + ["直接粘贴"]
+    }
+    private func performVoiceOverAction(_ name: String) {
+        if !model.selectedIDs.contains(item.id) { model.select(item.id) }
+        switch name {
+        case "详情": model.showDetail(id: item.id)
+        case "收藏", "取消收藏": model.change(.favorites(model.orderedSelection, !item.isFavorite))
+        case "原格式复制": model.perform(.original, action: .copy)
+        case "纯文本复制": model.perform(.plainText, action: .copy)
+        default: model.perform(action: .directPaste)
+        }
     }
     /// 菜单独立展开，避免单个SwiftUI泛型表达式超出编译器推断范围，by AI.Coding。
     private var menuCard: some View {

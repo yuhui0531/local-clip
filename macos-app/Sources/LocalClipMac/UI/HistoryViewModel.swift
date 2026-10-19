@@ -320,6 +320,8 @@ import LocalClipCore
     public var closePanel: ((Bool) -> Void)?
     /// 入场位移（pt），由面板显示驱动；减弱动态效果时保持0，by AI.Coding。
     @Published var panelEntrance: CGFloat = 0
+    /// 修饰键恰好等于快速粘贴修饰键时显示⌘N角标，by AI.Coding。
+    @Published var quickBadgesVisible = false
     public var openSettings: (() -> Void)?
     public var quitApplication: (() -> Void)?
     public var registerShortcut: ((Shortcut) -> Bool)?

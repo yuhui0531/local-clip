@@ -41,6 +41,7 @@ import LocalClipCore
     private let login = LoginItemService()
     private var lastExternal: TargetToken?
     private var keyboardMonitor: Any?
+    private var flagsMonitor: Any?
     private var activatedObserver: NSObjectProtocol?
     private var wakeObserver: NSObjectProtocol?
     private var screenObserver: NSObjectProtocol?
@@ -514,6 +515,7 @@ import LocalClipCore
         model?.panelVisibilityChanged(false)
         focusDismissal?.cancel(); model?.showingDetail = false; model?.showingCategoryEditor = false; model?.showingFilters = false; model?.showingStatusDetail = false
         panelAnimationGeneration += 1; panelFade?.cancel(); panelFade = nil
+        if model?.quickBadgesVisible == true { model?.quickBadgesVisible = false }
         if let panel {
             // 用户关闭淡出0.12s且期间不接收鼠标；粘贴与入队立即隐藏，by AI.Coding。
             if animated && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion && panel.isVisible {
@@ -551,6 +553,13 @@ import LocalClipCore
                 hasModal: NSApp.modalWindow != nil, pinned: self.model?.pinned == true) else { return }
             self.dismissHistory()
         }
+    }
+    static func carbonModifiers(_ flags: NSEvent.ModifierFlags) -> UInt32 {
+        (flags.contains(.command) ? UInt32(cmdKey) : 0) | (flags.contains(.option) ? UInt32(optionKey) : 0) | (flags.contains(.control) ? UInt32(controlKey) : 0) | (flags.contains(.shift) ? UInt32(shiftKey) : 0)
+    }
+    /// 修饰键恰好等于设置中的快速粘贴修饰键才显示角标；多按或少按都不显示，by AI.Coding。
+    static func showsQuickBadges(_ flags: NSEvent.ModifierFlags, quickModifiers: UInt32) -> Bool {
+        quickModifiers != 0 && carbonModifiers(flags.intersection([.command, .option, .control, .shift])) == quickModifiers
     }
     /// 淡出结束只在代次未变时隐藏并复原；重新打开已递增代次，旧结束不得隐藏面板，by AI.Coding。
     static func finishPanelFade(_ panel: NSWindow, generation: Int, current: Int) {
@@ -776,6 +785,13 @@ import LocalClipCore
     }
     /// 仅面板本地按键；Esc优先关闭，其余组合输入交给输入法，不使用全局监听。
     private func installKeyboard() {
+        // 修饰键变化只切换角标显示，不消费事件，by AI.Coding。
+        flagsMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
+            guard let self, self.panelPresented, let model = self.model else { return event }
+            let visible = Self.showsQuickBadges(event.modifierFlags, quickModifiers: model.settings.quickModifiers)
+            if model.quickBadgesVisible != visible { model.quickBadgesVisible = visible }
+            return event
+        }
         keyboardMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self else { return event }
             // 本地Cmd-Q先于历史/IME分支，也适用于只有设置窗口或菜单图标隐藏时，by AI.Coding。
@@ -836,7 +852,7 @@ import LocalClipCore
             if event.keyCode == 48 { return event }
             if Self.preservesFocusedControlKeys(event, firstResponder: panel.firstResponder, resultsResponder: panel) { return event }
             if flags == [.shift], [UInt16(36),76].contains(event.keyCode) { model.perform(.plainText, action: .directPaste); return nil }
-            let carbon = (flags.contains(.command) ? UInt32(cmdKey) : 0) | (flags.contains(.option) ? UInt32(optionKey) : 0) | (flags.contains(.control) ? UInt32(controlKey) : 0) | (flags.contains(.shift) ? UInt32(shiftKey) : 0)
+            let carbon = Self.carbonModifiers(flags)
             if carbon == model.settings.boardModifiers {
                 if event.keyCode == 123 || event.keyCode == 124 { model.switchBoard(event.keyCode == 123 ? -1 : 1); return nil }
                 if event.keyCode == 45 { model.editCategory(); return nil }
@@ -899,6 +915,7 @@ import LocalClipCore
         for observer in focusObservers { NotificationCenter.default.removeObserver(observer) }
         focusObservers.removeAll()
         if let keyboardMonitor { NSEvent.removeMonitor(keyboardMonitor) }
+        if let flagsMonitor { NSEvent.removeMonitor(flagsMonitor) }
         if let outsideClickMonitor { NSEvent.removeMonitor(outsideClickMonitor) }
         if let localClickMonitor { NSEvent.removeMonitor(localClickMonitor) }
         if let activatedObserver { NSWorkspace.shared.notificationCenter.removeObserver(activatedObserver) }
