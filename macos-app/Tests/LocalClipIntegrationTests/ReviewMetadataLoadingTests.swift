@@ -42,9 +42,13 @@ import Testing
         func searchField(_ view: NSView) -> NSSearchField? { (view as? NSSearchField) ?? view.subviews.lazy.compactMap(searchField).first }
         try await until { host.layoutSubtreeIfNeeded(); return searchField(host)?.delegate is SearchField.Coordinator }
         let field = try #require(searchField(host)), coordinator = try #require(field.delegate as? SearchField.Coordinator)
-        let next = UUID(); model.focusRequest = next
+        // 显示周期令牌不再驱动搜索焦点；只有searchFocusRequest设置搜索框，by AI.Coding。
+        let before = coordinator.focus
+        model.focusRequest = UUID(); host.layoutSubtreeIfNeeded()
+        #expect(coordinator.focus == before)
+        let next = UUID(); model.searchFocusRequest = next
         try await until { host.layoutSubtreeIfNeeded(); return coordinator.focus == next }
-        #expect(coordinator.parent.focus == next); #expect(!window.isVisible)
+        #expect(coordinator.parent.focus == next); #expect(model.searchField === field); #expect(!window.isVisible)
     }
     /// 快查询不闪加载；列表与选择一次发布，输入和选择元数据不通知主界面，by AI.Coding。
     @Test func atomicListPublicationDoesNotInvalidateChrome() async throws {

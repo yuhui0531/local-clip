@@ -5,8 +5,10 @@ import Carbon
 import ApplicationServices
 import LocalClipCore
 @MainActor final class ClipPanel: NSPanel {
-    /// 与Esc、关闭按钮走同一收起流程，复位焦点与可见状态。
+    /// Esc与取消命令：先经模型分级处理，最后才收起面板，by AI.Coding。
     var onCancel: () -> Void = {}
+    /// 标准关闭命令直接收起，不受搜索词或弹窗分级影响，by AI.Coding。
+    var onClose: () -> Void = {}
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
     /// 标准取消命令也关闭历史，不依赖搜索框是否处于编辑状态。
@@ -14,7 +16,7 @@ import LocalClipCore
     /// 无标题栏面板也支持标准关闭命令，沿用收起而非销毁历史窗口，by AI.Coding。
     override func performClose(_ sender: Any?) {
         guard attachedSheet == nil, NSApp.modalWindow == nil else { return }
-        onCancel()
+        onClose()
     }
     /// AppKit 默认按 closable 样式禁用关闭项；本面板虽无标题栏，仍有安全收起动作。
     override func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
@@ -415,7 +417,8 @@ import LocalClipCore
             let host = CategoryDropHostingView(rootView: HistoryView(model: model), model: model)
             host.sizingOptions = []
             panel.contentView = host; panel.minSize = NSSize(width: 680, height: 280)
-            panel.onCancel = { [weak self] in self?.dismissHistory() }
+            panel.onCancel = { [weak self] in if self?.model?.handleEscape() != false { self?.dismissHistory() } }
+            panel.onClose = { [weak self] in self?.dismissHistory() }
             self.panel = panel
             focusObservation = Self.observeHistoryFocus(of: panel, model: model)
         }
@@ -427,7 +430,8 @@ import LocalClipCore
             panel.contentView?.layoutSubtreeIfNeeded()
             panel.contentView?.displayIfNeeded()
             panel.makeKeyAndOrderFront(nil)
-            model.focusRequest = UUID()
+            // U-01第2步（打开即聚焦结果）须先通过IME首键交互验收，未验证前仍聚焦搜索框，by AI.Coding。
+            model.focusRequest = UUID(); model.searchFocusRequest = UUID()
         }
     }
     /// 面板高度限制在280–520pt，且不超过所在屏幕。
@@ -544,6 +548,13 @@ import LocalClipCore
     static func preservesFocusedControlKeys(_ event: NSEvent, firstResponder: NSResponder?, resultsResponder: NSResponder) -> Bool {
         guard let firstResponder, firstResponder !== resultsResponder, !(firstResponder is NSTextView) else { return false }
         return event.modifierFlags.intersection([.command, .control, .option]).isEmpty
+    }
+    /// 结果区无⌘⌃⌥的可打印字符转入搜索；Space、Return、Delete、Tab、Esc、方向与功能键保留原含义，by AI.Coding。
+    static func forwardsToSearch(_ event: NSEvent, editing: Bool) -> Bool {
+        guard !editing, event.type == .keyDown, event.modifierFlags.intersection([.command, .control, .option]).isEmpty,
+              ![UInt16(49), 36, 76, 51, 117, 48, 53, 123, 124, 125, 126, 115, 119, 116, 121].contains(event.keyCode),
+              let characters = event.characters, !characters.isEmpty else { return false }
+        return characters.unicodeScalars.allSatisfy { !CharacterSet.controlCharacters.contains($0) && !(0xF700...0xF8FF).contains($0.value) }
     }
     /// 仅搜索框的原生field editor可借用记录快捷键，其他文字编辑仍由原控件处理，by AI.Coding。
     static func isHistorySearchEditor(_ responder: NSResponder?) -> Bool {
@@ -770,18 +781,14 @@ import LocalClipCore
             let editor = panel.firstResponder as? NSTextView
             if editor?.hasMarkedText() == true { return event }
             if event.keyCode == 53 {
-                if model.showingCategoryEditor { model.showingCategoryEditor = false }
-                else if model.showingFilters { model.showingFilters = false }
-                else if model.showingStatusDetail { model.showingStatusDetail = false }
-                else if model.showingDetail { model.showingDetail = false }
-                else { self.dismissHistory() }
+                if model.handleEscape() { self.dismissHistory() }
                 return nil
             }
             if model.showingCategoryEditor || model.showingFilters || model.showingStatusDetail { return event }
             let flags = event.modifierFlags.intersection([.command,.option,.control,.shift])
             let editing = editor?.isEditable == true
             if flags == [.command], event.keyCode == 3 {
-                model.focusRequest = UUID(); return nil
+                model.searchFocusRequest = UUID(); return nil
             }
             // Tab/Shift-Tab和已聚焦控件的激活键交给原生焦点链，避免Space误开预览、Return误粘贴。
             if event.keyCode == 48 { return event }
@@ -810,6 +817,10 @@ import LocalClipCore
                 }
             }
             if !flags.intersection([.command,.control,.option]).isEmpty { return event }
+            // 结果区键入同步转入搜索框后放行原事件，由field editor与输入法接收首键，不手动派发keyDown，by AI.Coding。
+            if event.window === panel, panel.firstResponder == nil || panel.firstResponder === panel, Self.forwardsToSearch(event, editing: editing) {
+                model.focusSearchSynchronously(); return event
+            }
             if !editing {
                 if event.keyCode == 49 { model.quickLook(); return nil }
                 if event.keyCode == 115 || event.keyCode == 119 { model.edgeSelection(event.keyCode == 119, extend: flags.contains(.shift)); return nil }

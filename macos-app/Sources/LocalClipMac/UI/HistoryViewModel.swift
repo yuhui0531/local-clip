@@ -179,7 +179,27 @@ import LocalClipCore
     /// 拖出图片文件占用；不计入历史容量，单独展示与清理，by AI.Coding。
     @Published public private(set) var dragFilesBytes: Int64?
     @Published public var target: TargetToken?
+    /// 面板显示周期标识，供文件预览重新校验与GUI探针；不再驱动搜索框焦点，by AI.Coding。
     @Published public var focusRequest = UUID()
+    /// 仅此令牌把搜索框设为第一响应者（打开面板、⌘F），by AI.Coding。
+    @Published public var searchFocusRequest = UUID()
+    /// 搜索框创建时登记，结果区键入可同步转入，by AI.Coding。
+    weak var searchField: NSSearchField?
+    /// 同步设为第一响应者，调用方随后放行原事件，首键经field editor与输入法处理，by AI.Coding。
+    @discardableResult func focusSearchSynchronously() -> Bool {
+        guard let field = searchField, let window = field.window else { return false }
+        return window.makeFirstResponder(field)
+    }
+    /// Esc分级：自有弹窗 → 清空搜索词（焦点回结果）→ 返回true表示应关闭面板；输入法候选由调用方先放行，by AI.Coding。
+    func handleEscape() -> Bool {
+        if showingCategoryEditor { showingCategoryEditor = false }
+        else if showingFilters { showingFilters = false }
+        else if showingStatusDetail { showingStatusDetail = false }
+        else if showingDetail { showingDetail = false }
+        else if !queryState.literal.isEmpty { queryState.literal = ""; searchChanged(); focusResults?() }
+        else { return true }
+        return false
+    }
     /// 所有详情入口共享隐藏条件；隐藏是视觉策略，不禁止普通复制，by AI.Coding。
     public var canDisplayContents: Bool { !settings.hideContents }
     /// 卡片预览读取统一由ViewModel传递时间，不让视图直接选择真实时钟，by AI.Coding。

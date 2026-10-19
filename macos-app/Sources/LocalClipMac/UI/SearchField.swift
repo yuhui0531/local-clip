@@ -10,11 +10,14 @@ public struct SearchField: NSViewRepresentable {
     var onEscape: () -> Void
     /// 占位文字显示当前条数，随统计快照更新，by AI.Coding。
     var placeholder = "搜索历史"
+    /// 创建时登记原生搜索框，供结果区键入同步转入，by AI.Coding。
+    var onRegister: (NSSearchField) -> Void = { _ in }
     /// 原生 field editor 决定输入法候选，不抢 Enter。
     public func makeNSView(context: Context) -> NSSearchField {
         let field = NSSearchField(); field.placeholderString = placeholder
         field.delegate = context.coordinator; field.sendsSearchStringImmediately = true
         field.controlSize = .large; field.toolTip = "搜索内容、名称或来源 · ⌘F"; field.setAccessibilityLabel("搜索历史")
+        context.coordinator.field = field; onRegister(field)
         return field
     }
     /// 只有新的打开请求才聚焦，输入中不重复抢焦点。
@@ -31,6 +34,7 @@ public struct SearchField: NSViewRepresentable {
     @MainActor public final class Coordinator: NSObject, NSSearchFieldDelegate {
         var parent: SearchField
         var focus: UUID?
+        weak var field: NSSearchField?
         init(_ parent: SearchField) { self.parent = parent }
         /// 每次输入只更新绑定与queryID；不将搜索词写入日志。
         public func controlTextDidChange(_ notification: Notification) {
@@ -40,7 +44,7 @@ public struct SearchField: NSViewRepresentable {
             #endif
             parent.text = field.stringValue; parent.onChange()
         }
-        /// Esc始终关闭面板；中文组合输入中的Enter及方向键仍交给输入法。
+        /// Esc交给面板分级处理；中文组合输入中的Enter及方向键仍交给输入法。
         public func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
             // 输入法先处理取消候选；完成组合后 Esc 才关闭面板，by AI.Coding。
             if textView.hasMarkedText() { return false }

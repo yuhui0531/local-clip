@@ -311,6 +311,76 @@ import LocalClipCore
         #expect(model.statusEntry(queryEmpty: true)?.text.hasPrefix(model.settings.defaultAction == .directPaste ? "↩ 粘贴到 " : "↩ 复制") == true)
         #expect(!window.isVisible)
     }
+    /// 结果区键入转入搜索：仅无⌘⌃⌥的可打印字符；Space、Return、Delete、Tab、Esc、方向、功能与控制字符保留原含义，by AI.Coding。
+    @Test func forwardsPrintableKeysToSearch() throws {
+        func key(_ characters: String, _ code: UInt16, _ flags: NSEvent.ModifierFlags = []) throws -> NSEvent {
+            try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0, windowNumber: 0, context: nil, characters: characters, charactersIgnoringModifiers: characters, isARepeat: false, keyCode: code))
+        }
+        #expect(AppDelegate.forwardsToSearch(try key("a", 0), editing: false))
+        #expect(AppDelegate.forwardsToSearch(try key("A", 0, .shift), editing: false))
+        #expect(AppDelegate.forwardsToSearch(try key("1", 18), editing: false))
+        #expect(AppDelegate.forwardsToSearch(try key("/", 44), editing: false))
+        #expect(!AppDelegate.forwardsToSearch(try key("a", 0), editing: true))
+        for flags in [NSEvent.ModifierFlags.command, .control, .option, [.command, .shift]] { #expect(!AppDelegate.forwardsToSearch(try key("a", 0, flags), editing: false)) }
+        for (characters, code) in [(" ", UInt16(49)), ("\r", 36), ("\u{3}", 76), ("\u{7f}", 51), ("\t", 48), ("\u{1b}", 53), ("\u{F700}", 126), ("\u{F701}", 125), ("\u{F702}", 123), ("\u{F703}", 124), ("\u{F729}", 115), ("\u{F72B}", 119), ("\u{F704}", 122), ("\u{1}", 0)] {
+            #expect(!AppDelegate.forwardsToSearch(try key(characters, code), editing: false))
+        }
+    }
+    /// 同步转入后原事件按正常派发进入原生field editor，首键不丢；隐藏窗口，不激活应用，by AI.Coding。
+    @Test func forwardedKeyLandsInSearchField() async throws {
+        _ = NSApplication.shared
+        let (root, _, model) = try await setup()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let window = NSWindow(contentRect: .init(x: 0, y: 0, width: 300, height: 100), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil; window.close() }
+        let search = NSSearchField(frame: .init(x: 0, y: 0, width: 260, height: 30)); window.contentView = search
+        #expect(!model.focusSearchSynchronously())
+        model.searchField = search
+        try #require(window.makeFirstResponder(window))
+        let event = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber, context: nil, characters: "a", charactersIgnoringModifiers: "a", isARepeat: false, keyCode: 0))
+        #expect(AppDelegate.forwardsToSearch(event, editing: false) && model.focusSearchSynchronously())
+        #expect(AppDelegate.isHistorySearchEditor(window.firstResponder))
+        window.sendEvent(event) // 监听放行后AppKit按新的第一响应者派发
+        #expect(search.stringValue == "a" && !window.isVisible)
+    }
+    /// Esc分级：分类编辑 → 筛选 → 状态 → 详情 → 清空搜索并回结果 → 关闭；三条入口共用，by AI.Coding。
+    @Test func escapeLevels() async throws {
+        let (root, _, model) = try await setup()
+        defer { try? FileManager.default.removeItem(at: root) }
+        var results = 0; model.focusResults = { results += 1 }
+        model.showingCategoryEditor = true; model.showingFilters = true; model.showingStatusDetail = true; model.showingDetail = true; model.query = "row"
+        #expect(!model.handleEscape() && !model.showingCategoryEditor && model.showingFilters)
+        #expect(!model.handleEscape() && !model.showingFilters && model.showingStatusDetail)
+        #expect(!model.handleEscape() && !model.showingStatusDetail && model.showingDetail)
+        #expect(!model.handleEscape() && !model.showingDetail && model.query == "row" && results == 0)
+        #expect(!model.handleEscape() && model.query.isEmpty && results == 1)
+        #expect(model.handleEscape())
+        var closes = 0
+        let field = SearchField(text: .constant(""), focus: UUID(), onChange: {}, onNavigate: { _ in }, onEnter: {}, onEscape: { if model.handleEscape() { closes += 1 } })
+        model.query = "row"; field.onEscape(); #expect(closes == 0 && model.query.isEmpty)
+        field.onEscape(); #expect(closes == 1)
+        _ = NSApplication.shared
+        let panel = ClipPanel(contentRect: .init(x: 0, y: 0, width: 200, height: 100), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
+        var dismissed = 0, closed = 0
+        panel.onCancel = { if model.handleEscape() { dismissed += 1 } }; panel.onClose = { closed += 1 }
+        model.query = "row"; panel.cancelOperation(nil); #expect(dismissed == 0 && model.query.isEmpty)
+        panel.cancelOperation(nil); #expect(dismissed == 1)
+        model.query = "row"; panel.performClose(nil); #expect(closed == 1 && model.query == "row")
+    }
+    /// 每次打开发放的focusRequest推动文件卡片重新校验；非文件卡片不因此重绘，by AI.Coding。
+    @Test func focusRequestRevalidatesFileCards() async throws {
+        let (root, _, model) = try await setup()
+        defer { try? FileManager.default.removeItem(at: root) }
+        var item = try #require(model.items.first)
+        func card(_ generation: UUID) -> ClipCard {
+            ClipCard(item: item, index: 0, selected: false, dragging: false, editing: false, hidden: false, quickModifiers: 0, height: 268, categoryID: nil, categories: [], target: nil, selectionCount: 0, selectionHasNonText: false, queueShortcut: model.settings.queueShortcut, model: model, previewGeneration: generation)
+        }
+        let first = UUID(), second = UUID()
+        #expect(card(first) == card(second))
+        item.kind = .file
+        #expect(card(first) == card(first) && !(card(first) == card(second)))
+    }
     /// 状态槽优先级：错误 > 监控异常 > 队列 > 通知 > 提示；旧通知计时器不能清掉同文字的新错误，by AI.Coding。
     @Test func statusSlotPriorityAndSeverity() async throws {
         let (root, _, model) = try await setup()

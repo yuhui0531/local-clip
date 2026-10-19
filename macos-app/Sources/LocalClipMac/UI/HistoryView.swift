@@ -43,7 +43,7 @@ public struct HistoryView: View {
                     }
                     // 状态槽与多选操作条共用同一位置；导航区和搜索在多选时保持可用，by AI.Coding。
                     HistoryToolbarStatus(model: model, footer: model.listState.footerState, input: model.queryState, compact: compact)
-                    HistorySearchInput(model: model, input: model.queryState, footer: model.listState.footerState, focus: model.focusRequest).frame(width: compact ? 160 : 200, height: 30)
+                    HistorySearchInput(model: model, input: model.queryState, footer: model.listState.footerState, focus: model.searchFocusRequest).frame(width: compact ? 160 : 200, height: 30)
                     HStack(spacing: 2) {
                         filterButton
                             .popover(isPresented: $model.showingFilters) { FilterEditor(model: model) }
@@ -195,8 +195,8 @@ private struct HistorySearchInput: View {
     var body: some View {
         let value = footer.snapshot
         SearchField(text: $input.literal, focus: focus, onChange: { model.searchChanged() },
-            onNavigate: model.navigate, onEnter: { model.focusResults?() }, onEscape: { model.closePanel?() },
-            placeholder: "搜索 \(value.itemCount)\(value.hasMore ? "+" : "") 条")
+            onNavigate: model.navigate, onEnter: { model.focusResults?() }, onEscape: { if model.handleEscape() { model.closePanel?() } },
+            placeholder: "搜索 \(value.itemCount)\(value.hasMore ? "+" : "") 条", onRegister: { model.searchField = $0 })
             .overlay(alignment: .trailing) {
                 if value.loading { ProgressView().controlSize(.mini).padding(.trailing, 26).accessibilityLabel("正在读取") }
             }
@@ -575,7 +575,7 @@ private struct CategoryEditor: View {
     }
 }
 // 卡片只比较自身显示值，选择/详情变化不使全部卡片反复读取图标和重建内容，by AI.Coding。
-private struct ClipCard: View, Equatable {
+struct ClipCard: View, Equatable {
     let item: ClipSummary
     let index: Int
     let selected: Bool

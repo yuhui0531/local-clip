@@ -154,8 +154,8 @@ import Testing
         #expect(item.target == nil && item.action == #selector(NSWindow.performClose(_:)))
         let panel = ClipPanel(contentRect: .init(x: 0, y: 0, width: 100, height: 100), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
         #expect(panel.validateMenuItem(item))
-        var closed = 0; panel.onCancel = { closed += 1 }
+        var closed = 0, cancels = 0; panel.onClose = { closed += 1 }; panel.onCancel = { cancels += 1 }
         #expect(NSApp.sendAction(try #require(item.action), to: panel, from: item))
-        #expect(closed == 1 && !panel.isVisible)
+        #expect(closed == 1 && cancels == 0 && !panel.isVisible)
     }
 }
