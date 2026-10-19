@@ -58,8 +58,8 @@ public struct HistoryView: View {
             // 顶部保留圆角，底边与屏幕贴合，不留可拖动的悬浮窗口边距。
             }.frame(width: viewport.size.width, height: viewport.size.height, alignment: .top)
                 .background { ZStack { HistoryBackdrop(); Color(nsColor: .windowBackgroundColor).opacity(0.76) } }
-                .clipShape(UnevenRoundedRectangle(topLeadingRadius: 18, topTrailingRadius: 18))
-                .overlay(UnevenRoundedRectangle(topLeadingRadius: 18, topTrailingRadius: 18).strokeBorder(.white.opacity(0.30), lineWidth: 1))
+                .clipShape(UnevenRoundedRectangle(topLeadingRadius: LCStyle.Radius.panel, topTrailingRadius: LCStyle.Radius.panel))
+                .overlay(UnevenRoundedRectangle(topLeadingRadius: LCStyle.Radius.panel, topTrailingRadius: LCStyle.Radius.panel).strokeBorder(.white.opacity(0.30), lineWidth: 1))
                 .clipped()
                 .offset(y: model.panelEntrance)
                 .onGeometryChange(for: CGSize.self) { CGSize(width: $0.size.width, height: cardHeight) } action: { size in
@@ -86,7 +86,7 @@ public struct HistoryView: View {
             ToolbarIconButton(symbol: "line.3.horizontal.decrease", help: "筛选") { model.showingFilters.toggle() }
         } else {
             Button { model.showingFilters.toggle() } label: {
-                HStack(spacing: 4) { Image(systemName: "line.3.horizontal.decrease").font(.system(size: 13, weight: .medium)); Text("筛选 · \(count)") }
+                HStack(spacing: 4) { Image(systemName: "line.3.horizontal.decrease").font(.system(size: LCStyle.FontSize.body, weight: .medium)); Text("筛选 · \(count)") }
                     .foregroundStyle(Color.accentColor)
             }.buttonStyle(ToolbarTabStyle(selected: true)).fixedSize().help("筛选（\(count) 项生效）").accessibilityLabel("筛选，\(count) 项生效")
         }
@@ -130,7 +130,7 @@ public struct HistoryView: View {
                             }
                             Divider()
                             Button("新建分类…") { model.editCategory() }
-                        } label: { Image(systemName: "chevron.down").font(.system(size: 14, weight: .medium)).foregroundStyle(.secondary) }
+                        } label: { Image(systemName: "chevron.down").font(.system(size: LCStyle.FontSize.title, weight: .medium)).foregroundStyle(.secondary) }
                             .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
                             .help("全部分类").accessibilityLabel("全部分类")
                     }
@@ -150,7 +150,7 @@ public struct HistoryView: View {
                 }
             }
         } label: {
-            HStack(spacing: 3) { Text(selected ? model.kind.map(Self.kindName) ?? "类型" : "类型"); Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold)) }
+            HStack(spacing: 3) { Text(selected ? model.kind.map(Self.kindName) ?? "类型" : "类型"); Image(systemName: "chevron.down").font(.system(size: LCStyle.FontSize.caption, weight: .semibold)) }
         }.menuStyle(.button).buttonStyle(ToolbarTabStyle(selected: selected)).menuIndicator(.hidden).fixedSize()
             .accessibilityLabel(selected ? "类型：\(model.kind.map(Self.kindName) ?? "")" : "类型")
     }
@@ -168,7 +168,7 @@ public struct HistoryView: View {
     /// 类型图标分段：一次点击、与卡片类型符号一致，名称由提示和朗读给出，by AI.Coding。
     private func kindTab(_ kind: ClipKind) -> some View {
         let selected = model.kind == kind && model.activeCategories.isEmpty && !model.favorites
-        return Button { model.selectKind(kind) } label: { Image(systemName: Self.kindSymbol(kind)).font(.system(size: 13, weight: .medium)) }
+        return Button { model.selectKind(kind) } label: { Image(systemName: Self.kindSymbol(kind)).font(.system(size: LCStyle.FontSize.body, weight: .medium)) }
             .buttonStyle(ToolbarTabStyle(selected: selected)).help(Self.kindName(kind)).accessibilityLabel(Self.kindName(kind))
             .accessibilityAddTraits(selected ? .isSelected : [])
     }
@@ -376,7 +376,7 @@ private struct HistoryStatusSlot: View {
                         }
                         if !compact { Text(entry.text).lineLimit(1).truncationMode(.tail).foregroundStyle(entry.level == .hint ? Color.secondary : Color.primary) }
                     }
-                }.font(.system(size: 11, weight: .medium)).frame(maxWidth: compact ? 28 : .infinity, minHeight: 28, alignment: compact ? .center : .trailing).contentShape(Rectangle())
+                }.font(.system(size: LCStyle.FontSize.meta, weight: .medium)).frame(maxWidth: compact ? 28 : .infinity, minHeight: 28, alignment: compact ? .center : .trailing).contentShape(Rectangle())
             }.buttonStyle(.plain).foregroundStyle(entry.map { Self.tint($0.level) } ?? Color.secondary).disabled(!detailAvailable)
                 .help(model.ignoreDescription.isEmpty ? entry?.text ?? "" : model.ignoreDescription)
                 .accessibilityLabel(entry?.text ?? HistoryView.statusLabel(model.status))
@@ -387,8 +387,8 @@ private struct HistoryStatusSlot: View {
                 }
             // 原底栏“开始监控”与筛选条“结束”一次点击直达；紧凑时收进弹窗，by AI.Coding。
             if !compact, let entry {
-                if entry.level == .monitoring && model.recordingPaused { Button("开始监控") { model.resumeRecording() }.buttonStyle(.link).font(.system(size: 11)).fixedSize() }
-                if entry.level == .queue { Button("结束") { model.stopPasteQueue() }.buttonStyle(.link).font(.system(size: 11)).fixedSize().accessibilityLabel("结束粘贴队列") }
+                if entry.level == .monitoring && model.recordingPaused { Button("开始监控") { model.resumeRecording() }.buttonStyle(.link).font(.system(size: LCStyle.FontSize.meta)).fixedSize() }
+                if entry.level == .queue { Button("结束") { model.stopPasteQueue() }.buttonStyle(.link).font(.system(size: LCStyle.FontSize.meta)).fixedSize().accessibilityLabel("结束粘贴队列") }
             }
         }
     }
@@ -407,7 +407,7 @@ private struct HistoryStatusDetail: View {
     let entry: HistoryViewModel.StatusEntry?
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(entry?.text ?? HistoryView.statusLabel(model.status)).font(.system(size: 13)).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+            Text(entry?.text ?? HistoryView.statusLabel(model.status)).font(.system(size: LCStyle.FontSize.body)).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
             if !model.ignoreDescription.isEmpty { Text(model.ignoreDescription).font(.caption).foregroundStyle(.secondary) }
             HStack {
                 Spacer()
@@ -475,7 +475,7 @@ private struct HistoryMultiSelectBar: View {
         }
     }
     private func barIcon(_ symbol: String) -> some View {
-        Image(systemName: symbol).font(.system(size: 14, weight: .medium)).foregroundStyle(.secondary).frame(width: 28, height: 28).contentShape(Rectangle())
+        Image(systemName: symbol).font(.system(size: LCStyle.FontSize.title, weight: .medium)).foregroundStyle(.secondary).frame(width: 28, height: 28).contentShape(Rectangle())
     }
 }
 /// 勾选所选记录已属分类，点按切换；“更多 › 所选记录”与多选操作条共用，by AI.Coding。
@@ -541,7 +541,7 @@ private struct HistoryMoreMenu: View {
             Button("设置… · ⌘,") { model.openSettings?() }
             Button("清空普通历史…", role: .destructive) { model.change(.clearOrdinary) }
             Divider(); Button("退出 LocalClip") { model.quitApplication?() }.keyboardShortcut("q", modifiers: .command)
-        } label: { Image(systemName: "ellipsis").font(.system(size: 14, weight: .medium)).foregroundStyle(.secondary).frame(width: 28, height: 28).contentShape(Circle()) }
+        } label: { Image(systemName: "ellipsis").font(.system(size: LCStyle.FontSize.title, weight: .medium)).foregroundStyle(.secondary).frame(width: 28, height: 28).contentShape(Circle()) }
             // borderlessButton 由 AppKit 按自身尺寸绘制图标，改用 SwiftUI 渲染标签以与相邻按钮同尺寸，by AI.Coding。
             .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize().help("更多").accessibilityLabel("更多")
             // 只有真实换选/内容变化才重查能力；不能沿用旧组结果，也不因分页或元数据回填闪烁。
@@ -557,7 +557,7 @@ private struct CategoryEditor: View {
     @FocusState private var nameFocused: Bool
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text(model.categoryBeingEdited == nil ? "新建分类" : "重命名分类").font(.system(size: 15, weight: .semibold))
+            Text(model.categoryBeingEdited == nil ? "新建分类" : "重命名分类").font(.system(size: LCStyle.FontSize.heading, weight: .semibold))
             TextField("分类名称", text: $model.categoryDraft).textFieldStyle(.roundedBorder)
                 .focused($nameFocused).disabled(model.savingCategory).onSubmit { model.saveCategory() }
             HStack(spacing: 10) {
@@ -567,7 +567,7 @@ private struct CategoryEditor: View {
                 }
             }
             Text(model.categoryError.isEmpty ? "1–64个字符，名称不能重复" : model.categoryError)
-                .font(.system(size: 11)).foregroundStyle(model.categoryError.isEmpty ? Color.secondary : Color.red)
+                .font(.system(size: LCStyle.FontSize.meta)).foregroundStyle(model.categoryError.isEmpty ? Color.secondary : Color.red)
             HStack {
                 Spacer()
                 Button("取消") { model.showingCategoryEditor = false }.disabled(model.savingCategory)
@@ -675,7 +675,7 @@ struct ClipCard: View, Equatable {
     /// 代码上限12.5pt，普通文本沿用原字号与紧凑布局，by AI.Coding。
     private var previewFontSize: CGFloat {
         let size: CGFloat = tiny ? 10 : height < 200 ? 12 : height < 260 ? 13 : 15
-        return detectedLanguage == nil ? size : min(size, 12.5)
+        return detectedLanguage == nil ? size : min(size, LCStyle.FontSize.codeMax)
     }
     /// 卡片合并辅助功能子元素后仍朗读预览状态；隐藏内容时不泄露状态或正文。
     /// 大小只附加在原有次级信息之后，不替换类型、次数等字段；隐藏内容时不显示。
@@ -737,7 +737,7 @@ struct ClipCard: View, Equatable {
     private var footerHeight: Double { tiny ? 18 : 22 }
     private var iconSize: Double { tiny ? 18 : 26 }
     // 圆角为原来的一半，卡片更规整，by AI.Coding。
-    private var cardRadius: Double { min(11, height * 0.06) }
+    private var cardRadius: Double { min(LCStyle.Radius.card, height * 0.06) }
     /// 展示身份与依据分开，前台推断不伪装成应用主动声明。
     private var sourceDescription: String {
         switch item.source.basis {
@@ -753,7 +753,7 @@ struct ClipCard: View, Equatable {
                 TextField("名称", text: Binding(get: { nameDraft }, set: {
                     if nameDraft != $0 { nameDraft = $0; model.renameDraftChanged(id: item.id) }
                 })).textFieldStyle(.plain).focused($nameFocused)
-                    .background(Color.white.opacity(0.2), in: RoundedRectangle(cornerRadius: 3))
+                    .background(Color.white.opacity(0.2), in: RoundedRectangle(cornerRadius: LCStyle.Radius.control))
                     .onSubmit { model.saveRename(id: item.id, title: nameDraft) }
                     .onExitCommand { model.cancelRename() }
             } else { Text(item.title ?? languageTitle ?? HistoryView.kindName(item.kind)) }
@@ -773,22 +773,22 @@ struct ClipCard: View, Equatable {
                     cardTitle
                     if height >= 150 {
                         CopyAge(copiedAt: item.lastCopiedAt)
-                            .font(.system(size: 10)).foregroundStyle(Color.white.opacity(0.75)).lineLimit(1)
+                            .font(.system(size: LCStyle.FontSize.caption)).foregroundStyle(Color.white.opacity(0.75)).lineLimit(1)
 
                     }
                 }
                 Spacer(minLength: 2)
                 if let detection, !hidden, !tiny { DetectionBadge(detection: detection) }
                 if item.isFavorite && !tiny {
-                    Image(systemName: "star.fill").font(.system(size: 11)).foregroundStyle(.orange)
-                        .background { Image(systemName: "star.fill").font(.system(size: 11)).foregroundStyle(.white).scaleEffect(1.12) }
+                    Image(systemName: "star.fill").font(.system(size: LCStyle.FontSize.meta)).foregroundStyle(.orange)
+                        .background { Image(systemName: "star.fill").font(.system(size: LCStyle.FontSize.meta)).foregroundStyle(.white).scaleEffect(1.12) }
                         .accessibilityLabel("已收藏")
                 }
                 // 应用图标自带外形，直接显示不再垫白底；系统图标四周留有透明边距，略放大与标题对齐，by AI.Coding。
                 Group {
                     if let appIcon { Image(nsImage: appIcon).resizable().interpolation(.high).scaledToFit().scaleEffect(1.12) }
                     else { Image(systemName: symbol).font(.system(size: tiny ? 11 : 15, weight: .medium)).foregroundStyle(.white)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity).background(Color.white.opacity(0.18), in: RoundedRectangle(cornerRadius: 7, style: .continuous)) }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity).background(Color.white.opacity(0.18), in: RoundedRectangle(cornerRadius: LCStyle.Radius.control, style: .continuous)) }
                 }.frame(width: iconSize, height: iconSize).help(sourceDescription)
             }.foregroundStyle(.white).padding(.leading, tiny ? 8 : 14).padding(.trailing, tiny ? 6 : 10)
                 .frame(height: headerHeight).background(headerColor)
@@ -831,14 +831,14 @@ struct ClipCard: View, Equatable {
                 }
                 if index < 9 && !tiny {
                     Text(HotKeyService.label(Shortcut(keyCode: [18,19,20,21,23,22,26,28,25][index], modifiers: quickModifiers)))
-                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                        .font(.system(size: LCStyle.FontSize.caption, weight: .medium, design: .monospaced))
                         .padding(.horizontal, 4).padding(.vertical, 1)
-                        .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 3))
+                        .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: LCStyle.Radius.control))
                         .opacity(showsQuickBadge ? 1 : 0)
                         .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: showsQuickBadge)
                         .accessibilityHidden(true)
                 }
-            }.font(.system(size: 10)).foregroundStyle(.secondary).padding(.horizontal, tiny ? 8 : 12)
+            }.font(.system(size: LCStyle.FontSize.caption)).foregroundStyle(.secondary).padding(.horizontal, tiny ? 8 : 12)
                 .frame(height: footerHeight)
         }.frame(width: height, height: height).background(Color(nsColor: .textBackgroundColor))
             .clipShape(RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
@@ -847,7 +847,7 @@ struct ClipCard: View, Equatable {
             .overlay {
                 if selected { RoundedRectangle(cornerRadius: cardRadius + 4, style: .continuous).strokeBorder(Color.accentColor, lineWidth: 2).padding(-4) }
             }
-            .shadow(color: .black.opacity(hovering && !selected ? 0.16 : 0.09), radius: hovering && !selected ? 7 : 3, y: hovering && !selected ? 4 : 2)
+            .shadow(color: .black.opacity(cardShadow.opacity), radius: cardShadow.radius, y: cardShadow.y)
             .onHover { hovering = $0 }
             .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: hovering)
             .contentShape(RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
@@ -892,9 +892,10 @@ struct ClipCard: View, Equatable {
             .onChange(of: nameFocused) { _, focused in if !focused && model.renamingID == item.id { model.cancelRename() } }
             .onAppear { if editing { startNameEditing() } }
     }
+    private var cardShadow: LCStyle.Shadow { hovering && !selected ? .hover : .card }
     private var slotsVisible: Bool { (hovering || selected || detailPending) && !hidden }
     private func slotIcon(_ symbol: String) -> some View {
-        Image(systemName: symbol).font(.system(size: 13)).frame(width: 24, height: 24).contentShape(Rectangle())
+        Image(systemName: symbol).font(.system(size: LCStyle.FontSize.body)).frame(width: 24, height: 24).contentShape(Rectangle())
     }
     /// 角标只在按住修饰键时出现，悬停说明仍写明快速粘贴键，可发现性不降为零，by AI.Coding。
     private var quickPasteHelp: String {
@@ -1062,7 +1063,7 @@ struct ClipCard: View, Equatable {
             VStack(spacing: 0) {
                 ThumbnailPreview(state: displayedThumbnail, tint: tint, compact: tiny)
                 if !tiny, let paths = filePaths {
-                    Text(fileCaption(paths, unit: isImageFile ? "张" : "个")).font(.system(size: 11, weight: .medium)).lineLimit(1).truncationMode(.middle)
+                    Text(fileCaption(paths, unit: isImageFile ? "张" : "个")).font(.system(size: LCStyle.FontSize.meta, weight: .medium)).lineLimit(1).truncationMode(.middle)
                         .padding(.horizontal, 10).padding(.vertical, 5)
                 }
             }
@@ -1074,13 +1075,13 @@ struct ClipCard: View, Equatable {
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).clipped()
                     .padding(.horizontal, tiny ? 6 : height < 200 ? 10 : 14).padding(.top, tiny ? 3 : 10).padding(.bottom, tiny ? 0 : 4)
                 if !tiny {
-                    Text(fileCaption(paths, unit: "个")).font(.system(size: 11, weight: .medium)).lineLimit(1).truncationMode(.middle)
+                    Text(fileCaption(paths, unit: "个")).font(.system(size: LCStyle.FontSize.meta, weight: .medium)).lineLimit(1).truncationMode(.middle)
                         .padding(.horizontal, 10).padding(.vertical, 5)
                 }
             }
         } else if tiny && item.kind == .file {
             Text(((item.preview.split(separator: "\n").first.map(String.init) ?? "文件引用") as NSString).lastPathComponent)
-                .font(.system(size: 10)).lineLimit(1).padding(.horizontal, 6).padding(.top, 3)
+                .font(.system(size: LCStyle.FontSize.caption)).lineLimit(1).padding(.horizontal, 6).padding(.top, 3)
         } else if item.kind == .file {
             // 不可预览文件、目录与失效文件居中显示系统图标与文件名，正文不再空白，by AI.Coding。
             VStack(spacing: 6) {
@@ -1092,21 +1093,21 @@ struct ClipCard: View, Equatable {
                 if let paths = filePaths {
                     Text(fileCaption(paths, unit: "个")).font(.system(size: 12, weight: .medium)).lineLimit(2).truncationMode(.middle).multilineTextAlignment(.center)
                 }
-                if let status = fileStatus { Text(status).font(.system(size: 10)).foregroundStyle(.secondary) }
+                if let status = fileStatus { Text(status).font(.system(size: LCStyle.FontSize.caption)).foregroundStyle(.secondary) }
                 Spacer(minLength: 0)
             }.frame(maxWidth: .infinity, maxHeight: .infinity).padding(.horizontal, 12)
         } else if let colorValue {
             ZStack {
                 Rectangle().fill(colorValue.color)
-                Text(item.preview.trimmingCharacters(in: .whitespacesAndNewlines)).font(.system(size: 15, weight: .semibold, design: .monospaced))
+                Text(item.preview.trimmingCharacters(in: .whitespacesAndNewlines)).font(.system(size: LCStyle.FontSize.heading, weight: .semibold, design: .monospaced))
                     .foregroundStyle(colorValue.dark ? Color.black : Color.white)
             }
         } else if item.kind == .image || item.kind == .mixed {
             ThumbnailPreview(state: displayedThumbnail, tint: tint, compact: tiny)
         } else if tiny && item.kind == .url {
-            Text(ClipboardPayload.webLink(item.preview)?.host ?? item.context).font(.system(size: 10)).lineLimit(1).padding(.horizontal, 6).padding(.top, 3)
+            Text(ClipboardPayload.webLink(item.preview)?.host ?? item.context).font(.system(size: LCStyle.FontSize.caption)).lineLimit(1).padding(.horizontal, 6).padding(.top, 3)
         } else if item.kind == .url {
-            VStack(alignment: .leading, spacing: 10) { Image(systemName: "link").font(.system(size: 22, weight: .light)).foregroundStyle(tint); Text(ClipboardPayload.webLink(item.preview)?.host ?? "链接").font(.system(size: 15, weight: .semibold, design: .rounded)).lineLimit(1); Text(item.context).font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary).lineLimit(4); Spacer(minLength: 0) }.padding(14)
+            VStack(alignment: .leading, spacing: 10) { Image(systemName: "link").font(.system(size: 22, weight: .light)).foregroundStyle(tint); Text(ClipboardPayload.webLink(item.preview)?.host ?? "链接").font(.system(size: LCStyle.FontSize.heading, weight: .semibold, design: .rounded)).lineLimit(1); Text(item.context).font(.system(size: LCStyle.FontSize.meta, design: .monospaced)).foregroundStyle(.secondary).lineLimit(4); Spacer(minLength: 0) }.padding(14)
         } else {
             // 卡片正文自动高亮代码，普通内容保持原有排版，by AI.Coding。
             SyntaxText(text: item.context, size: previewFontSize, spacing: tiny ? 0 : 3, onLanguage: { detectedLanguage = $0 })
@@ -1226,7 +1227,7 @@ struct ClipInspector: View {
                     HStack(spacing: 10) {
                         Image(nsImage: NSWorkspace.shared.icon(forFile: url.path)).resizable().frame(width: 32, height: 32)
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(url.lastPathComponent).font(.system(size: 13, weight: .medium)).lineLimit(1).truncationMode(.middle)
+                            Text(url.lastPathComponent).font(.system(size: LCStyle.FontSize.body, weight: .medium)).lineLimit(1).truncationMode(.middle)
                             Text(url.deletingLastPathComponent().path).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
                         }
                     }
@@ -1251,8 +1252,8 @@ struct ClipInspector: View {
     @ViewBuilder private func copyButton(_ title: String, _ format: OutputFormat, enabled: Bool) -> some View {
         if model.settings.defaultFormat == format {
             Button { model.perform(format, action: .copy) } label: {
-                Text(title).font(.system(size: 13, weight: .semibold)).foregroundStyle(.white).padding(.horizontal, 14).frame(height: 28)
-                    .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 7)).contentShape(Capsule())
+                Text(title).font(.system(size: LCStyle.FontSize.body, weight: .semibold)).foregroundStyle(.white).padding(.horizontal, 14).frame(height: 28)
+                    .background(Color.accentColor, in: RoundedRectangle(cornerRadius: LCStyle.Radius.control)).contentShape(Capsule())
             }.buttonStyle(.plain).disabled(!enabled).opacity(enabled ? 1 : 0.45)
         } else { Button(title) { model.perform(format, action: .copy) }.buttonStyle(ToolbarTabStyle(selected: true)).disabled(!enabled) }
     }
@@ -1310,7 +1311,7 @@ struct ToolbarTabStyle: ButtonStyle {
         @Environment(\.accessibilityReduceMotion) private var reduceMotion
         var body: some View {
             configuration.label
-                .font(.system(size: 13, weight: selected ? .semibold : .regular))
+                .font(.system(size: LCStyle.FontSize.body, weight: selected ? .semibold : .regular))
                 .foregroundStyle(selected ? Color.primary : Color.secondary)
                 .padding(.horizontal, 10).frame(height: 28)
                 .background(Color.primary.opacity(selected ? 0.09 : configuration.isPressed ? 0.08 : hovering ? 0.05 : 0), in: Capsule())
@@ -1333,7 +1334,7 @@ struct ToolbarIconButton: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body: some View {
         Button(action: action) {
-            Image(systemName: symbol).font(.system(size: 14, weight: .medium)).symbolRenderingMode(.monochrome)
+            Image(systemName: symbol).font(.system(size: LCStyle.FontSize.title, weight: .medium)).symbolRenderingMode(.monochrome)
                 .foregroundStyle(tint ?? Color.secondary)
                 .frame(width: 28, height: 28)
                 // 选中态（置顶等）用强调色底，未选中只在悬停时显示浅底，by AI.Coding。
@@ -1353,9 +1354,9 @@ private struct DetectionBadge: View {
                 Circle().fill(Color(.sRGB, red: Double(value.red) / 255, green: Double(value.green) / 255, blue: Double(value.blue) / 255, opacity: value.alpha))
                     .overlay(Circle().strokeBorder(Color.white.opacity(0.6), lineWidth: 0.5)).frame(width: 9, height: 9)
             }
-            Text(detection.badge).font(.system(size: 10, weight: .medium, design: .monospaced)).lineLimit(1)
+            Text(detection.badge).font(.system(size: LCStyle.FontSize.caption, weight: .medium, design: .monospaced)).lineLimit(1)
         }.foregroundStyle(.white).padding(.horizontal, 4).padding(.vertical, 1).fixedSize()
-            .background(Color.white.opacity(0.18), in: RoundedRectangle(cornerRadius: 3))
+            .background(Color.white.opacity(0.18), in: RoundedRectangle(cornerRadius: LCStyle.Radius.control))
             .help(detection.kindName + "：" + detection.badge)
     }
 }
@@ -1383,7 +1384,7 @@ private struct InspectionSection: View {
                             VStack(alignment: .leading, spacing: 3) {
                                 Text(row.label).foregroundStyle(.secondary)
                                 // 跨列文字按完整自然高度排版，避免Grid将JSON压成首行，by AI.Coding。
-                                Text(row.value).font(.system(size: 11, design: .monospaced)).lineLimit(14)
+                                Text(row.value).font(.system(size: LCStyle.FontSize.meta, design: .monospaced)).lineLimit(14)
                                     .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
                                     .frame(maxWidth: .infinity, alignment: .leading)
                             }.gridCellColumns(2)

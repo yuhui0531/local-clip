@@ -356,7 +356,7 @@ private struct SettingsTab: View {
         Button(action: action) {
             VStack(spacing: 3) {
                 Image(systemName: section.symbol).font(.system(size: 18, weight: .regular)).frame(height: 22)
-                Text(section.rawValue).font(.system(size: 11, weight: selected ? .semibold : .regular))
+                Text(section.rawValue).font(.system(size: LCStyle.FontSize.meta, weight: selected ? .semibold : .regular))
             }.frame(width: 64, height: 50)
                 .foregroundStyle(selected ? Color.accentColor : Color.secondary)
                 .background(Color.primary.opacity(selected ? 0.08 : hovering ? 0.04 : 0), in: RoundedRectangle(cornerRadius: 8, style: .continuous))

@@ -79,16 +79,16 @@ struct ClipContentEditor: View {
             HStack(alignment: .center, spacing: 8) {
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 6) {
-                        Text("编辑内容").font(.system(size: 15, weight: .semibold))
+                        Text("编辑内容").font(.system(size: LCStyle.FontSize.heading, weight: .semibold))
                         Text(state.itemTitle)
-                            .font(.system(size: 11, weight: .medium))
+                            .font(.system(size: LCStyle.FontSize.meta, weight: .medium))
                             .foregroundStyle(.secondary)
                             .padding(.horizontal, 6).padding(.vertical, 1.5)
                             .background(Color.primary.opacity(0.06), in: Capsule())
                             .lineLimit(1)
                         if state.hasChanges {
                             Text("已修改")
-                                .font(.system(size: 10, weight: .semibold))
+                                .font(.system(size: LCStyle.FontSize.caption, weight: .semibold))
                                 .foregroundStyle(Color.accentColor)
                                 .padding(.horizontal, 6).padding(.vertical, 1.5)
                                 .background(Color.accentColor.opacity(0.12), in: Capsule())
@@ -98,7 +98,7 @@ struct ClipContentEditor: View {
                         (state.sourceName.isEmpty || state.sourceName == "未知" ? "" : "\(state.sourceName) · ")
                         + "\(state.characterCount) 个字符 · \(state.lineCount) 行"
                     )
-                        .font(.system(size: 11))
+                        .font(.system(size: LCStyle.FontSize.meta))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
@@ -109,7 +109,7 @@ struct ClipContentEditor: View {
                         focused = true
                     } label: {
                         Label("还原", systemImage: "arrow.uturn.backward")
-                            .font(.system(size: 11, weight: .medium))
+                            .font(.system(size: LCStyle.FontSize.meta, weight: .medium))
                     }
                     .buttonStyle(ToolbarTabStyle(selected: false))
                     .help("还原为修改前的内容")
@@ -118,7 +118,7 @@ struct ClipContentEditor: View {
                     state.monospaced.toggle()
                 } label: {
                     Label("等宽", systemImage: "chevron.left.forwardslash.chevron.right")
-                        .font(.system(size: 11, weight: state.monospaced ? .semibold : .regular))
+                        .font(.system(size: LCStyle.FontSize.meta, weight: state.monospaced ? .semibold : .regular))
                 }
                 .buttonStyle(ToolbarTabStyle(selected: state.monospaced))
                 .help(state.monospaced ? "切换为标准字体" : "切换为等宽字体")
@@ -126,19 +126,19 @@ struct ClipContentEditor: View {
             if let warning = state.warning {
                 HStack(spacing: 6) {
                     Image(systemName: "info.circle.fill")
-                        .font(.system(size: 11))
+                        .font(.system(size: LCStyle.FontSize.meta))
                         .foregroundStyle(.orange)
                     Text(warning)
-                        .font(.system(size: 11))
+                        .font(.system(size: LCStyle.FontSize.meta))
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 .padding(.horizontal, 10).padding(.vertical, 6)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 7))
+                .background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: LCStyle.Radius.control))
             }
             TextEditor(text: $state.text)
-                .font(.system(size: 13, design: state.monospaced ? .monospaced : .default))
+                .font(.system(size: LCStyle.FontSize.body, design: state.monospaced ? .monospaced : .default))
                 .lineSpacing(3)
                 .scrollContentBackground(.hidden)
                 .focused($focused)
@@ -159,7 +159,7 @@ struct ClipContentEditor: View {
             if !state.error.isEmpty {
                 HStack(spacing: 6) {
                     Image(systemName: "exclamationmark.circle.fill")
-                        .font(.system(size: 11))
+                        .font(.system(size: LCStyle.FontSize.meta))
                         .foregroundStyle(.red)
                     Text(state.error)
                         .font(.system(size: 11.5))
@@ -169,7 +169,7 @@ struct ClipContentEditor: View {
                 }
                 .padding(.horizontal, 10).padding(.vertical, 6)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.red.opacity(0.08), in: RoundedRectangle(cornerRadius: 7))
+                .background(Color.red.opacity(0.08), in: RoundedRectangle(cornerRadius: LCStyle.Radius.control))
             }
             if state.confirmingDiscard {
                 HStack(spacing: 8) {
@@ -190,7 +190,7 @@ struct ClipContentEditor: View {
                             .foregroundStyle(.white)
                             .padding(.horizontal, 12)
                             .frame(height: 28)
-                            .background(Color.red, in: RoundedRectangle(cornerRadius: 7))
+                            .background(Color.red, in: RoundedRectangle(cornerRadius: LCStyle.Radius.control))
                     }
                     .buttonStyle(.plain)
                 }
@@ -198,18 +198,18 @@ struct ClipContentEditor: View {
                 .background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
             } else {
                 HStack(spacing: 8) {
-                    Text("⌘S / ⌘↩ 保存 · Esc 取消").font(.system(size: 11)).foregroundStyle(.secondary)
+                    Text("⌘S / ⌘↩ 保存 · Esc 取消").font(.system(size: LCStyle.FontSize.meta)).foregroundStyle(.secondary)
                     Spacer()
                     Button("取消", action: cancel)
                         .buttonStyle(ToolbarTabStyle(selected: true))
                         .disabled(state.saving)
                     Button(action: save) {
                         Text(state.saving ? "正在保存…" : "保存")
-                            .font(.system(size: 13, weight: .semibold))
+                            .font(.system(size: LCStyle.FontSize.body, weight: .semibold))
                             .foregroundStyle(.white)
                             .padding(.horizontal, 14)
                             .frame(height: 28)
-                            .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 7))
+                            .background(Color.accentColor, in: RoundedRectangle(cornerRadius: LCStyle.Radius.control))
                     }
                     .buttonStyle(.plain)
                     .keyboardShortcut("s", modifiers: .command)

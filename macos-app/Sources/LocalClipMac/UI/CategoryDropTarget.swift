@@ -24,7 +24,7 @@ struct CategoryDropTarget: NSViewRepresentable {
     func updateNSView(_ button: CategoryButton, context: Context) {
         button.model = model; button.category = category; button.selected = selected
         // 与SwiftUI工具栏标签一致：未选中次要色，选中主色加粗，by AI.Coding。
-        button.font = .systemFont(ofSize: 13, weight: selected ? .semibold : .regular)
+        button.font = .systemFont(ofSize: LCStyle.FontSize.body, weight: selected ? .semibold : .regular)
         button.attributedTitle = NSAttributedString(string: category.name, attributes: [.font: button.font!, .foregroundColor: selected ? NSColor.labelColor : NSColor.secondaryLabelColor])
         let color = RichContent.colorValue(category.colorHex)
         button.image = NSImage(size: .init(width: 16, height: 14), flipped: false) { rect in
@@ -66,7 +66,7 @@ struct CategoryDropTarget: NSViewRepresentable {
             let tint = RichContent.colorValue(category?.colorHex ?? "34C759")
             // 动态颜色需在当前外观下解析为CGColor，深浅切换后不残留旧值。
             effectiveAppearance.performAsCurrentDrawingAppearance {
-                layer?.backgroundColor = (targeted ? tint.withAlphaComponent(0.18) : selected ? NSColor.labelColor.withAlphaComponent(0.09) : hovering ? NSColor.labelColor.withAlphaComponent(0.05) : .clear).cgColor
+                layer?.backgroundColor = (targeted ? tint.withAlphaComponent(0.18) : selected ? tint.withAlphaComponent(0.16) : hovering ? NSColor.labelColor.withAlphaComponent(0.05) : .clear).cgColor
             }
             layer?.borderColor = (targeted ? tint : .clear).cgColor
             layer?.borderWidth = targeted ? 1.5 : 0

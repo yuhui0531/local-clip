@@ -183,7 +183,7 @@ import LocalClipCore
                             }
                             .buttonStyle(.plain).disabled(!menu.available.contains(transform))
                             .foregroundStyle(menu.available.contains(transform) ? Color.primary : Color(nsColor: .disabledControlTextColor))
-                            .background(menu.highlighted == transform ? Color.accentColor.opacity(0.14) : .clear, in: RoundedRectangle(cornerRadius: 5))
+                            .background(menu.highlighted == transform ? Color.accentColor.opacity(0.14) : .clear, in: RoundedRectangle(cornerRadius: LCStyle.Radius.control))
                             .onHover { inside in
                                 if inside, menu.available.contains(transform) { menu.highlighted = transform }
                                 else if !inside, menu.highlighted == transform { menu.highlighted = nil }

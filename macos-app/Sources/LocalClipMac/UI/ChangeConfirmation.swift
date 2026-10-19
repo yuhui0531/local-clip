@@ -101,7 +101,7 @@ import LocalClipCore
                         .background(.blue.opacity(0.09), in: RoundedRectangle(cornerRadius: 12))
                     Text(copy.title).font(.system(size: 19, weight: .semibold))
                 }
-                Text(copy.body).font(.system(size: 13)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                Text(copy.body).font(.system(size: LCStyle.FontSize.body)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 Label(copy.impact, systemImage: copy.destructive ? "trash" : "checkmark.circle")
                     .font(.system(size: 12, weight: .medium)).foregroundStyle(copy.destructive ? Color.primary : Color.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading).padding(12)
