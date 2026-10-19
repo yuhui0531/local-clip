@@ -485,6 +485,34 @@ import LocalClipCore
         let first = SourceApplicationObserver.headerColor(fallback: "test-kind", base: .systemGreen)
         #expect(first === SourceApplicationObserver.headerColor(fallback: "test-kind", base: .systemGreen))
     }
+    /// 队列浮窗：显示期间开始与成功不另弹提示，失败写入浮窗警告；摘要在隐藏内容时不显示正文；浮窗不属于历史窗口，by AI.Coding。
+    @Test func queuePanelReplacesTransientFeedback() async throws {
+        _ = NSApplication.shared
+        let (root, _, model) = try await setup()
+        defer { try? FileManager.default.removeItem(at: root) }
+        var popups: [String] = [], changes = 0
+        model.showPasteFeedback = { message, _ in popups.append(message) }
+        model.registerQueueShortcut = { _ in true }; model.closePanel = { _ in }; model.pasteQueueChanged = { changes += 1 }
+        model.showsQueuePanel = true
+        let ids = model.items.prefix(3).map(\.id)
+        model.startPasteQueue(ids)
+        #expect(popups.isEmpty && model.pasteQueueWarning == nil && changes > 0)
+        #expect(model.pasteQueueNextSummary == model.items[0].preview.split(whereSeparator: \.isNewline).first.map(String.init))
+        model.pasteQueueNext(target: nil, modifiersHeld: { false })
+        #expect(popups.isEmpty && model.pasteQueueWarning == "请先切换到要粘贴的应用")
+        let host = NSHostingView(rootView: PasteQueueView(model: model))
+        #expect(host.fittingSize.width <= 262 && host.fittingSize.height > 40)
+        model.updateSettings { $0.hideContents = true }
+        try await wait { model.settings.hideContents }
+        #expect(model.pasteQueueNextSummary == "内容已隐藏")
+        model.stopPasteQueue()
+        #expect(model.pasteQueueWarning == nil && !model.pasteQueueActive)
+        model.pasteQueueNext(target: nil, modifiersHeld: { false })
+        let frame = NSRect(x: 0, y: 0, width: 40, height: 40)
+        let panel = NSPanel(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: true)
+        let queue = NSPanel(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: true)
+        #expect(!AppDelegate.ownsHistoryWindow(queue, panel: panel, settings: nil, feedback: nil, showingDetail: true, showingCategoryEditor: false, showingFilters: false, queue: queue))
+    }
     /// 状态槽优先级：错误 > 监控异常 > 队列 > 通知 > 提示；旧通知计时器不能清掉同文字的新错误，by AI.Coding。
     @Test func statusSlotPriorityAndSeverity() async throws {
         let (root, _, model) = try await setup()

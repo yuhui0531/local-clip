@@ -42,6 +42,9 @@ import LocalClipCore
     private var lastExternal: TargetToken?
     private var keyboardMonitor: Any?
     private var flagsMonitor: Any?
+    /// 粘贴队列常驻浮窗：非激活、不成为key，只有“结束”按钮接收点击，by AI.Coding。
+    private var queuePanel: NSPanel?
+    private var queueFade: Task<Void, Never>?
     private var activatedObserver: NSObjectProtocol?
     private var wakeObserver: NSObjectProtocol?
     private var screenObserver: NSObjectProtocol?
@@ -144,7 +147,8 @@ import LocalClipCore
             hotkeys.onInvoke = { [weak self] in self?.toggleHistory() }
             model.registerQueueShortcut = { [weak self] in self?.hotkeys.registerQueue($0) ?? false }
             model.unregisterQueueShortcut = { [weak self] in self?.hotkeys.unregisterQueue() }
-            model.pasteQueueChanged = { [weak self] in self?.updateMenu() }
+            model.pasteQueueChanged = { [weak self] in self?.updateMenu(); self?.updateQueuePanel() }
+            model.showsQueuePanel = true
             hotkeys.onQueueInvoke = { [weak self] in self?.pasteQueueNext() }
             modelStartup = Task {
                 do {
@@ -547,7 +551,7 @@ import LocalClipCore
                 showingDetail: self.model?.showingDetail == true,
                 showingCategoryEditor: self.model?.showingCategoryEditor == true,
                 showingFilters: self.model?.showingFilters == true || self.model?.showingStatusDetail == true,
-                showingContentEditor: self.model?.contentEditorPresented == true)
+                showingContentEditor: self.model?.contentEditorPresented == true, queue: self.queuePanel)
             guard self.focusState.shouldDismiss(panelIsKey: panel.isKeyWindow, ownsKeyWindow: ownsKey,
                 dragging: self.model?.dragActive == true, confirming: self.model?.confirmingChange == true || self.model?.contentEditorPresented == true,
                 hasModal: NSApp.modalWindow != nil, pinned: self.model?.pinned == true) else { return }
@@ -570,14 +574,14 @@ import LocalClipCore
     static func ownsHistoryWindow(_ window: NSWindow?, panel: NSWindow?, settings: NSWindow?,
                                   feedback: NSWindow?, showingDetail: Bool,
                                   showingCategoryEditor: Bool, showingFilters: Bool,
-                                  showingContentEditor: Bool = false) -> Bool {
+                                  showingContentEditor: Bool = false, queue: NSWindow? = nil) -> Bool {
         guard let window else { return false }
         var owner: NSWindow? = window
         while let value = owner {
             if value === panel { return true }
             owner = value.sheetParent ?? value.parent
         }
-        return (showingDetail || showingCategoryEditor || showingFilters || showingContentEditor) && window.isVisible && window !== settings && window !== feedback
+        return (showingDetail || showingCategoryEditor || showingFilters || showingContentEditor) && window.isVisible && window !== settings && window !== feedback && window !== queue
     }
     /// 所有退出入口共用系统终止请求，测试替换请求而不终止任何真实应用，by AI.Coding。
     @objc func quitApplication(_ sender: Any?) { requestTermination() }
@@ -652,6 +656,38 @@ import LocalClipCore
         }
         return true
     }
+    /// 队列进行中固定在当前屏幕右下角显示进度、下一项与“结束”；结束或耗尽后淡出，by AI.Coding。
+    private func updateQueuePanel() {
+        guard let model else { return }
+        let duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0.0 : 0.15
+        guard model.pasteQueueActive else {
+            guard let panel = queuePanel, panel.isVisible else { return }
+            NSAnimationContext.runAnimationGroup({ $0.duration = duration; panel.animator().alphaValue = 0 }, completionHandler: nil)
+            queueFade = Task { try? await Task.sleep(for: .seconds(duration)); if !Task.isCancelled { panel.orderOut(nil) } }
+            return
+        }
+        queueFade?.cancel()
+        if queuePanel == nil {
+            let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 260, height: 90), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+            panel.isOpaque = false; panel.backgroundColor = .clear; panel.hasShadow = true
+            panel.isReleasedWhenClosed = false; panel.hidesOnDeactivate = false; panel.becomesKeyOnlyIfNeeded = true
+            panel.level = .statusBar; panel.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
+            let host = NSHostingView(rootView: PasteQueueView(model: model)); host.sizingOptions = []
+            panel.contentView = host; queuePanel = panel
+        }
+        guard let panel = queuePanel, let host = panel.contentView else { return }
+        panel.sharingType = model.settings.excludeFromSharing ? .none : .readOnly
+        let size = host.fittingSize
+        if let screen = NSScreen.main {
+            let rect = screen.visibleFrame
+            panel.setFrame(NSRect(x: rect.maxX - size.width - 16, y: rect.minY + 16, width: size.width, height: size.height), display: true)
+        }
+        if !panel.isVisible || panel.alphaValue < 1 {
+            if !panel.isVisible { panel.alphaValue = 0 }
+            panel.orderFrontRegardless()
+            NSAnimationContext.runAnimationGroup { $0.duration = duration; panel.animator().alphaValue = 1 }
+        }
+    }
     /// 粘贴回退显示短暂非激活提示，不让关闭历史面板隐藏失败原因。
     private func showPasteFeedback(_ message: String, failed: Bool) {
         feedbackTask?.cancel()
@@ -718,7 +754,7 @@ import LocalClipCore
             guard let self, let panel = self.panel, self.panelPresented else { return event }
             if Self.ownsHistoryWindow(event.window, panel: panel, settings: self.settingsWindow, feedback: self.feedbackPanel,
                 showingDetail: self.model?.showingDetail == true, showingCategoryEditor: self.model?.showingCategoryEditor == true,
-                showingFilters: self.model?.showingFilters == true || self.model?.showingStatusDetail == true, showingContentEditor: self.model?.contentEditorPresented == true) {
+                showingFilters: self.model?.showingFilters == true || self.model?.showingStatusDetail == true, showingContentEditor: self.model?.contentEditorPresented == true, queue: self.queuePanel) {
                 // 迟到的旧输入不能取消较新的外部关闭任务，by AI.Coding。
                 if self.focusState.ownedInteraction(at: event.timestamp) { self.focusDismissal?.cancel() }
             } else if event.window != nil {
@@ -823,7 +859,7 @@ import LocalClipCore
             guard let panel = self.panel, self.panelPresented, let model = self.model,
                   Self.ownsHistoryWindow(event.window, panel: panel, settings: self.settingsWindow, feedback: self.feedbackPanel,
                       showingDetail: model.showingDetail, showingCategoryEditor: model.showingCategoryEditor,
-                      showingFilters: model.showingFilters || model.showingStatusDetail, showingContentEditor: model.contentEditorPresented) || (event.window == nil && panel.isKeyWindow) else { return event }
+                      showingFilters: model.showingFilters || model.showingStatusDetail, showingContentEditor: model.contentEditorPresented, queue: self.queuePanel) || (event.window == nil && panel.isKeyWindow) else { return event }
             self.focusState.ownedInteraction(at: event.timestamp)
             // 弹窗归属只用于保留交互，不能把详情文字或确认按钮按键当作历史操作，by AI.Coding。
             guard Self.routesHistoryShortcuts(event.window, panel: panel,
@@ -910,7 +946,7 @@ import LocalClipCore
         sourceObserver?.stop(); sourceObserver = nil
         startup?.cancel(); modelStartup?.cancel()
         model?.capture.stop(); maintenance?.cancel(); hotkeys.stop()
-        feedbackTask?.cancel(); feedbackPanel?.orderOut(nil)
+        feedbackTask?.cancel(); feedbackPanel?.orderOut(nil); queueFade?.cancel(); queuePanel?.orderOut(nil)
         focusDismissal?.cancel()
         for observer in focusObservers { NotificationCenter.default.removeObserver(observer) }
         focusObservers.removeAll()
@@ -934,6 +970,29 @@ extension AppDelegate: NSMenuDelegate {
 }
 
 /// 紧凑胶囊提示：宽度随文字，图标区分“已复制需手动粘贴”与失败，by AI.Coding。
+/// 队列浮窗内容：进度、下一项一行摘要（隐藏内容时不显示正文）、快捷键与失败原因，by AI.Coding。
+struct PasteQueueView: View {
+    @ObservedObject var model: HistoryViewModel
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 6) {
+                Image(systemName: "list.number").foregroundStyle(Color.accentColor)
+                Text("粘贴队列 \(model.pasteQueuePosition)/\(model.pasteQueue.count)").font(.system(size: 13, weight: .semibold))
+                Spacer(minLength: 4)
+                Button("结束") { model.stopPasteQueue() }.controlSize(.small).accessibilityLabel("结束粘贴队列")
+            }
+            Text("下一项：" + model.pasteQueueNextSummary).font(.system(size: 12)).lineLimit(1).truncationMode(.tail)
+            Text("\(model.pasteQueueShortcutLabel) 粘贴下一项").font(.system(size: 11)).foregroundStyle(.secondary)
+            if let warning = model.pasteQueueWarning {
+                Label(warning, systemImage: "exclamationmark.triangle.fill").font(.system(size: 11)).foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }.padding(12).frame(width: 260, alignment: .leading)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color.primary.opacity(0.08)))
+            .padding(1)
+    }
+}
 struct PasteFeedbackView: View {
     let message: String
     let failed: Bool

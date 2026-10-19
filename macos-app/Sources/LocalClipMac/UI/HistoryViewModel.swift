@@ -1464,6 +1464,20 @@ import LocalClipCore
     private var pendingQueueShortcut: Shortcut?
     private var pasteQueueIdle: Task<Void, Never>?
     public var pasteQueueActive: Bool { pasteQueuePosition < pasteQueue.count }
+    /// 宿主显示队列浮窗时，开始与每步成功只更新浮窗，失败与回退写入浮窗警告，不另弹提示，by AI.Coding。
+    public var showsQueuePanel = false
+    @Published private(set) var pasteQueueWarning: String?
+    /// 入队时记下每项一行摘要；队列不随列表翻页或筛选变化，by AI.Coding。
+    private var pasteQueueSummaries: [String] = []
+    var pasteQueueNextSummary: String {
+        if !canDisplayContents { return "内容已隐藏" }
+        return pasteQueueSummaries.indices.contains(pasteQueuePosition) ? pasteQueueSummaries[pasteQueuePosition] : "—"
+    }
+    var pasteQueueShortcutLabel: String { HotKeyService.label(activeQueueShortcut ?? settings.queueShortcut) }
+    private func queueFeedback(_ text: String, failed: Bool) {
+        guard showsQueuePanel, pasteQueueActive else { showPasteFeedback?(text, failed); return }
+        pasteQueueWarning = failed ? text : nil; pasteQueueChanged?()
+    }
     public var pasteQueueStatus: String? {
         pasteQueueActive ? "粘贴队列 \(pasteQueuePosition)/\(pasteQueue.count) · \(HotKeyService.label(activeQueueShortcut ?? settings.queueShortcut)) 粘贴下一项" : nil
     }
@@ -1476,9 +1490,12 @@ import LocalClipCore
         }
         pasteQueueTask?.cancel(); pasteQueueTask = nil; pasteQueueGeneration = UUID(); pasteQueueBusy = false
         activeQueueShortcut = shortcut
-        pasteQueue = ids; pasteQueuePosition = 0; touchPasteQueue()
+        pasteQueueSummaries = ids.map { id in
+            items.first { $0.id == id }.map { $0.title ?? $0.preview.split(whereSeparator: \.isNewline).first.map(String.init) ?? HistoryView.kindName($0.kind) } ?? "—"
+        }
+        pasteQueue = ids; pasteQueuePosition = 0; pasteQueueWarning = nil; touchPasteQueue()
         closePanel?(false)
-        showPasteFeedback?("已加入粘贴队列 0/\(ids.count) · \(HotKeyService.label(shortcut)) 粘贴下一项", false)
+        queueFeedback("已加入粘贴队列 0/\(ids.count) · \(HotKeyService.label(shortcut)) 粘贴下一项", failed: false)
         pasteQueueChanged?()
     }
     /// 停止使尚未发布的请求失效；不能撤回已发出的系统命令，by AI.Coding。
@@ -1486,7 +1503,7 @@ import LocalClipCore
         pasteQueueTask?.cancel(); pasteQueueTask = nil; pasteQueueGeneration = UUID(); pasteQueueBusy = false
         activeQueueShortcut = nil
         guard !pasteQueue.isEmpty else { return }
-        pasteQueue = []; pasteQueuePosition = 0; pasteQueueIdle?.cancel(); pasteQueueIdle = nil
+        pasteQueue = []; pasteQueuePosition = 0; pasteQueueSummaries = []; pasteQueueWarning = nil; pasteQueueIdle?.cancel(); pasteQueueIdle = nil
         unregisterQueueShortcut?(); pasteQueueChanged?()
     }
     /// 10分钟没有按键自动结束，避免快捷键长期占用。
@@ -1502,7 +1519,7 @@ import LocalClipCore
     /// 物理修饰键（如队列快捷键的⌃⌥）未松开时最多等500ms，超时只复制并提示，指针照常前进，by AI.Coding。
     public func pasteQueueNext(target: TargetToken?, modifiersHeld: @escaping () -> Bool) {
         guard pasteQueueActive, !pasteQueueBusy else { return }
-        guard let target else { showPasteFeedback?("请先切换到要粘贴的应用", true); return }
+        guard let target else { queueFeedback("请先切换到要粘贴的应用", failed: true); return }
         pasteQueueBusy = true; touchPasteQueue()
         let generation = pasteQueueGeneration, ids = pasteQueue
         pasteQueueTask = Task { [weak self] in
@@ -1528,13 +1545,13 @@ import LocalClipCore
                 let progress = "\(pasteQueuePosition)/\(ids.count)"
                 let skippedText = skipped.isEmpty ? "" : "（第 \(skipped.map(String.init).joined(separator: "、")) 项已不存在，已跳过）"
                 switch result {
-                case .commandSent: showPasteFeedback?(result.message + " \(progress)" + skippedText, false)
-                case .copied: showPasteFeedback?((held ? "修饰键未松开，已复制 \(progress)，请手动粘贴" : "已复制 \(progress)") + skippedText, held)
-                default: showPasteFeedback?(result.message + "（\(progress)）" + skippedText, true)
+                case .commandSent: queueFeedback(result.message + " \(progress)" + skippedText, failed: false)
+                case .copied: queueFeedback((held ? "修饰键未松开，已复制 \(progress)，请手动粘贴" : "已复制 \(progress)") + skippedText, failed: held)
+                default: queueFeedback(result.message + "（\(progress)）" + skippedText, failed: true)
                 }
                 shown = true; break
             }
-            if !shown, !skipped.isEmpty { showPasteFeedback?("第 \(skipped.map(String.init).joined(separator: "、")) 项已不存在，已跳过", true) }
+            if !shown, !skipped.isEmpty { queueFeedback("第 \(skipped.map(String.init).joined(separator: "、")) 项已不存在，已跳过", failed: true) }
             if !pasteQueueActive { stopPasteQueue() } else { pasteQueueChanged?() }
         }
     }
