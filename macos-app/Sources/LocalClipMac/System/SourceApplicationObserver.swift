@@ -69,4 +69,59 @@ import LocalClipCore
         if let icon { icons.setObject(icon, forKey: id as NSString) }
         return icon
     }
+
+    // MARK: 卡片头部来源色：按bundleID提取图标主色并校正到白字对比度≥4.5:1，只计算一次，by AI.Coding。
+    private static var headerColors: [String: NSColor] = [:]
+    /// 图标整体近灰（含单色图标）时使用的中性深灰。
+    static let neutralHeader = NSColor(srgbRed: 0x5A / 255.0, green: 0x5F / 255.0, blue: 0x6B / 255.0, alpha: 1)
+    /// 有来源图标时返回校正后的头部色；无图标返回nil，由调用方回退到类型色。
+    public static func headerColor(for id: String) -> NSColor? {
+        if let cached = headerColors[id] { return cached }
+        guard let icon = icon(for: id) else { return nil }
+        let color = readableHeader(dominantColor(icon) ?? neutralHeader)
+        headerColors[id] = color
+        return color
+    }
+    /// 回退类型色同样校正并缓存，深浅色模式共用。
+    static func headerColor(fallback key: String, base: NSColor) -> NSColor {
+        if let cached = headerColors["kind:" + key] { return cached }
+        let color = readableHeader(base); headerColors["kind:" + key] = color
+        return color
+    }
+    /// 绘制到8×8位图，饱和度加权平均，排除饱和度<0.15的近灰像素；全为灰时返回nil。
+    static func dominantColor(_ image: NSImage) -> NSColor? {
+        guard let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 8, pixelsHigh: 8, bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0) else { return nil }
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
+        image.draw(in: NSRect(x: 0, y: 0, width: 8, height: 8))
+        NSGraphicsContext.restoreGraphicsState()
+        var red = 0.0, green = 0.0, blue = 0.0, weight = 0.0
+        for x in 0..<8 { for y in 0..<8 {
+            guard let pixel = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB), pixel.alphaComponent > 0.5 else { continue }
+            let saturation = pixel.saturationComponent
+            guard saturation >= 0.15 else { continue }
+            red += pixel.redComponent * saturation; green += pixel.greenComponent * saturation; blue += pixel.blueComponent * saturation; weight += saturation
+        } }
+        guard weight > 0 else { return nil }
+        return NSColor(srgbRed: red / weight, green: green / weight, blue: blue / weight, alpha: 1)
+    }
+    /// 保持色相，饱和度上限0.85，逐步降低亮度直到白字对比度≥4.5:1。
+    static func readableHeader(_ color: NSColor) -> NSColor {
+        guard let value = color.usingColorSpace(.sRGB) else { return neutralHeader }
+        let hue = value.hueComponent, saturation = min(value.saturationComponent, 0.85)
+        var brightness = value.brightnessComponent
+        var result = NSColor(hue: hue, saturation: saturation, brightness: brightness, alpha: 1)
+        while whiteContrast(result) < 4.5 && brightness > 0 {
+            brightness = max(0, brightness - 0.02)
+            result = NSColor(hue: hue, saturation: saturation, brightness: brightness, alpha: 1)
+        }
+        return result
+    }
+    /// WCAG相对亮度下白字与背景的对比度。
+    static func whiteContrast(_ color: NSColor) -> Double {
+        guard let value = color.usingColorSpace(.sRGB) else { return 1 }
+        func linear(_ c: CGFloat) -> Double { let c = Double(c); return c <= 0.03928 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4) }
+        let luminance = 0.2126 * linear(value.redComponent) + 0.7152 * linear(value.greenComponent) + 0.0722 * linear(value.blueComponent)
+        return 1.05 / (luminance + 0.05)
+    }
 }

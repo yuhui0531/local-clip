@@ -465,6 +465,26 @@ import LocalClipCore
         #expect(ClipCard.voiceOverActions(kind: .image, hidden: false, favorite: false) == ["详情", "收藏", "原格式复制", "直接粘贴"])
         #expect(ClipCard.voiceOverActions(kind: .text, hidden: true, favorite: false) == ["原格式复制"])
     }
+    /// 来源色头部：任何主色校正后白字对比度≥4.5:1，保持色相、饱和度≤0.85；近灰图标回退中性深灰；按键缓存只算一次，by AI.Coding。
+    @Test func headerColorsKeepWhiteTextReadable() {
+        let samples: [NSColor] = [.systemYellow, .yellow, NSColor(srgbRed: 0.6, green: 1, blue: 0.6, alpha: 1), .white, .cyan, .green, .orange, .red, .blue, .magenta, .systemTeal, NSColor(srgbRed: 1, green: 0.98, blue: 0.4, alpha: 1), .black]
+        for sample in samples {
+            let header = SourceApplicationObserver.readableHeader(sample)
+            #expect(SourceApplicationObserver.whiteContrast(header) >= 4.5)
+            #expect(header.saturationComponent <= 0.85 + 0.001)
+        }
+        let yellow = SourceApplicationObserver.readableHeader(.systemYellow).usingColorSpace(.sRGB)!
+        #expect(abs(yellow.hueComponent - NSColor.systemYellow.usingColorSpace(.sRGB)!.hueComponent) < 0.02)
+        func image(_ color: NSColor) -> NSImage {
+            NSImage(size: .init(width: 32, height: 32), flipped: false) { rect in color.setFill(); rect.fill(); return true }
+        }
+        let dominant = SourceApplicationObserver.dominantColor(image(.systemOrange))?.usingColorSpace(.sRGB)
+        #expect(dominant.map { abs($0.hueComponent - NSColor.systemOrange.usingColorSpace(.sRGB)!.hueComponent) < 0.03 } == true)
+        #expect(SourceApplicationObserver.dominantColor(image(.gray)) == nil)
+        #expect(SourceApplicationObserver.whiteContrast(SourceApplicationObserver.neutralHeader) >= 4.5)
+        let first = SourceApplicationObserver.headerColor(fallback: "test-kind", base: .systemGreen)
+        #expect(first === SourceApplicationObserver.headerColor(fallback: "test-kind", base: .systemGreen))
+    }
     /// 状态槽优先级：错误 > 监控异常 > 队列 > 通知 > 提示；旧通知计时器不能清掉同文字的新错误，by AI.Coding。
     @Test func statusSlotPriorityAndSeverity() async throws {
         let (root, _, model) = try await setup()

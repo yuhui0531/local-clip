@@ -722,6 +722,11 @@ struct ClipCard: View, Equatable {
         case .image: Color(red: 0.24, green: 0.62, blue: 0.55)
         case .file: Color(red: 0.35, green: 0.49, blue: 0.70)
         case .mixed: Color(red: 0.73, green: 0.53, blue: 0.25) } }
+    /// 来源图标主色校正后的实色头部；无来源图标回退到校正后的类型色，by AI.Coding。
+    private var headerColor: Color {
+        if let id = item.source.bundleID, let color = SourceApplicationObserver.headerColor(for: id) { return Color(nsColor: color) }
+        return Color(nsColor: SourceApplicationObserver.headerColor(fallback: "\(item.kind)", base: NSColor(tint)))
+    }
     private var appIcon: NSImage? {
         guard let id = item.source.bundleID else { return nil }
         return SourceApplicationObserver.icon(for: id)
@@ -748,7 +753,7 @@ struct ClipCard: View, Equatable {
                 TextField("名称", text: Binding(get: { nameDraft }, set: {
                     if nameDraft != $0 { nameDraft = $0; model.renameDraftChanged(id: item.id) }
                 })).textFieldStyle(.plain).focused($nameFocused)
-                    .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 3))
+                    .background(Color.white.opacity(0.2), in: RoundedRectangle(cornerRadius: 3))
                     .onSubmit { model.saveRename(id: item.id, title: nameDraft) }
                     .onExitCommand { model.cancelRename() }
             } else { Text(item.title ?? languageTitle ?? HistoryView.kindName(item.kind)) }
@@ -768,21 +773,25 @@ struct ClipCard: View, Equatable {
                     cardTitle
                     if height >= 150 {
                         CopyAge(copiedAt: item.lastCopiedAt)
-                            .font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
+                            .font(.system(size: 10)).foregroundStyle(Color.white.opacity(0.75)).lineLimit(1)
 
                     }
                 }
                 Spacer(minLength: 2)
                 if let detection, !hidden, !tiny { DetectionBadge(detection: detection) }
-                if item.isFavorite && !tiny { Image(systemName: "star.fill").font(.system(size: 11)).foregroundStyle(.orange).accessibilityLabel("已收藏") }
+                if item.isFavorite && !tiny {
+                    Image(systemName: "star.fill").font(.system(size: 11)).foregroundStyle(.orange)
+                        .background { Image(systemName: "star.fill").font(.system(size: 11)).foregroundStyle(.white).scaleEffect(1.12) }
+                        .accessibilityLabel("已收藏")
+                }
                 // 应用图标自带外形，直接显示不再垫白底；系统图标四周留有透明边距，略放大与标题对齐，by AI.Coding。
                 Group {
                     if let appIcon { Image(nsImage: appIcon).resizable().interpolation(.high).scaledToFit().scaleEffect(1.12) }
-                    else { Image(systemName: symbol).font(.system(size: tiny ? 11 : 15, weight: .medium)).foregroundStyle(tint)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity).background(tint.opacity(0.14), in: RoundedRectangle(cornerRadius: 7, style: .continuous)) }
+                    else { Image(systemName: symbol).font(.system(size: tiny ? 11 : 15, weight: .medium)).foregroundStyle(.white)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity).background(Color.white.opacity(0.18), in: RoundedRectangle(cornerRadius: 7, style: .continuous)) }
                 }.frame(width: iconSize, height: iconSize).help(sourceDescription)
-            }.foregroundStyle(.primary).padding(.leading, tiny ? 8 : 14).padding(.trailing, tiny ? 6 : 10)
-                .frame(height: headerHeight).background(tint.opacity(0.13))
+            }.foregroundStyle(.white).padding(.leading, tiny ? 8 : 14).padding(.trailing, tiny ? 6 : 10)
+                .frame(height: headerHeight).background(headerColor)
                 .help("双击标题栏重命名卡片")
                 // 整个彩色标题栏双击均重命名，时间/图标/留白不能误发粘贴，by AI.Coding。
                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(item.id)) } action: { headerRect = $0 }
@@ -1330,11 +1339,11 @@ private struct DetectionBadge: View {
         HStack(spacing: 3) {
             if case .color(let value) = detection {
                 Circle().fill(Color(.sRGB, red: Double(value.red) / 255, green: Double(value.green) / 255, blue: Double(value.blue) / 255, opacity: value.alpha))
-                    .overlay(Circle().strokeBorder(Color.primary.opacity(0.25), lineWidth: 0.5)).frame(width: 9, height: 9)
+                    .overlay(Circle().strokeBorder(Color.white.opacity(0.6), lineWidth: 0.5)).frame(width: 9, height: 9)
             }
             Text(detection.badge).font(.system(size: 10, weight: .medium, design: .monospaced)).lineLimit(1)
-        }.padding(.horizontal, 4).padding(.vertical, 1).fixedSize()
-            .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 3))
+        }.foregroundStyle(.white).padding(.horizontal, 4).padding(.vertical, 1).fixedSize()
+            .background(Color.white.opacity(0.18), in: RoundedRectangle(cornerRadius: 3))
             .help(detection.kindName + "：" + detection.badge)
     }
 }
