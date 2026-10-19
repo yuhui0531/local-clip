@@ -112,6 +112,12 @@ struct SyntaxCardPreview: NSViewRepresentable {
     func updateNSView(_ view: Preview, context: Context) {
         if !view.content.isEqual(to: content) { view.content = content; view.needsDisplay = true }
     }
+    /// 不限高度时报告排版后的理想高度，卡片据此判断是否溢出；限定高度时沿用原尺寸，by AI.Coding。
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: Preview, context: Context) -> CGSize? {
+        guard let width = proposal.width, proposal.height == nil else { return nil }
+        let rect = content.boundingRect(with: CGSize(width: width, height: .greatestFiniteMagnitude), options: [.usesLineFragmentOrigin, .usesFontLeading])
+        return CGSize(width: width, height: ceil(rect.height))
+    }
     final class Preview: NSView {
         var content = NSAttributedString(string: "")
         override var isFlipped: Bool { true }

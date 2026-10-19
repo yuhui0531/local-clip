@@ -32,10 +32,11 @@ struct ThumbnailPreview: View {
 
     var body: some View {
         ZStack {
-            Rectangle().fill(tint.opacity(0.06))
+            // 透明图片衬中性底色，不随类型色偏色，by AI.Coding。
+            Rectangle().fill(state.image != nil ? Color.primary.opacity(0.05) : tint.opacity(0.06))
             switch state {
             case .ready(let image):
-                Image(nsImage: image).resizable().scaledToFit().padding(compact ? 2 : 9)
+                Image(nsImage: image).resizable().scaledToFit().padding(compact ? 2 : 4)
                     .accessibilityLabel(state.label)
             case .loading:
                 VStack(spacing: 9) {

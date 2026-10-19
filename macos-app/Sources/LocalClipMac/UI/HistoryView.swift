@@ -662,6 +662,8 @@ struct ClipCard: View, Equatable {
     @State private var detectedLanguage: String?
     @State private var detection: ContentInspector.Detection?
     @State private var hovering = false
+    @State private var textHeight: CGFloat = 0
+    @State private var fileIcon: NSImage?
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.item == rhs.item && lhs.index == rhs.index && lhs.selected == rhs.selected && lhs.dragging == rhs.dragging && lhs.editing == rhs.editing && lhs.hidden == rhs.hidden && lhs.quickModifiers == rhs.quickModifiers && lhs.height == rhs.height
             && lhs.categoryID == rhs.categoryID && lhs.categories == rhs.categories && lhs.target == rhs.target
@@ -678,10 +680,29 @@ struct ClipCard: View, Equatable {
     /// 卡片合并辅助功能子元素后仍朗读预览状态；隐藏内容时不泄露状态或正文。
     /// 大小只附加在原有次级信息之后，不替换类型、次数等字段；隐藏内容时不显示。
     private var sizeLabel: String? { [.image, .file].contains(item.kind) && !hidden ? contentSize.label : nil }
+    /// 按类型给出度量：文本/链接为字数，图片为大小，文件为项数与大小或“文件夹”；复制次数见详情，by AI.Coding。
     private var footerText: String {
-        let base = displayedCharacterCount.map { "\($0) 个字符" } ?? (item.kind == .file ? "文件引用" : "复制\(item.copyCount)次")
-        // 极小卡片宽度只够前半段，大小在前避免被截断；两项都保留。
-        return sizeLabel.map { tiny ? $0 + " · " + base : base + " · " + $0 } ?? base
+        switch item.kind {
+        case .text, .url: return displayedCharacterCount.map { "\($0) 字" } ?? ""
+        case .image: return sizeLabel ?? ""
+        case .mixed: return "混合内容"
+        case .file:
+            guard !hidden, case let .files(known, count, unknown, folders) = contentSize else { return sizeLabel ?? "文件引用" }
+            if folders == count { return count == 1 ? "文件夹" : "\(count) 个文件夹" }
+            return "\(count) 项 · " + (unknown + folders == count ? "大小未知" : HistoryViewModel.bytes(known))
+        }
+    }
+    /// 仅文本与代码在内容溢出时加底部渐隐，图片与短文本不被遮住，by AI.Coding。
+    private var fadesBody: Bool {
+        !tiny && (item.kind == .text || displayedFileText != nil) && !showsFileThumbnail && textHeight > max(0, height - headerHeight - footerHeight) + 0.5
+    }
+    /// 仅为颜色值的文本铺满该颜色；明度决定黑或白字，by AI.Coding。
+    private var colorValue: (color: Color, dark: Bool)? {
+        guard !hidden, item.kind == .text, case .color(let value)? = detection,
+              !item.preview.trimmingCharacters(in: .whitespacesAndNewlines).contains(where: \.isWhitespace) else { return nil }
+        func linear(_ channel: Int) -> Double { let c = Double(channel) / 255; return c <= 0.03928 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4) }
+        let luminance = 0.2126 * linear(value.red) + 0.7152 * linear(value.green) + 0.0722 * linear(value.blue)
+        return (Color(.sRGB, red: Double(value.red) / 255, green: Double(value.green) / 255, blue: Double(value.blue) / 255, opacity: value.alpha), luminance > 0.179)
     }
     private var accessibilityDescription: String {
         let title = "\(item.title ?? HistoryView.kindName(item.kind))，\(item.source.name)"
@@ -772,7 +793,7 @@ struct ClipCard: View, Equatable {
                 .mask {
                     VStack(spacing: 0) {
                         Rectangle()
-                        if !tiny { LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom).frame(height: 16) }
+                        if fadesBody { LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom).frame(height: 16) }
                     }
                 }
             HStack(spacing: 4) {
@@ -939,7 +960,7 @@ struct ClipCard: View, Equatable {
             .onScrollVisibilityChange(threshold: 0.01) { visible in
                 isOnscreen = visible
                 model.thumbnailVisibilityChanged(id: item.id, visible: visible)
-                if !visible { if item.kind == .file { checkedFileGeneration = nil; contentSize = .loading }; model.cancelRename(id: item.id); thumbnailState = .loading; Task { await model.derived.cancel(id: item.id) } }
+                if !visible { if item.kind == .file { checkedFileGeneration = nil; contentSize = .loading; fileIcon = nil }; model.cancelRename(id: item.id); thumbnailState = .loading; Task { await model.derived.cancel(id: item.id) } }
             }
             .task(id: [String(isOnscreen), item.kind == .file ? previewGeneration.uuidString : item.contentFingerprint ?? "immutable"]) {
                 guard isOnscreen else { return }
@@ -955,6 +976,7 @@ struct ClipCard: View, Equatable {
                     let size = await Task.detached(priority: .utility) { urls.map(ClipContentSize.measure) ?? .unknown }.value
                     guard !Task.isCancelled, model.contains(item.id) else { return }
                     contentSize = size
+                    if let path = urls?.first?.path { fileIcon = await Task.detached(priority: .utility) { NSWorkspace.shared.icon(forFile: path) }.value }
                     if !model.validateFilePreview(id: item.id, version: version) {
                         fileText = nil; thumbnailState = .loading
                     }
@@ -1029,7 +1051,9 @@ struct ClipCard: View, Equatable {
         } else if let text = displayedFileText, let paths = filePaths {
             VStack(spacing: 0) {
                 SyntaxText(text: text, size: previewFontSize, spacing: tiny ? 0 : 3, onLanguage: { detectedLanguage = $0 })
-                    .lineSpacing(tiny ? 0 : 3).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).clipped()
+                    .lineSpacing(tiny ? 0 : 3).fixedSize(horizontal: false, vertical: true)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height + 28 } action: { textHeight = $0 }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).clipped()
                     .padding(.horizontal, tiny ? 6 : height < 200 ? 10 : 14).padding(.top, tiny ? 3 : 10).padding(.bottom, tiny ? 0 : 4)
                 if !tiny {
                     Text(fileCaption(paths, unit: "个")).font(.system(size: 11, weight: .medium)).lineLimit(1).truncationMode(.middle)
@@ -1040,19 +1064,25 @@ struct ClipCard: View, Equatable {
             Text(((item.preview.split(separator: "\n").first.map(String.init) ?? "文件引用") as NSString).lastPathComponent)
                 .font(.system(size: 10)).lineLimit(1).padding(.horizontal, 6).padding(.top, 3)
         } else if item.kind == .file {
-            VStack(alignment: .leading, spacing: 8) {
-                let paths = item.preview.split(separator: "\n")
-                HStack(alignment: .top, spacing: 6) {
-                    Image(systemName: "doc.on.doc.fill").font(.system(size: 14, weight: .regular)).foregroundStyle(tint)
-                    Text(paths.map { (String($0) as NSString).lastPathComponent }.joined(separator: "\n"))
-                        .font(.system(size: 13, weight: .semibold)).lineLimit(height < 150 ? 1 : 3)
-                }
-                if height >= 150 {
-                    Text(paths.first.map { (String($0) as NSString).deletingLastPathComponent } ?? "文件引用")
-                        .font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
-                }
+            // 不可预览文件、目录与失效文件居中显示系统图标与文件名，正文不再空白，by AI.Coding。
+            VStack(spacing: 6) {
                 Spacer(minLength: 0)
-            }.padding(.horizontal, 12).padding(.top, 10)
+                Group {
+                    if let fileIcon { Image(nsImage: fileIcon).resizable().interpolation(.high).scaledToFit() }
+                    else { Image(systemName: "doc").font(.system(size: 34, weight: .light)).foregroundStyle(tint) }
+                }.frame(width: height < 200 ? 40 : 56, height: height < 200 ? 40 : 56).accessibilityHidden(true)
+                if let paths = filePaths {
+                    Text(fileCaption(paths, unit: "个")).font(.system(size: 12, weight: .medium)).lineLimit(2).truncationMode(.middle).multilineTextAlignment(.center)
+                }
+                if let status = fileStatus { Text(status).font(.system(size: 10)).foregroundStyle(.secondary) }
+                Spacer(minLength: 0)
+            }.frame(maxWidth: .infinity, maxHeight: .infinity).padding(.horizontal, 12)
+        } else if let colorValue {
+            ZStack {
+                Rectangle().fill(colorValue.color)
+                Text(item.preview.trimmingCharacters(in: .whitespacesAndNewlines)).font(.system(size: 15, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(colorValue.dark ? Color.black : Color.white)
+            }
         } else if item.kind == .image || item.kind == .mixed {
             ThumbnailPreview(state: displayedThumbnail, tint: tint, compact: tiny)
         } else if tiny && item.kind == .url {
@@ -1064,9 +1094,17 @@ struct ClipCard: View, Equatable {
             SyntaxText(text: item.context, size: previewFontSize, spacing: tiny ? 0 : 3, onLanguage: { detectedLanguage = $0 })
                 .lineSpacing(tiny ? 0 : 3).frame(maxWidth: .infinity, alignment: .topLeading)
                 .padding(.horizontal, tiny ? 6 : height < 200 ? 10 : 14).padding(.top, tiny ? 3 : 10).padding(.bottom, tiny ? 0 : 4)
+                .fixedSize(horizontal: false, vertical: true)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { textHeight = $0 }
         }
     }
 
+    /// 目录与失效文件给出状态文字；可读普通文件不加说明，by AI.Coding。
+    private var fileStatus: String? {
+        guard case let .files(_, count, unknown, folders) = contentSize else { return nil }
+        if folders == count { return "文件夹" }
+        return unknown == count ? "文件已移动、删除或无法访问" : nil
+    }
     private var symbol: String { code ? "chevron.left.forwardslash.chevron.right" : HistoryView.kindSymbol(item.kind) }
 }
 // 复制时间只按分钟更新，紧凑卡片不被秒数长文本挤压，by AI.Coding。
