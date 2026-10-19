@@ -381,6 +381,60 @@ import LocalClipCore
         item.kind = .file
         #expect(card(first) == card(first) && !(card(first) == card(second)))
     }
+    /// 详情等待反馈：快速完成不闪转圈；500ms时显示等待；换选后旧请求不再弹出，by AI.Coding。
+    @Test func detailLoadingFeedback() async throws {
+        let (root, _, model) = try await setup()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let first = model.items[0].id, second = model.items[1].id
+        var flashed = false
+        let start = ContinuousClock.now
+        model.showDetail(id: first)
+        while model.detail?.summary.id != first { flashed = flashed || model.detailSlow; try await Task.sleep(for: .milliseconds(2)) }
+        // 满载时真实读取可能超过阈值；只要求100ms内完成时绝不出现转圈。
+        #expect(!flashed || ContinuousClock.now - start >= .milliseconds(100))
+        #expect(!model.detailSlow)
+        model.showingDetail = false; model.detailVisibilityChanged()
+        model.detailDelayForTesting = .milliseconds(500)
+        model.showDetail(id: first)
+        try await wait { model.detailSlow }
+        #expect(model.detail == nil && model.statusEntry(queryEmpty: true) == .init(level: .notice, text: "正在准备预览…"))
+        model.showDetail(id: second)
+        #expect(!model.detailSlow)
+        try await wait { model.detail?.summary.id == second }
+        #expect(!model.detailSlow && model.selectedID == second)
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(model.detail?.summary.id == second)
+        model.select(first)
+        #expect(!model.detailSlow && !model.showingDetail)
+    }
+    /// Space开关预览；Space打开后方向键换选保持预览并加载新内容；点击换卡仍关闭；隐藏内容时无效，by AI.Coding。
+    @Test func spaceTogglesFollowingPreview() async throws {
+        let (root, _, model) = try await setup()
+        defer { try? FileManager.default.removeItem(at: root) }
+        model.select(model.items[0].id)
+        model.toggleQuickLook()
+        try await wait { model.detail?.summary.id == model.items[0].id }
+        #expect(model.showingDetail && model.previewFollowsSelection)
+        for step in 1...10 {
+            model.navigate(1)
+            let expected = model.items[min(step, model.items.count - 1)].id
+            #expect(model.showingDetail && model.selectedID == expected)
+            try await wait { model.detail?.summary.id == expected }
+        }
+        model.toggleQuickLook()
+        #expect(!model.showingDetail && !model.previewFollowsSelection)
+        model.showDetail(id: model.items[0].id)
+        try await wait { model.detail != nil }
+        model.navigate(1)
+        #expect(!model.showingDetail)
+        model.toggleQuickLook(); try await wait { model.showingDetail }
+        model.select(model.items[3].id)
+        #expect(!model.showingDetail)
+        model.updateSettings { $0.hideContents = true }
+        try await wait { model.settings.hideContents }
+        model.toggleQuickLook(); try await Task.sleep(for: .milliseconds(150))
+        #expect(!model.showingDetail)
+    }
     /// 状态槽优先级：错误 > 监控异常 > 队列 > 通知 > 提示；旧通知计时器不能清掉同文字的新错误，by AI.Coding。
     @Test func statusSlotPriorityAndSeverity() async throws {
         let (root, _, model) = try await setup()

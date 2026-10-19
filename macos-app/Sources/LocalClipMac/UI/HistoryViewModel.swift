@@ -88,6 +88,17 @@ import LocalClipCore
     public private(set) var selectedID: ClipID? { get { listState[\.selectedID] } set { listState[\.selectedID] = newValue } }
     public private(set) var selectedMetadata: ClipMetadata? { get { listState.selectedMetadata } set { listState.selectedMetadata = newValue } }
     @Published public private(set) var detailLoading = false
+    /// 详情读取超过100ms才显示等待；更快完成不闪转圈，by AI.Coding。
+    @Published private(set) var detailSlow = false
+    /// 详情读取失败，状态槽提供重试，by AI.Coding。
+    @Published private(set) var detailFailed = false
+    private var detailSlowTask: Task<Void, Never>?
+    /// Space打开的预览随方向键换选跟随；点击卡片与显式详情入口沿用换卡关闭，by AI.Coding。
+    var previewFollowsSelection = false
+    #if DEBUG
+    /// 测试注入详情读取延迟，验证等待反馈与请求代次，by AI.Coding。
+    var detailDelayForTesting: Duration = .zero
+    #endif
     @Published public private(set) var detail: ClipDetail?
     @Published public private(set) var image: NSImage?
     /// 识别结果与正文高亮随详情同批发布，弹窗首帧即最终内容与尺寸，by AI.Coding。
@@ -132,11 +143,13 @@ import LocalClipCore
         if !message.isEmpty, messageSeverity == .failure { return .init(level: .failure, text: message) }
         if capture.capacityBlocked { return .init(level: .failure, text: HistoryView.statusLabel("容量已满")) }
         if let problem = queryProblems.first { return .init(level: .failure, text: queryProblems.count > 1 ? queryProblems.joined(separator: "；") : problem) }
+        if detailFailed { return .init(level: .failure, text: "预览未能读取 · 重试") }
         if recordingPaused || status != "正常" {
             return .init(level: .monitoring, text: HistoryView.statusLabel(recordingPaused && status == "正常" ? "用户暂停" : status))
         }
         if let queue = pasteQueueStatus { return .init(level: .queue, text: queue) }
         if !message.isEmpty { return .init(level: .notice, text: message) }
+        if detailSlow { return .init(level: .notice, text: "正在准备预览…") }
         switch historyFocus {
         case .search where !queryEmpty: return .init(level: .hint, text: "↩ 进入结果")
         case .results where selectedID != nil:
@@ -212,7 +225,7 @@ import LocalClipCore
     func previewImageSize(id: ClipID) async throws -> (bytes: Int64, items: Int)? { try await store.imageByteCount(id: id, at: clock.now()) }
     @Published public var showingDetail = false {
         didSet {
-            if oldValue && !showingDetail { rememberNativePopoverDismissal() }
+            if oldValue && !showingDetail { rememberNativePopoverDismissal(); previewFollowsSelection = false }
             if showingDetail && !canDisplayContents { showingDetail = false; return }
             if showingDetail, let editor = contentEditor {
                 if !editor.hasChanges && !editor.saving { discardContentEdit() }
@@ -666,7 +679,7 @@ import LocalClipCore
         }
     }
     /// 高亮立即更新；快速连续选择取消旧元数据请求，完整正文仅在详情打开时读取。
-    public func select(_ id: ClipID?, preserveSelection: Bool = false) {
+    public func select(_ id: ClipID?, preserveSelection: Bool = false, keepDetail: Bool = false) {
         guard !dragActive else { return }
         if !preserveSelection { selectedIDs = Set(id.map { [$0] } ?? []); anchorID = id }
         if selectedID == id {
@@ -687,7 +700,7 @@ import LocalClipCore
             return
         }
         // 普通选卡同步关闭旧详情，显式详情入口随后打开目标，避免视图异步回调误关闭新弹窗。
-        if showingDetail { showingDetail = false }
+        if showingDetail && !keepDetail { showingDetail = false }
         invalidateSelection(); selectedID = id
         guard let id else { return }
         let generation = selectionGeneration
@@ -707,7 +720,7 @@ import LocalClipCore
     /// 明确打开指定卡片详情；不依赖主队列与 SwiftUI onChange 的先后顺序，by AI.Coding。
     func showDetail(id: ClipID) {
         guard canDisplayContents, contains(id), !dragActive else { return }
-        select(id); showingDetail = true
+        select(id); previewFollowsSelection = false; showingDetail = true
         detailVisibilityChanged()
     }
     /// 详情显示才加载完整格式；关闭时释放大内容，保留轻量选择状态。
@@ -722,9 +735,17 @@ import LocalClipCore
         if detail?.summary.id == id { return }
         invalidateDetail(); detailLoading = true
         let generation = detailID
+        detailSlowTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(100))
+            guard let self, !Task.isCancelled, generation == detailID, detailLoading else { return }
+            detailSlow = true
+        }
         detailing = Task { [weak self] in
             guard let self else { return }
             do {
+                #if DEBUG
+                if detailDelayForTesting > .zero { try await Task.sleep(for: detailDelayForTesting) }
+                #endif
                 let detail = try await store.detail(id: id, at: clock.now())
                 guard !Task.isCancelled, generation == detailID, canDisplayContents, selectedID == id, showingDetail else { return }
                 guard isVisible(detail.summary) else { revalidateVisibleContent(); return }
@@ -764,8 +785,8 @@ import LocalClipCore
                     if image == nil { previewMessage = "原图预览不可用或超过40MP；原始格式仍保留" }
                 }
                 detailEditable = readyEditable
-                self.detail = detail; detailLoading = false
-            } catch { if generation == detailID { invalidateDetail() } }
+                self.detail = detail; detailLoading = false; detailSlowTask?.cancel(); detailSlow = false
+            } catch { if generation == detailID { invalidateDetail(); detailFailed = !(error is CancellationError) } }
         }
     }
     /// 存储变更/删除作废两个请求世代，不让旧详情或旧元数据重新覆盖当前选择。
@@ -783,6 +804,13 @@ import LocalClipCore
         if detail != nil { detail = nil }; if image != nil { image = nil }; if richPreview != nil { richPreview = nil }
         if detailInspection != nil { detailInspection = nil }; if detailHighlight != nil { detailHighlight = nil }
         if !previewMessage.isEmpty { previewMessage = "" }; if detailLoading { detailLoading = false }
+        detailSlowTask?.cancel(); detailSlowTask = nil
+        if detailSlow { detailSlow = false }; if detailFailed { detailFailed = false }
+    }
+    /// 状态槽“重试”：保持详情打开意图，重新读取当前选择，by AI.Coding。
+    func retryDetail() {
+        guard showingDetail else { return }
+        loadDetail()
     }
     /// 已发布卡片与详情也必须在到期边界消失，不能等待每分钟物理清理。
     private func isVisible(_ item: ClipSummary) -> Bool {
@@ -823,7 +851,7 @@ import LocalClipCore
         guard !items.isEmpty else { return }
         let current = items.firstIndex { $0.id == selectedID } ?? 0
         if delta > 0, current == items.count - 1, hasMore { loadMore(advanceSelection:true); return }
-        select(items[min(items.count - 1, max(0, current + delta))].id)
+        select(items[min(items.count - 1, max(0, current + delta))].id, keepDetail: previewFollowsSelection)
     }
     /// 按配置动作执行；输出状态不会写成目标已接收。
     public func perform(_ format: OutputFormat? = nil, action: PasteAction? = nil, transform: TextTransform? = nil, join: JoinStyle = .newline, ids: [ClipID]? = nil) {
@@ -1399,6 +1427,11 @@ import LocalClipCore
             catch { if generation == queryID { message = "无法定位：记录已变化" } }
         }
     }
+    /// Space开关预览：已打开则关闭，否则打开并让方向键换选跟随，by AI.Coding。
+    func toggleQuickLook() {
+        if showingDetail { showingDetail = false; return }
+        previewFollowsSelection = true; quickLook()
+    }
     /// Space按需预览；读取前后复查展示策略、选择与请求身份，by AI.Coding。
     public func quickLook() {
         guard canDisplayContents, let selectedID else { return }
@@ -1411,7 +1444,7 @@ import LocalClipCore
                 let currentSettings = try await store.settings()
                 guard !Task.isCancelled, generation == contentGeneration, canDisplayContents,
                       !currentSettings.hideContents, self.selectedID == selectedID, isVisible(latest.summary) else { return }
-                if let urls = detail.payload.fileURLs { filePreview.show(urls, excludeFromSharing: settings.excludeFromSharing) }
+                if let urls = detail.payload.fileURLs { previewFollowsSelection = false; filePreview.show(urls, excludeFromSharing: settings.excludeFromSharing) }
                 else { showingDetail = true; detailVisibilityChanged() }
             } catch { if !Task.isCancelled && generation == contentGeneration { message = "预览不可用，记录已变化" } }
         }

@@ -822,7 +822,7 @@ import LocalClipCore
                 model.focusSearchSynchronously(); return event
             }
             if !editing {
-                if event.keyCode == 49 { model.quickLook(); return nil }
+                if event.keyCode == 49 { model.toggleQuickLook(); return nil }
                 if event.keyCode == 115 || event.keyCode == 119 { model.edgeSelection(event.keyCode == 119, extend: flags.contains(.shift)); return nil }
                 if flags.contains(.shift), [UInt16(123),124,125,126].contains(event.keyCode) { model.extendNavigation([UInt16(123),126].contains(event.keyCode) ? -1 : 1); return nil }
             }

@@ -54,7 +54,7 @@ public struct HistoryView: View {
                 }.padding(.horizontal, Self.cardInset).frame(height: Self.toolbarHeight)
                 HistoryStrip(model: model, list: model.listState, cardHeight: cardHeight,
                     categoryID: model.categoryID, categories: model.categories,
-                    target: model.target, draggedIDs: model.draggedIDs, hideContents: model.settings.hideContents, focusRequest: model.focusRequest, renamingID: model.renamingID, showingDetail: model.showingDetail && model.detail != nil)
+                    target: model.target, draggedIDs: model.draggedIDs, hideContents: model.settings.hideContents, focusRequest: model.focusRequest, renamingID: model.renamingID, showingDetail: model.showingDetail && model.detail != nil, detailPending: model.detailSlow)
             // 顶部保留圆角，底边与屏幕贴合，不留可拖动的悬浮窗口边距。
             }.frame(width: viewport.size.width, height: viewport.size.height, alignment: .top)
                 .background { ZStack { HistoryBackdrop(); Color(nsColor: .windowBackgroundColor).opacity(0.76) } }
@@ -214,6 +214,7 @@ private struct HistoryStrip: View {
     let focusRequest: UUID
     let renamingID: ClipID?
     let showingDetail: Bool
+    let detailPending: Bool
     var body: some View {
         ZStack {
             if model.items.isEmpty {
@@ -260,7 +261,7 @@ private struct HistoryScroller: View {
             ScrollView(.horizontal) {
                 LazyHStack(spacing: HistoryView.cardSpacing) {
                     ForEach(Array(strip.model.items.enumerated()), id: \.element.id) { index, item in
-                        ClipCard(item: item, index: index, selected: strip.model.selectedIDs.contains(item.id) || (strip.model.contentEditorPresented && strip.model.contentEditor?.id == item.id), dragging: strip.draggedIDs.contains(item.id), editing: strip.renamingID == item.id, hidden: strip.hideContents, quickModifiers: strip.model.settings.quickModifiers, height: strip.cardHeight, categoryID: strip.categoryID, categories: strip.categories, target: strip.target, selectionCount: strip.model.selectedIDs.contains(item.id) ? strip.model.selectedIDs.count : 0, selectionHasNonText: strip.model.items.contains { strip.model.selectedIDs.contains($0.id) && ($0.kind == .image || $0.kind == .mixed) }, queueShortcut: strip.model.settings.queueShortcut, model: strip.model, previewGeneration: strip.focusRequest).equatable().id(item.id)
+                        ClipCard(item: item, index: index, selected: strip.model.selectedIDs.contains(item.id) || (strip.model.contentEditorPresented && strip.model.contentEditor?.id == item.id), dragging: strip.draggedIDs.contains(item.id), editing: strip.renamingID == item.id, hidden: strip.hideContents, quickModifiers: strip.model.settings.quickModifiers, height: strip.cardHeight, categoryID: strip.categoryID, categories: strip.categories, target: strip.target, selectionCount: strip.model.selectedIDs.contains(item.id) ? strip.model.selectedIDs.count : 0, selectionHasNonText: strip.model.items.contains { strip.model.selectedIDs.contains($0.id) && ($0.kind == .image || $0.kind == .mixed) }, queueShortcut: strip.model.settings.queueShortcut, model: strip.model, previewGeneration: strip.focusRequest, detailPending: strip.detailPending && strip.model.selectedID == item.id).equatable().id(item.id)
                             // 详情贴着所选卡片弹出，而不是远在底栏右侧的按钮，by AI.Coding。
                             // 详情内容备好后才弹出，弹出即最终尺寸，by AI.Coding。
                             .popover(isPresented: Binding(get: { strip.showingDetail && strip.model.selectedID == item.id && strip.model.detail?.summary.id == item.id }, set: { if !$0 { strip.model.showingDetail = false } }), attachmentAnchor: .rect(.bounds), arrowEdge: .top) {
@@ -410,6 +411,7 @@ private struct HistoryStatusDetail: View {
                 Spacer()
                 if model.recordingPaused { Button("开始监控") { model.resumeRecording(); model.showingStatusDetail = false } }
                 if model.pasteQueueActive { Button("结束粘贴队列") { model.stopPasteQueue(); model.showingStatusDetail = false } }
+                if model.detailFailed { Button("重试") { model.retryDetail(); model.showingStatusDetail = false } }
                 if model.messageSeverity == .failure && !model.message.isEmpty { Button("关闭") { model.dismissMessage() } }
             }.controlSize(.small)
         }.padding(14).frame(width: 300)
@@ -598,6 +600,8 @@ struct ClipCard: View, Equatable {
     let queueShortcut: Shortcut
     let model: HistoryViewModel
     let previewGeneration: UUID
+    /// 详情读取超过100ms时在本卡详情位置显示小转圈，by AI.Coding。
+    var detailPending = false
     @State private var checkedFileGeneration: UUID?
     @State private var fileVersion: FileReferencePreviewVersion?
     @State private var characterCount: (fingerprint: String?, count: Int)?
@@ -658,7 +662,7 @@ struct ClipCard: View, Equatable {
         lhs.item == rhs.item && lhs.index == rhs.index && lhs.selected == rhs.selected && lhs.dragging == rhs.dragging && lhs.editing == rhs.editing && lhs.hidden == rhs.hidden && lhs.quickModifiers == rhs.quickModifiers && lhs.height == rhs.height
             && lhs.categoryID == rhs.categoryID && lhs.categories == rhs.categories && lhs.target == rhs.target
             && lhs.selectionCount == rhs.selectionCount && lhs.selectionHasNonText == rhs.selectionHasNonText && lhs.queueShortcut == rhs.queueShortcut
-            && (lhs.item.kind != .file || lhs.previewGeneration == rhs.previewGeneration)
+            && (lhs.item.kind != .file || lhs.previewGeneration == rhs.previewGeneration) && lhs.detailPending == rhs.detailPending
     }
     private var code: Bool { item.kind == .text && detectedLanguage != nil }
     /// 代码上限12.5pt，普通文本沿用原字号与紧凑布局，by AI.Coding。
@@ -770,7 +774,7 @@ struct ClipCard: View, Equatable {
                 Text(footerText).lineLimit(1)
                 Spacer(minLength: 2)
                 // 编辑与详情入口跟随卡片：悬停或选中时出现，点按在本卡上方就地弹出，by AI.Coding。
-                if (hovering || selected) && !tiny && !hidden {
+                if (hovering || selected || detailPending) && !tiny && !hidden {
                     HStack(spacing: 2) {
                         if [ClipKind.text, .url].contains(item.kind) {
                             Button {
@@ -781,8 +785,9 @@ struct ClipCard: View, Equatable {
                             }.buttonStyle(.plain).foregroundStyle(Color.accentColor).help("编辑内容 · ⌘E").accessibilityLabel("编辑内容")
                         }
                         Button { model.showDetail(id: item.id) } label: {
-                            Image(systemName: "info.circle").font(.system(size: 13)).frame(width: 18, height: 18).contentShape(Rectangle())
-                        }.buttonStyle(.plain).foregroundStyle(Color.accentColor).help("详情 · ⌘I").accessibilityLabel("详情")
+                            if detailPending { ProgressView().controlSize(.mini).frame(width: 18, height: 18) }
+                            else { Image(systemName: "info.circle").font(.system(size: 13)).frame(width: 18, height: 18).contentShape(Rectangle()) }
+                        }.buttonStyle(.plain).foregroundStyle(Color.accentColor).help("详情 · ⌘I").accessibilityLabel(detailPending ? "正在准备预览" : "详情")
                     }
                         .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(item.id)) } action: { infoRect = $0 }
                         .onDisappear { infoRect = .zero }
