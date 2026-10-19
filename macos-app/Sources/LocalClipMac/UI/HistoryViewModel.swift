@@ -265,6 +265,10 @@ import LocalClipCore
     private var contentGeneration = UUID()
     private var transformMenuRequest = UUID()
     private var transformMenu: TransformMenuController?
+    #if DEBUG
+    /// 测试替换最后的窗口展示步骤，真实请求与取消流程仍执行，不弹窗、不激活应用，by AI.Coding。
+    var presentTransformMenuForTesting: ((TransformMenuController, NSWindow, NSPoint) -> Void)?
+    #endif
     private var dismissedPopoverClickSequence = false
     private var dismissedPopoverEventTime: TimeInterval?
     /// AppKit可能先关闭transient浮层再派发原点击；记住该事件，防止同一次按下穿透。
@@ -765,7 +769,8 @@ import LocalClipCore
         panelInteractionChanged?()
         // 从详情发起的识别随详情关闭取消，不写剪贴板，by AI.Coding。
         if !showingDetail, imageTextFromDetail { imageTextTask?.cancel(); imageTextTask = nil }
-        if showingDetail { loadDetail() } else { invalidateDetail() }
+        // 关闭详情只是释放预览；从详情接续的转换不应被视为记录失效而取消，by AI.Coding。
+        if showingDetail { loadDetail() } else { invalidateDetail(cancelTransformMenu: false) }
     }
     private func loadDetail() {
         guard canDisplayContents, let id = selectedID, !pendingDeletion.contains(id) else { return }
@@ -833,12 +838,12 @@ import LocalClipCore
         metadataTask?.cancel(); metadataTask = nil; selectionGeneration = UUID(); selectedMetadata = nil
         invalidateDetail()
     }
-    /// 数据变更先使已展示派生内容失效。
-    private func invalidateDetail() {
+    /// 数据变更使派生内容与转换一起失效；单纯收起详情只释放预览，by AI.Coding。
+    private func invalidateDetail(cancelTransformMenu: Bool = true) {
         detailing?.cancel(); detailing = nil; detailID = UUID()
         quickLookTask?.cancel(); quickLookTask = nil; contentGeneration = UUID(); filePreview.close()
-        // 选择/内容变更时关闭旧转换菜单，避免继续对失效的快照执行操作，by AI.Coding。
-        transformMenuRequest = UUID(); transformMenu?.close()
+        // 选择/内容变更仍关闭旧转换；详情移交焦点的延迟回调不能销毁新菜单，by AI.Coding。
+        if cancelTransformMenu { transformMenuRequest = UUID(); transformMenu?.close() }
         if detailEditable { detailEditable = false }
         if detail != nil { detail = nil }; if image != nil { image = nil }; if richPreview != nil { richPreview = nil }
         if detailInspection != nil { detailInspection = nil }; if detailHighlight != nil { detailHighlight = nil }
@@ -1654,9 +1659,11 @@ import LocalClipCore
     public func showTransformMenu(ids explicit: [ClipID]? = nil, atSelectedCard: Bool = false) {
         let ids = explicit ?? orderedSelection
         guard canDisplayContents, panelVisible, !ids.isEmpty else { return }
+        // 主动完成详情到转换的交接，不把新菜单挂在即将关闭的详情浮窗上，by AI.Coding。
+        if showingDetail { showingDetail = false; detailVisibilityChanged() }
         transformMenu?.close()
         transformMenuRequest = UUID()
-        let visibility = contentGeneration, request = transformMenuRequest
+        let request = transformMenuRequest
         Task {
             var records: [ClipboardPayload] = []
             do {
@@ -1666,11 +1673,12 @@ import LocalClipCore
             catch let error as TransformError { message = error.message; return }
             catch { message = "转换不可用，记录已变化"; return }
             let (available, reason) = await Task.detached { Self.transformAvailability(records) }.value
-            guard canDisplayContents, panelVisible, visibility == contentGeneration, request == transformMenuRequest,
+            // 转换使用自己的请求代次；内容/选择失效仍会撤销，单纯释放详情预览不会误取消。
+            guard canDisplayContents, panelVisible, request == transformMenuRequest,
                   explicit != nil || ids == orderedSelection else { return }
             // ⌘T在所选卡片左上角弹出；鼠标入口在指针处弹出。
             let view = HistoryDragBridge.DragView.view(for: ids[0])
-            guard let parent = atSelectedCard ? view?.window : (NSApp.keyWindow ?? view?.window) else { return }
+            guard let parent = view?.window ?? (atSelectedCard ? nil : NSApp.keyWindow) else { return }
             var point = NSEvent.mouseLocation
             if atSelectedCard, let view {
                 point = parent.convertPoint(toScreen: view.convert(NSPoint(x: 12, y: view.isFlipped ? 12 : view.bounds.height - 12), to: nil))
@@ -1682,6 +1690,9 @@ import LocalClipCore
             }
             menu.onParentClick = { [weak self] event in self?.dismissPopoverForBackdropClick(count: event.clickCount, timestamp: event.timestamp) ?? false }
             transformMenu = menu
+            #if DEBUG
+            if let presentTransformMenuForTesting { presentTransformMenuForTesting(menu, parent, point); return }
+            #endif
             menu.present(parent: parent, at: point)
         }
     }

@@ -172,6 +172,62 @@ import Testing
         #expect(try await h.store.loadPayload(id: id, at: SystemClock().now()).plainText == "user_id")
     }
 
+    /// 详情关闭的延迟回调不能取消用户刚请求的转换；只挂载隐藏卡片窗口，最终展示由测试接管，by AI.Coding。
+    @Test(arguments: [false, true], ["none", "selection", "panel", "privacy"])
+    func detailDismissalKeepsRequestedTransform(afterPresentation: Bool, invalidation: String) async throws {
+        _ = NSApplication.shared
+        let h = try harness(); defer { try? FileManager.default.removeItem(at: h.root) }
+        let id = try await ingest(h.store, "user_id")
+        let model = HistoryViewModel(store: h.store, capture: h.capture, paste: h.paste, derived: DerivedContentService(store: h.store))
+        model.select(id); model.panelVisibilityChanged(true); model.showingDetail = true
+        let parent = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 300, height: 300), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
+        parent.isReleasedWhenClosed = false
+        let card = HistoryDragBridge.DragView(frame: NSRect(x: 0, y: 0, width: 200, height: 200))
+        card.id = id; card.model = model; parent.contentView = card; card.install()
+        defer { model.panelVisibilityChanged(false); parent.contentView = nil; parent.close() }
+        var presented: TransformMenuController?
+        model.presentTransformMenuForTesting = { menu, owner, _ in
+            #expect(owner === parent)
+            #expect(!parent.isVisible && menu.window == nil)
+            presented = menu
+        }
+        model.showTransformMenu(ids: [id])
+        #expect(!model.showingDetail)
+        if !afterPresentation {
+            model.showingDetail = false; model.detailVisibilityChanged()
+        }
+        let deadline = ContinuousClock.now + .seconds(2)
+        while presented == nil && ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
+        let menu = try #require(presented)
+        var dismissed = false
+        let onDismiss = menu.onDismiss
+        menu.onDismiss = { dismissed = true; onDismiss?() }
+        if afterPresentation {
+            model.showingDetail = false; model.detailVisibilityChanged()
+        }
+        #expect(!dismissed)
+        // 只放行详情交接；选择失效、关闭面板与隐藏内容仍必须撤销已准备的转换。
+        switch invalidation {
+        case "selection": model.select(nil)
+        case "panel": model.panelVisibilityChanged(false)
+        case "privacy":
+            var settings = model.settings; settings.hideContents = true; model.guiApplySettings(settings)
+        default: break
+        }
+        #expect(dismissed == (invalidation != "none"))
+        let count = h.raw.count
+        menu.choose(.camelCase, modifiers: [.option])
+        if invalidation == "none" {
+            while h.raw.count == count && ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
+            #expect(h.raw.items.first?[SupportedType.string] == Data("userId".utf8))
+        } else {
+            try await Task.sleep(for: .milliseconds(50))
+            #expect(h.raw.count == count)
+        }
+        #expect(h.apps.events == 0 && h.apps.activations == 0)
+        #expect(try await h.store.loadPayload(id: id, at: SystemClock().now()).plainText == "user_id")
+    }
+
     /// F18：AC1 SQL列表只写纯文本并按选择顺序；AC2换行与原有合并逐字节一致；AC3含图片时拒绝且剪贴板不变，by AI.Coding。
     @Test func joinStylesThroughPaste() async throws {
         let h = try harness(); defer { try? FileManager.default.removeItem(at: h.root) }
