@@ -49,7 +49,10 @@ public enum HTMLText {
         }
         value = value.replacingOccurrences(of: "(?i)<br\\s*/?>|</(?:p|div|li|h[1-6])\\s*>", with: "\n", options: .regularExpression)
         value = value.replacingOccurrences(of: "(?s)<!--.*?-->|<[^>]*>", with: "", options: .regularExpression)
-        // 只匹配原输入的一层实体，顺序拼接，避免重复展开及逐实体搬移整段正文。
+        return decodeEntities(value)
+    }
+    /// 只匹配原输入的一层实体，顺序拼接，避免重复展开及逐实体搬移整段正文。
+    public static func decodeEntities(_ value: String) -> String {
         let entities = ["&lt;": "<", "&gt;": ">", "&quot;": "\"", "&apos;": "'", "&nbsp;": " ", "&amp;": "&"]
         guard let regex = try? NSRegularExpression(pattern: "&(?:lt|gt|quot|apos|nbsp|amp|#(?:[xX][0-9A-Fa-f]+|[0-9]+));") else { return value }
         let source = value as NSString

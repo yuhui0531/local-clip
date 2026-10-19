@@ -36,17 +36,21 @@ import LocalClipCore
         #expect(result.analyzedUTF16Count == source.utf16.count)
         #expect(result.spans.allSatisfy { NSMaxRange($0.range) <= source.utf16.count })
     }
-    /// 缓存与新引擎逐样本对照，含未识别结果和淘汰后重算，不串样本长度。
+    /// 缓存与新引擎逐样本对照，含未识别结果和淘汰后重算；完整与截断范围不串结果。
     @Test func languageCachePreservesDetectionAcrossSamples() async {
         let cached = SyntaxHighlighter()
         let code = "func greet(name: String) -> String {\n    return \"Hello \" + name\n}\n"
-        for sample in [1, 512, 2048, 0, -1, 512] {
-            let expected = await SyntaxHighlighter().language(of: code, sample: sample)
-            #expect(await cached.language(of: code, sample: sample) == expected)
-            #expect(await cached.language(of: code, sample: sample) == expected)
+        for truncated in [false, true, false] {
+            let expected = await SyntaxHighlighter().guess(of: code, truncated: truncated)
+            #expect(await cached.guess(of: code, truncated: truncated) == expected)
+            #expect(await cached.guess(of: code, truncated: truncated) == expected)
         }
-        for index in 0..<66 { _ = await cached.language(of: "ordinary prose \(index)") }
-        #expect(await cached.language(of: code) == SyntaxHighlighter().language(of: code))
+        #expect(await cached.guess(of: code) == LanguageGuess(language: "swift", complete: true))
+        #expect(await cached.guess(of: code, truncated: true) == LanguageGuess(language: "swift", complete: false))
+        for index in 0..<66 { _ = await cached.guess(of: "ordinary prose \(index)") }
+        #expect(await cached.guess(of: code) == SyntaxHighlighter().guess(of: code))
+        // 同一前缀不同后缀是不同内容身份。
+        #expect(await cached.guess(of: code + "\nPlease review this function carefully before we merge it today.\nIt still needs tests and a second reviewer.\n").language == nil)
     }
 
     /// 前台状态恢复仅清除排除提示，排除间切换与暂停不被误标正常。

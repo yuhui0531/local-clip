@@ -56,7 +56,8 @@ struct SmartPastePlan {
             let combined = try await withTaskCancellationHandler { try await worker.value } onCancel: { worker.cancel() }
             let raw: ClipboardPayload
             if let transform = request.transform {
-                let language = transform == .markdownCodeBlock ? await SyntaxHighlighter.shared.language(of: combined.plainText ?? "") : nil
+                // 围栏标签只用合并后全文的验证结论；多项混合或未确定时不带猜测标签。
+                let language = transform == .markdownCodeBlock ? await SyntaxHighlighter.shared.guess(of: combined.plainText ?? "").verifiedLanguage : nil
                 raw = try await Task.detached { try OutputComposer.transform(combined, transform, language: language) }.value
             } else { raw = combined }
             let smartPasteEligible = smartFiles && request.action == .directPaste && !copyFilesToFinder

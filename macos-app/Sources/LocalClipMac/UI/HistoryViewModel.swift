@@ -403,8 +403,8 @@ import LocalClipCore
         panelVisible = visible
         thumbnailCleanup?.cancel(); thumbnailCleanup = nil
         if !visible {
-            // 尚未打开的编辑请求不在隐藏面板上弹出；已经输入的草稿保留到下次打开。
-            contentEditRequest = UUID()
+            // 尚未打开的编辑请求与Space预览不在隐藏面板上弹出；已经输入的草稿保留到下次打开。
+            contentEditRequest = UUID(); if quickLookTask != nil { endQuickLook() }
             transformMenuRequest = UUID(); transformMenu?.close()
             cancelRename()
             let delay = thumbnailCleanupDelay
@@ -678,7 +678,7 @@ import LocalClipCore
                 items += page.items.filter(isVisible); self.cursor = page.next; loading = false
                 let queued = pendingPageNavigation; pendingPageNavigation = nil; paging = nil
                 let advance = (advanceSelection && selectedID == previousSelection) || (queued != nil && queued?.selection == selectedID)
-                if advance, items.count > previousCount { if queued?.extend ?? extend { choose(items[previousCount].id, modifiers: .shift) } else { select(items[previousCount].id) } }
+                if advance, items.count > previousCount { if queued?.extend ?? extend { choose(items[previousCount].id, modifiers: .shift) } else { select(items[previousCount].id, keepDetail: previewFollowsSelection) } }
                 scheduleVisibilityDeadline()
                 fillHistoryViewport()
             } catch is CancellationError { }
@@ -773,7 +773,9 @@ import LocalClipCore
                 async let highlight = previewString.isEmpty ? nil : SyntaxHighlighter.detail.highlight(previewString)
                 var inspection: ContentInspector.Inspection?
                 if let text = detail.payload.plainText, !detail.payload.hasFileReferences {
-                    let language = await SyntaxHighlighter.detail.language(of: text)
+                    // 详情“识别结果”描述整份内容，只采用完整（未截断）的结论；非法JSON候选在此给出诊断，超出判定预算时显示为文本。
+                    let guess = await SyntaxHighlighter.detail.guess(of: text)
+                    let language = guess.complete ? guess.language : nil
                     inspection = await Task.detached { ContentInspector.inspectFull(text, language: language) }.value
                 }
                 let bytes = kind == .image || kind == .mixed ? await Task.detached { RichContent.fullImage(detail.payload) }.value : nil
@@ -914,8 +916,10 @@ import LocalClipCore
                 contentEditor = editor
                 panelInteractionChanged?()
                 if detail.summary.kind == .text, !editor.monospaced {
-                    let language = await SyntaxHighlighter.shared.language(of: String(text.prefix(4_096)))
-                    if contentEditor === editor { editor.applyDetectedLanguage(language) }
+                    // 编辑器只用识别结果决定排版；用户已改动草稿时不再套用旧原文的结论。
+                    let sample = String(text.prefix(4_096))
+                    let language = await SyntaxHighlighter.shared.guess(of: sample, truncated: sample.count < text.count).language
+                    if contentEditor === editor, !editor.hasChanges { editor.applyDetectedLanguage(language) }
                 }
             } catch { if request == contentEditRequest { message = "内容读取失败，记录可能已删除或过期。" } }
         }
@@ -1436,25 +1440,51 @@ import LocalClipCore
         }
     }
     /// Space开关预览：已打开则关闭，否则打开并让方向键换选跟随，by AI.Coding。
+    /// 读取中再按Space取消待弹出的预览，by AI.Coding。
     func toggleQuickLook() {
+        if quickLookTask != nil { endQuickLook(); previewFollowsSelection = false; return }
         if showingDetail { showingDetail = false; return }
         previewFollowsSelection = true; quickLook()
     }
-    /// Space按需预览；读取前后复查展示策略、选择与请求身份，by AI.Coding。
+    /// 结束待弹出的预览请求并清掉它的等待反馈。
+    private func endQuickLook() {
+        quickLookTask?.cancel(); quickLookTask = nil
+        detailSlowTask?.cancel(); detailSlowTask = nil
+        if detailSlow { detailSlow = false }
+    }
+    /// Space按需预览；读取前后复查展示策略、选择与请求身份；等待反馈从按下起覆盖整个读取，by AI.Coding。
     public func quickLook() {
         guard canDisplayContents, let selectedID else { return }
-        quickLookTask?.cancel()
+        endQuickLook()
         let generation = contentGeneration
         quickLookTask = Task {
             do {
+                #if DEBUG
+                if detailDelayForTesting > .zero { try await Task.sleep(for: detailDelayForTesting) }
+                #endif
                 let detail = try await store.detail(id: selectedID, at: clock.now())
                 let latest = try await store.metadata(id: selectedID, at: clock.now())
                 let currentSettings = try await store.settings()
-                guard !Task.isCancelled, generation == contentGeneration, canDisplayContents,
-                      !currentSettings.hideContents, self.selectedID == selectedID, isVisible(latest.summary) else { return }
+                // 被取消或代次变化的旧请求不碰任何状态，等待与失败由取消方清理。
+                guard !Task.isCancelled, generation == contentGeneration else { return }
+                let slow = detailSlow
+                endQuickLook()
+                guard canDisplayContents, panelVisible, !currentSettings.hideContents, self.selectedID == selectedID, isVisible(latest.summary) else { return }
                 if let urls = detail.payload.fileURLs { previewFollowsSelection = false; filePreview.show(urls, excludeFromSharing: settings.excludeFromSharing) }
-                else { showingDetail = true; detailVisibilityChanged() }
-            } catch { if !Task.isCancelled && generation == contentGeneration { message = "预览不可用，记录已变化" } }
+                else {
+                    showingDetail = true; detailVisibilityChanged()
+                    // 已经显示等待时接续到详情读取，不在两段读取之间熄灭。
+                    if slow, detailLoading { detailSlow = true }
+                }
+            } catch {
+                guard !Task.isCancelled, generation == contentGeneration else { return }
+                endQuickLook(); message = "预览不可用，记录已变化"
+            }
+        }
+        detailSlowTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(100))
+            guard let self, !Task.isCancelled, generation == contentGeneration, quickLookTask != nil else { return }
+            detailSlow = true
         }
     }
     // MARK: F19 连续粘贴队列：只存在内存里，按选择顺序每按一次快捷键粘贴下一项，by AI.Coding。
@@ -1477,9 +1507,10 @@ import LocalClipCore
         return pasteQueueSummaries.indices.contains(pasteQueuePosition) ? pasteQueueSummaries[pasteQueuePosition] : "—"
     }
     var pasteQueueShortcutLabel: String { HotKeyService.label(activeQueueShortcut ?? settings.queueShortcut) }
-    private func queueFeedback(_ text: String, failed: Bool) {
+    /// note：成功时仍需留在浮窗里的说明（如中途跳过的项），不改变成功/失败语义，by AI.Coding。
+    private func queueFeedback(_ text: String, failed: Bool, note: String? = nil) {
         guard showsQueuePanel, pasteQueueActive else { showPasteFeedback?(text, failed); return }
-        pasteQueueWarning = failed ? text : nil; pasteQueueChanged?()
+        pasteQueueWarning = failed ? text : note; pasteQueueChanged?()
     }
     public var pasteQueueStatus: String? {
         pasteQueueActive ? "粘贴队列 \(pasteQueuePosition)/\(pasteQueue.count) · \(HotKeyService.label(activeQueueShortcut ?? settings.queueShortcut)) 粘贴下一项" : nil
@@ -1546,10 +1577,11 @@ import LocalClipCore
                 await recordUse([id], result)
                 guard !Task.isCancelled, generation == pasteQueueGeneration else { return }
                 let progress = "\(pasteQueuePosition)/\(ids.count)"
-                let skippedText = skipped.isEmpty ? "" : "（第 \(skipped.map(String.init).joined(separator: "、")) 项已不存在，已跳过）"
+                let skippedNote = skipped.isEmpty ? nil : "第 \(skipped.map(String.init).joined(separator: "、")) 项已不存在，已跳过"
+                let skippedText = skippedNote.map { "（\($0)）" } ?? ""
                 switch result {
-                case .commandSent: queueFeedback(result.message + " \(progress)" + skippedText, failed: false)
-                case .copied: queueFeedback((held ? "修饰键未松开，已复制 \(progress)，请手动粘贴" : "已复制 \(progress)") + skippedText, failed: held)
+                case .commandSent: queueFeedback(result.message + " \(progress)" + skippedText, failed: false, note: skippedNote)
+                case .copied: queueFeedback((held ? "修饰键未松开，已复制 \(progress)，请手动粘贴" : "已复制 \(progress)") + skippedText, failed: held, note: skippedNote)
                 default: queueFeedback(result.message + "（\(progress)）" + skippedText, failed: true)
                 }
                 shown = true; break

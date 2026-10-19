@@ -508,8 +508,12 @@ import LocalClipCore
         status?.isVisible = model.settings.showMenuIcon || !registered
         status?.button?.appearsDisabled = !model.settings.captureEnabled
         if !registered { model.message = "快捷键冲突，菜单栏入口保留" }
-        panel?.sharingType = model.settings.excludeFromSharing ? .none : .readOnly
+        // 已显示的队列浮窗与历史面板同时生效，不等下一次进度更新，by AI.Coding。
+        Self.applySharing(model.settings.excludeFromSharing, to: [panel, queuePanel])
         model.actualPanelHeight = model.settings.panelHeight; placePanel(to: panel?.screen)
+    }
+    static func applySharing(_ exclude: Bool, to windows: [NSWindow?]) {
+        for window in windows { window?.sharingType = exclude ? .none : .readOnly }
     }
     /// 隐藏历史和其详情，不激活旧目标，也不改变系统剪贴板。
     private func dismissHistory(animated: Bool = true) {

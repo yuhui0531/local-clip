@@ -88,6 +88,36 @@ import Testing
         #expect(h.raw.items[0][SupportedType.string] == Data(("```swift\n" + swift + "\n```").utf8))
     }
 
+    /// 未确定或混合内容转Markdown代码块时不带猜测标签，正文与换行逐字保留；多项合并不继承第一项语言，by AI.Coding。
+    @Test func markdownOmitsLanguageWhenUndetermined() async throws {
+        let h = try harness(); defer { try? FileManager.default.removeItem(at: h.root) }
+        let prose = "Do we need a review agent to double confirm your changes? if yes, please generate a review prompt to let other coding agent to review your changes."
+        let now = SystemClock().now()
+        let id = try await ingest(h.store, prose, at: now)
+        let before = try await h.store.loadPayload(id: id, at: SystemClock().now()).fingerprint
+        #expect(await h.paste.perform(.init(ids: [id], action: .copy, transform: .markdownCodeBlock)) == .copied)
+        #expect(h.raw.items[0][SupportedType.string] == Data(("```\n" + prose + "\n```").utf8))
+        #expect(try await h.store.loadPayload(id: id, at: SystemClock().now()).fingerprint == before)
+        let css = try await ingest(h.store, ".card { color: #fff; margin: 10px; }", at: now + 1)
+        let js = try await ingest(h.store, "function greet(name) {\r\n  return `Hi ${name}`;\r\n}", at: now + 2)
+        #expect(await h.paste.perform(.init(ids: [css, js], action: .copy, transform: .markdownCodeBlock)) == .copied)
+        let combined = String(decoding: h.raw.items[0][SupportedType.string] ?? Data(), as: UTF8.self)
+        #expect(combined.hasPrefix("```\r\n.card") || combined.hasPrefix("```\n.card"), "\(combined)")
+        #expect(combined.contains("function greet(name) {\r\n  return `Hi ${name}`;\r\n}"))
+        // 审查复现：JSON后接正文、模板字符串内SQL、非法JSON都不带标签；明确的Go带go标签。原文与CRLF逐字保留。
+        let samples = [("{\"name\": \"Alice\"}\r\nPlease review the report and send it back tomorrow.", ""), ("let query = `\nSELECT id FROM users;\n`;", ""),
+                       ("{\"name\": \"Alice\" \"tags\": [1, 2]}", ""), ("func greet(name string) {\r\n    print(name)\r\n}", "go")]
+        for (offset, (text, tag)) in samples.enumerated() {
+            let id = try await ingest(h.store, text, at: now + 3 + Instant(offset))
+            let before = try await h.store.loadPayload(id: id, at: SystemClock().now()).fingerprint
+            #expect(await h.paste.perform(.init(ids: [id], action: .copy, transform: .markdownCodeBlock)) == .copied)
+            let output = String(decoding: h.raw.items[0][SupportedType.string] ?? Data(), as: UTF8.self)
+            #expect(output.hasPrefix("```\(tag)\n") || output.hasPrefix("```\(tag)\r\n"), "\(output)")
+            #expect(output.contains(text))
+            #expect(try await h.store.loadPayload(id: id, at: SystemClock().now()).fingerprint == before)
+        }
+    }
+
     /// AC7：图片与文件记录不可转换，剪贴板保持原状，by AI.Coding。
     @Test func imagesAndFilesAreRejected() async throws {
         let h = try harness(); defer { try? FileManager.default.removeItem(at: h.root) }

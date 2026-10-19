@@ -15,24 +15,120 @@ public enum ContentInspector {
         case original(type: String, fileExtension: String)
         public var fileExtension: String { switch self { case .plain(let value): value; case .original(_, let value): value } }
     }
-    /// 代码与Markdown优先于RTF/HTML：AI对话与编辑器复制的代码通常附带HTML，开发者要的是源码文件，by AI.Coding。
+    /// `language` 必须是完整内容验证后的结论（`LanguageGuess.verifiedLanguage`）；未确定时绝不按源码导出，by AI.Coding。
+    /// Markdown语法本身出现在纯文本中即是源码证据，优先于RTF/HTML；其他语言遇到富文本时还要求代码排版覆盖整份正文。
     public static func exportFormat(plainText: String, language: String?, types: [String], markup: String?) -> ExportFormat {
         let rich = types.contains(SupportedType.rtf) || types.contains(SupportedType.html)
-        if let language, let ext = codeExtensions[language], !rich || looksLikeCodeMarkup(markup ?? "") {
+        if let language, let ext = codeExtensions[language], language == "markdown" || !rich || codeMarkupCovers(markup ?? "", plainText: plainText) {
             // highlight.js把HTML归为xml；完整网页仍按.html保存。
             if language == "xml", plainText.prefix(512).lowercased().contains("<html") || plainText.prefix(512).lowercased().contains("<!doctype html") { return .plain("html") }
             return .plain(ext)
         }
-        if looksLikeMarkdown(plainText) { return .plain("md") }
         if types.contains(SupportedType.rtf) { return .original(type: SupportedType.rtf, fileExtension: "rtf") }
         if types.contains(SupportedType.html) { return .original(type: SupportedType.html, fileExtension: "html") }
         return .plain("txt")
     }
-    /// 富文本只有带代码排版标记时才按源码导出，邮件等正文仍保留RTF格式。
-    /// ponytail: 关键词启发式，含行内<code>的对话正文可能被当源码；误判明显时改为比较代码块占正文比例。
-    public static func looksLikeCodeMarkup(_ markup: String) -> Bool {
-        let value = markup.prefix(65_536).lowercased()
-        return ["<pre", "<code", "monospace", "menlo", "monaco", "courier", "sfmono", "sf mono", "consolas", "jetbrains mono", "fira code"].contains { value.contains($0) }
+    private static let monospaceFonts = ["menlo", "monaco", "courier", "sfmono", "sf mono", "consolas", "jetbrains mono", "fira code", "fira mono",
+                                         "source code pro", "monospace", "andale mono", "ubuntu mono", "roboto mono", "cascadia", "inconsolata"]
+    /// 富文本排版验证预算（UTF-8字节）；超出时无法核验，调用方保留原表示。
+    public static let markupLimit = 65_536
+    /// 富文本的代码排版须覆盖整份正文：等宽字体或行内`<code>`只是线索，不能单独让邮件/对话正文转成源码。
+    /// RTF：字体表中的字体全部为等宽；HTML：所有可见文字都在等宽作用域内，且解码后的代码区与纯文本逐字对应（忽略空白）。
+    /// 超出 `markupLimit`、标签或注释未闭合等无法核验时返回false，调用方保留原表示。
+    public static func codeMarkupCovers(_ markup: String, plainText: String) -> Bool {
+        guard !markup.isEmpty, markup.utf8.count <= markupLimit else { return false }
+        if markup.prefix(5).lowercased() == "{\\rtf" {
+            let lower = markup.lowercased()
+            guard let table = lower.range(of: "{\\fonttbl") else { return false }
+            var depth = 1, end = lower.endIndex
+            for index in lower[table.upperBound...].indices {
+                if lower[index] == "{" { depth += 1 } else if lower[index] == "}" { depth -= 1; if depth == 0 { end = index; break } }
+            }
+            // 每个字体条目以分号结束：去掉控制字与花括号后剩下字体名。
+            let fonts = lower[table.upperBound..<end].split(separator: ";").map {
+                $0.replacingOccurrences(of: "\\\\[a-z]+-?\\d*\\s?|[{}]", with: "", options: .regularExpression).trimmingCharacters(in: .whitespacesAndNewlines)
+            }.filter { !$0.isEmpty }
+            return !fonts.isEmpty && fonts.allSatisfy(isMonospace)
+        }
+        guard let code = htmlCodeText(markup) else { return false }
+        func compact(_ text: String) -> String { String(String.UnicodeScalarView(text.unicodeScalars.filter { !CharacterSet.whitespacesAndNewlines.contains($0) })) }
+        let expected = compact(plainText)
+        return !expected.isEmpty && compact(code) == expected
+    }
+    private static func isMonospace(_ name: some StringProtocol) -> Bool { let name = name.lowercased(); return monospaceFonts.contains { name.contains($0) } }
+    private static let codeElements: Set<String> = ["pre", "code", "tt", "kbd", "samp"]
+    private static let hiddenElements: Set<String> = ["script", "style", "head", "title", "template"]
+    private static let voidElements: Set<String> = ["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"]
+    /// 单遍扫描元素作用域，返回等宽作用域内的已解码文字；作用域外出现可见文字或结构无法解析时返回nil。
+    /// 元素自身为pre/code等或声明的首个字体为等宽时进入代码作用域；子元素声明非等宽字体即退出；script/style/head与注释不是正文。
+    private static func htmlCodeText(_ html: String) -> String? {
+        let bytes = Array(html.utf8), count = bytes.count
+        func isLetter(_ byte: UInt8) -> Bool { (65...90).contains(byte) || (97...122).contains(byte) }
+        func starts(_ token: String, at index: Int) -> Bool {
+            let token = Array(token.utf8)
+            return index + token.count <= count && zip(bytes[index..<(index + token.count)], token).allSatisfy { $0 | 0x20 == $1 | 0x20 }
+        }
+        var stack: [(name: String, code: Bool)] = [], hidden: String?
+        var code: [UInt8] = [], outside: [UInt8] = []
+        var index = 0
+        while index < count {
+            let next = index + 1 < count ? bytes[index + 1] : 0
+            guard bytes[index] == UInt8(ascii: "<"), isLetter(next) || next == UInt8(ascii: "/") || next == UInt8(ascii: "!") || next == UInt8(ascii: "?") else {
+                // 正文：`<` 后不是标签起始字符时按文字处理。
+                let start = index
+                index += 1
+                while index < count, bytes[index] != UInt8(ascii: "<") { index += 1 }
+                if hidden == nil {
+                    if stack.last?.code == true { code.append(contentsOf: bytes[start..<index]) } else { outside.append(contentsOf: bytes[start..<index]) }
+                }
+                continue
+            }
+            if starts("<!--", at: index) {
+                guard let close = (index + 4..<max(index + 4, count - 2)).first(where: { bytes[$0] == UInt8(ascii: "-") && bytes[$0 + 1] == UInt8(ascii: "-") && bytes[$0 + 2] == UInt8(ascii: ">") }) else { return nil }
+                index = close + 3; continue
+            }
+            // 标签结束于引号外的 `>`；属性值中的 `>` 不截断标签。
+            var end = index + 1, quote: UInt8?
+            while end < count {
+                let byte = bytes[end]
+                if let open = quote { if byte == open { quote = nil } }
+                else if byte == UInt8(ascii: "\"") || byte == UInt8(ascii: "'") { quote = byte }
+                else if byte == UInt8(ascii: ">") { break }
+                end += 1
+            }
+            guard end < count else { return nil }
+            let tag = String(decoding: bytes[(index + 1)..<end], as: UTF8.self)
+            index = end + 1
+            let closing = tag.hasPrefix("/")
+            let name = (closing ? tag.dropFirst() : tag[...]).prefix { $0.isLetter || $0.isNumber }.lowercased()
+            guard !name.isEmpty else { continue }   // <!doctype>、<?xml?>
+            if let open = hidden { if closing, name == open { hidden = nil }; continue }
+            if closing {
+                if let position = stack.lastIndex(where: { $0.name == name }) { stack.removeSubrange(position...) }
+                continue
+            }
+            if hiddenElements.contains(name) { if !tag.hasSuffix("/") { hidden = name }; continue }
+            guard !voidElements.contains(name), !tag.hasSuffix("/") else { continue }
+            var isCode = (stack.last?.code ?? false) || codeElements.contains(name)
+            if let family = firstFontFamily(tag.lowercased(), element: name) { isCode = isMonospace(family) }
+            stack.append((name, isCode))
+        }
+        guard hidden == nil else { return nil }
+        let visible = HTMLText.decodeEntities(String(decoding: outside, as: UTF8.self))
+        guard visible.unicodeScalars.allSatisfy({ CharacterSet.whitespacesAndNewlines.contains($0) }) else { return nil }
+        return HTMLText.decodeEntities(String(decoding: code, as: UTF8.self))
+    }
+    /// 元素声明的首个字体：style中的font-family，或<font face>。
+    private static func firstFontFamily(_ tag: String, element: String) -> String? {
+        let value: Substring
+        if let range = tag.range(of: "font-family") {
+            value = tag[range.upperBound...].drop { $0 == " " || $0 == ":" }
+        } else if element == "font", let range = tag.range(of: "face=") {
+            value = tag[range.upperBound...]
+        } else { return nil }
+        let first = value.replacingOccurrences(of: "&quot;", with: "").drop { " '\"".contains($0) }.prefix { $0 != "," && $0 != ";" && $0 != ">" && $0 != "\"" }
+        let name = first.trimmingCharacters(in: CharacterSet(charactersIn: " '\"\t"))
+        return name.isEmpty ? nil : name
     }
     /// 标题、代码围栏、列表、链接四种特征至少命中两种才算Markdown，单个"#"或"-"不足以判定，by AI.Coding。
     public static func looksLikeMarkdown(_ text: String) -> Bool {
@@ -42,8 +138,31 @@ public enum ContentInspector {
         if lines.contains(where: { matches($0, "^#{1,6} \\S") }) { signals += 1 }
         if lines.contains(where: { $0.hasPrefix("```") || $0.hasPrefix("~~~") }) { signals += 1 }
         if lines.filter({ matches($0, "^\\s*([-*+]|\\d+\\.) \\S") }).count >= 2 { signals += 1 }
-        if lines.contains(where: { matches($0, "\\[[^\\]]+\\]\\([^)\\s]+\\)") }) { signals += 1 }
+        if lines.contains(where: hasMarkdownLink) { signals += 1 }
         return signals >= 2
+    }
+    /// 等价于 `\[[^\]]+\]\([^)\s]+\)` 的单遍扫描：失败的地址段不回扫，大量未闭合 `[` 保持线性。
+    static func hasMarkdownLink(_ line: String) -> Bool {
+        let bytes = Array(line.utf8)
+        var open: Int?, index = 0
+        while index < bytes.count {
+            switch bytes[index] {
+            case UInt8(ascii: "["): if open == nil { open = index }
+            case UInt8(ascii: "]"):
+                guard let start = open, index > start + 1, index + 1 < bytes.count, bytes[index + 1] == UInt8(ascii: "(") else { open = nil; break }
+                // 地址段到 `)` 或空白为止；其中最后一个 `]` 之后的 `[` 仍可开始新链接。
+                var end = index + 2, next: Int?
+                while end < bytes.count, bytes[end] != UInt8(ascii: ")"), !(bytes[end] == 32 || (9...13).contains(bytes[end])) {
+                    if bytes[end] == UInt8(ascii: "[") { if next == nil { next = end } } else if bytes[end] == UInt8(ascii: "]") { next = nil }
+                    end += 1
+                }
+                if end < bytes.count, bytes[end] == UInt8(ascii: ")"), end > index + 2 { return true }
+                open = next; index = end; continue
+            default: break
+            }
+            index += 1
+        }
+        return false
     }
     /// 有自定义名称用名称，否则用最近复制时间；不再使用UUID，便于用户辨认，by AI.Coding。
     public static func exportBaseName(title: String?, copiedAt: Instant) -> String {
@@ -80,25 +199,12 @@ public enum ContentInspector {
         return nil
     }
 
-    // MARK: F17 开发者内容识别：卡片只看≤180字符预览，详情看完整正文；只读，不改记录，by AI.Coding。
+    // MARK: F17 开发者内容识别：卡片只看≤180字符预览，详情看完整正文；语言判定见 LanguageDetector；只读，不改记录，by AI.Coding。
     /// highlight.js语言名的展示名，卡片标题用它替换"文本"。
     public static let languageNames: [String: String] = [
         "json": "JSON", "java": "Java", "python": "Python", "javascript": "JavaScript", "typescript": "TypeScript", "yaml": "YAML",
         "xml": "XML", "css": "CSS", "bash": "Shell", "swift": "Swift", "sql": "SQL", "cpp": "C++", "csharp": "C#",
         "go": "Go", "ruby": "Ruby", "php": "PHP", "rust": "Rust", "ini": "INI", "markdown": "Markdown"]
-    /// CJK标点、假名、汉字、韩文与全角字符。
-    private static let cjkRanges: [ClosedRange<UInt32>] = [0x3000...0x30FF, 0x3400...0x9FFF, 0xAC00...0xD7AF, 0xFF00...0xFFEF]
-    private static let pathToken = try! NSRegularExpression(pattern: "(?<![A-Za-z0-9_)\\]])(?:~|\\.{1,2})?(?:/[\\w.@+-]+){2,}/?")
-    /// 语言猜测用的样本：抹掉文件路径（highlight.js会把"/a/b/"当成Ruby/Swift正则字面量），
-    /// 只剩路径或中日韩文字占比≥40%的正文返回nil，不做语言识别，by AI.Coding。
-    /// ponytail: 字符占比启发式，中文注释极多的代码片段会被当正文；误判明显时改为按行判断。
-    public static func languageSample(_ text: String) -> String? {
-        let masked = pathToken.stringByReplacingMatches(in: text, range: NSRange(text.startIndex..., in: text), withTemplate: " ")
-        let visible = masked.unicodeScalars.filter { !CharacterSet.whitespacesAndNewlines.contains($0) }
-        guard !visible.isEmpty else { return nil }
-        let cjk = visible.filter { scalar in cjkRanges.contains { $0.contains(scalar.value) } }
-        return Double(cjk.count) / Double(visible.count) >= 0.4 ? nil : masked
-    }
     public struct RGBA: Equatable, Sendable {
         public let red: Int, green: Int, blue: Int
         public let alpha: Double

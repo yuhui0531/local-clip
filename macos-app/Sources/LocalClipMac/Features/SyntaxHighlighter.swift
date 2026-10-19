@@ -21,8 +21,7 @@ public actor SyntaxHighlighter {
     // 详情独立引擎，长文不会阻塞卡片高亮。
     public static let detail = SyntaxHighlighter()
     public static let characterLimit = 8192
-    private enum LanguageResult { case detected(String), none }
-    private var languageCache: [String: LanguageResult] = [:]
+    private var languageCache: [String: LanguageGuess] = [:]
     private var languageOrder: [String] = []
     private var context: JSContext?
     private var attemptedLoad = false
@@ -30,13 +29,16 @@ public actor SyntaxHighlighter {
     private var misses: Set<String> = []
     private var order: [String] = []
     /// 独立于任何设置；仅分析有界前缀，详情仍保留完整文字。缓存只保存摘要键与范围，by AI.Coding。
+    /// 显式提示只授权着色；无提示时由共用判定决定语言，前缀截断时结论只用于展示。
     public func highlight(_ text: String, languageHint: String? = nil) -> SyntaxHighlight? {
-        guard let (prefix, sample) = Self.bounded(text, languageHint: languageHint) else { return nil }
-        let key = (languageHint ?? "auto") + ":" + ContentFingerprint.hash(Data(prefix.utf8))
+        guard let prefix = Self.bounded(text) else { return nil }
+        let truncated = prefix.utf16.count < text.utf16.count
+        let key = (languageHint ?? "auto:\(truncated)") + ":" + ContentFingerprint.hash(Data(prefix.utf8))
         if let result = cache[key] { return result }
         if misses.contains(key) { return nil }
-        guard let context = engine(), let function = context.objectForKeyedSubscript("localClipHighlight"),
-              let result = function.call(withArguments: [prefix, languageHint ?? "", sample]), !result.isUndefined,
+        guard let language = languageHint ?? LanguageDetector.detect(prefix, truncated: truncated).language,
+              let context = engine(), let function = context.objectForKeyedSubscript("localClipHighlight"),
+              let result = function.call(withArguments: [prefix, language]), !result.isUndefined,
               let object = result.toDictionary(), let language = object["language"] as? String,
               let html = object["value"] as? String else { remember(key, result: nil); return nil }
         let parser = SpanParser(); let xml = XMLParser(data: Data(("<root>" + Self.xmlCompatible(html).replacingOccurrences(of: "\r", with: "&#13;") + "</root>").utf8))
@@ -52,35 +54,25 @@ public actor SyntaxHighlighter {
             return (code >= 0x20 && code != 0xFFFE && code != 0xFFFF) || [9, 10, 13].contains(code) ? scalar : " "
         }))
     }
-    /// 只识别语言、不生成着色范围，阈值与卡片相同；导出文件在拖动开始时据此决定扩展名。
-    /// 识别耗时随样本长度增长（2048字符约50ms），调用方可取较短样本，by AI.Coding。
-    public func language(of text: String, sample: Int = 2048) -> String? {
-        guard let (_, detection) = Self.bounded(text, languageHint: nil) else { return nil }
-        // 样本长度也参与身份；缓存未识别结果，不保存原始正文。
-        let key = "\(sample):" + ContentFingerprint.hash(Data(detection.utf8))
-        if let cached = languageCache[key] {
-            if case .detected(let value) = cached { return value }
-            return nil
-        }
-        let result = engine()?.objectForKeyedSubscript("localClipLanguage")?.call(withArguments: [detection, sample])
-        let language = result?.isString == true ? result?.toString() : nil
-        languageCache[key] = language.map(LanguageResult.detected) ?? LanguageResult.none
+    /// 完整内容的语言判定（不着色）：导出、Markdown围栏与详情只能使用结果的 `verifiedLanguage`。
+    /// 键含完整正文摘要、长度与范围；缓存未识别结果，不保存原始正文，by AI.Coding。
+    public func guess(of text: String, truncated: Bool = false) -> LanguageGuess {
+        let key = "\(truncated):\(text.utf16.count):" + ContentFingerprint.hash(Data(text.utf8))
+        if let cached = languageCache[key] { return cached }
+        let result = LanguageDetector.detect(text, truncated: truncated)
+        languageCache[key] = result
         languageOrder.append(key)
         if languageOrder.count > 64 { languageCache.removeValue(forKey: languageOrder.removeFirst()) }
-        return language
+        return result
     }
-    /// 有界前缀不截断代理对；单行URL、纯路径与中文正文不参加语言猜测，防止被识别为Ruby/Swift代码。
-    /// 返回着色用前缀与语言猜测样本（已抹掉路径）；有语言提示时样本不用。
-    private static func bounded(_ text: String, languageHint: String?) -> (String, String)? {
+    /// 有界前缀不截断代理对；URL、路径与正文的保护由共用判定负责。
+    private static func bounded(_ text: String) -> String? {
         var units = Array(text.utf16.prefix(characterLimit))
         if let last = units.last, (0xD800...0xDBFF).contains(last) { units.removeLast() }
         let prefix = String(decoding: units, as: UTF16.self)
-        guard !prefix.isEmpty, !(languageHint == nil && !prefix.contains("\n") &&
-            ["http", "https", "mailto"].contains(URL(string: prefix.trimmingCharacters(in: .whitespacesAndNewlines))?.scheme?.lowercased() ?? "")) else { return nil }
-        if languageHint != nil { return (prefix, prefix) }
-        return ContentInspector.languageSample(prefix).map { (prefix, $0) }
+        return prefix.isEmpty ? nil : prefix
     }
-    /// 引擎仅载入一次，使用官方自动识别/高亮接口和固定语言集合，by AI.Coding。
+    /// 引擎仅载入一次，只使用官方指定语言高亮接口，by AI.Coding。
     private func engine() -> JSContext? {
         if attemptedLoad { return context }
         attemptedLoad = true
@@ -95,17 +87,9 @@ public actor SyntaxHighlighter {
         js.evaluateScript(source)
         guard js.exception == nil else { return nil }
         js.evaluateScript("""
-        const localClipLanguages = ['json','java','python','javascript','typescript','yaml','xml','css','bash','swift','sql','cpp','csharp','go','ruby','php','rust','ini','markdown'].filter(x => hljs.getLanguage(x));
-        // 有界前缀只负责识别，完整有界正文用已确定语言高亮。
-        // 相关度<3视为正文：偶然命中通常只有1-2分，真实代码片段通常≥3；代价是print('x')这类极短代码不再识别。
-        function localClipLanguage(text, sample) {
-          const detected = hljs.highlightAuto(text.slice(0, sample || 2048), localClipLanguages);
-          return detected.relevance < 3 || !detected.language ? undefined : detected.language;
-        }
-        function localClipHighlight(text, hint, detection) {
-          if (hint && hljs.getLanguage(hint)) return hljs.highlight(text, {language: hint, ignoreIllegals: true});
-          const language = localClipLanguage(detection);
-          return language ? hljs.highlight(text, {language: language, ignoreIllegals: true}) : undefined;
+        // 语言由Swift侧判定或显式提示给出；highlight.js只负责着色，不再自动猜测。
+        function localClipHighlight(text, language) {
+          return hljs.getLanguage(language) ? hljs.highlight(text, {language: language, ignoreIllegals: true}) : undefined;
         }
         """)
         guard js.exception == nil else { return nil }

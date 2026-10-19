@@ -84,6 +84,54 @@ import Testing
         try await until(h) { !h.model.pasteQueueActive }
     }
 
+    /// 队列浮窗：中途跳过的说明留在浮窗；普通成功只更新进度；全部失效与最后一步的失败、回退仍有提示，by AI.Coding。
+    @Test func queuePanelKeepsSkipNotes() async throws {
+        let h = try await harness(); defer { h.model.stopPasteQueue(); try? FileManager.default.removeItem(at: h.root) }
+        h.model.showsQueuePanel = true
+        // 中途跳过：A失效、B成功、C待粘贴。
+        h.model.startPasteQueue(h.ids)
+        _ = try await h.store.apply(h.store.preview(.delete([h.ids[0]])).token)
+        h.model.pasteQueueNext(target: h.apps.remembered) { false }
+        try await until(h) { h.apps.events == 1 && h.model.pasteQueueWarning != nil }
+        #expect(clipboard(h.raw) == "second" && h.model.pasteQueuePosition == 2 && h.model.pasteQueueActive)
+        #expect(h.model.pasteQueueWarning == "第 1 项已不存在，已跳过" && h.recorder.feedback.isEmpty)
+        // 普通成功只更新进度；最后一步结束后由提示收尾。
+        h.model.pasteQueueNext(target: h.apps.remembered) { false }
+        try await until(h) { !h.recorder.feedback.isEmpty }
+        #expect(h.recorder.feedback.map(\.0) == ["已发送粘贴指令 3/3"] && !h.model.pasteQueueActive)
+    }
+    @Test func queuePanelReportsExhaustionAndLastStep() async throws {
+        let h = try await harness(); defer { h.model.stopPasteQueue(); try? FileManager.default.removeItem(at: h.root) }
+        h.model.showsQueuePanel = true
+        h.model.startPasteQueue(h.ids)
+        // 位置在记录使用前就已前进；以浮窗刷新作为本步完成的信号。
+        var changes = 0; h.model.pasteQueueChanged = { changes += 1 }
+        h.model.pasteQueueNext(target: h.apps.remembered) { false }
+        try await until(h) { changes > 0 }
+        #expect(h.model.pasteQueueWarning == nil && h.recorder.feedback.isEmpty)
+        // 剩余全部失效：队列结束并提示跳过的项。
+        _ = try await h.store.apply(h.store.preview(.delete([h.ids[1], h.ids[2]])).token)
+        h.model.pasteQueueNext(target: h.apps.remembered) { false }
+        try await until(h) { !h.recorder.feedback.isEmpty }
+        #expect(!h.model.pasteQueueActive && h.recorder.feedback.last?.0 == "第 2、3 项已不存在，已跳过" && h.recorder.feedback.last?.1 == true)
+        // 最后一步失败：不前进，浮窗写出原因；随后回退复制结束队列并提示。
+        let more = try await harness(); defer { more.model.stopPasteQueue(); try? FileManager.default.removeItem(at: more.root) }
+        more.model.showsQueuePanel = true
+        more.model.startPasteQueue(Array(more.ids.prefix(2)))
+        var steps = 0; more.model.pasteQueueChanged = { steps += 1 }
+        more.model.pasteQueueNext(target: more.apps.remembered) { false }
+        try await until(more) { steps > 0 }
+        #expect(more.model.pasteQueuePosition == 1)
+        more.raw.writeOK = false
+        more.model.pasteQueueNext(target: more.apps.remembered) { false }
+        try await until(more) { more.model.pasteQueueWarning?.contains("（1/2）") == true }
+        #expect(more.model.pasteQueuePosition == 1 && more.recorder.feedback.isEmpty)
+        more.raw.writeOK = true
+        more.model.pasteQueueNext(target: more.apps.remembered) { true }
+        try await until(more) { !more.recorder.feedback.isEmpty }
+        #expect(!more.model.pasteQueueActive && more.recorder.feedback.last?.0 == "修饰键未松开，已复制 2/2，请手动粘贴" && more.recorder.feedback.last?.1 == true)
+    }
+
     /// 快捷键冲突时不启动；少于两项不启动；手动结束注销快捷键，by AI.Coding。
     @Test func registrationAndManualStop() async throws {
         let failing = try await harness(registerOK: false); defer { try? FileManager.default.removeItem(at: failing.root) }

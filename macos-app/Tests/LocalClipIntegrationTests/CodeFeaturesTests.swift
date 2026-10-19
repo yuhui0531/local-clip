@@ -53,10 +53,56 @@ struct CodeFeaturesTests {
             #expect(result != nil, "\(language)")
             #expect(result?.spans.isEmpty == false, "\(language)")
             #expect(result?.analyzedUTF16Count == text.utf16.count)
-            #expect(await SyntaxHighlighter.shared.highlight(text) != nil, "auto \(language)")
+            // 自动高亮的语言必须正确，不能仅断言非空（Java曾被判为TypeScript）。
+            #expect(await SyntaxHighlighter.shared.highlight(text)?.language == language, "auto \(language)")
         }
-        #expect(await SyntaxHighlighter.shared.highlight("<!DOCTYPE html><html><body><h1 class=\"title\">Hello</h1></body></html>") != nil)
+        #expect(await SyntaxHighlighter.shared.highlight("<!DOCTYPE html><html><body><h1 class=\"title\">Hello</h1></body></html>")?.language == "xml")
         #expect(await SyntaxHighlighter.shared.highlight("Please call me tomorrow morning.") == nil)
+    }
+    /// 卡片与详情经实际Swift入口：已复现的普通英文不着色、不给语言；显式提示仍能为短代码着色，但不改变完整判定。
+    @Test func reproducedProseIsNotHighlightedAndHintsStillRender() async {
+        for text in LanguageDetectorTestSamples.reproducedProse {
+            #expect(await SyntaxHighlighter.shared.highlight(text) == nil, "\(text)")
+            #expect(await SyntaxHighlighter.detail.highlight(text) == nil, "\(text)")
+            #expect(await SyntaxHighlighter.shared.guess(of: text).verifiedLanguage == nil, "\(text)")
+        }
+        let short = "const value = 1;"
+        #expect(await SyntaxHighlighter.shared.highlight(short) == nil)
+        #expect(await SyntaxHighlighter.shared.highlight(short, languageHint: "javascript")?.language == "javascript")
+        #expect(await SyntaxHighlighter.shared.highlight(short, languageHint: "javascript")?.spans.isEmpty == false)
+        #expect(await SyntaxHighlighter.shared.guess(of: short).verifiedLanguage == nil)
+        // 高亮前缀被截断：着色可用，结论仍按截断样本处理。
+        let long = "def f(x):\n    return x\n" + String(repeating: "# note\n", count: 3_000)
+        #expect(await SyntaxHighlighter.shared.highlight(long)?.language == "python")
+        #expect(await SyntaxHighlighter.shared.highlight(long)?.analyzedUTF16Count == SyntaxHighlighter.characterLimit)
+    }
+    /// 审查复现经实际高亮入口：误判样本不着色、不给语言；正例语言准确；非法JSON只供展示；结论被缓存且不随调用变化。
+    @Test func reviewSamplesThroughSyntaxHighlighter() async {
+        for text in LanguageDetectorTestSamples.reviewNegatives {
+            #expect(await SyntaxHighlighter.shared.highlight(text) == nil, "\(text)")
+            #expect(await SyntaxHighlighter.detail.guess(of: text).verifiedLanguage == nil, "\(text)")
+        }
+        for (expected, text) in LanguageDetectorTestSamples.reviewPositives {
+            #expect(await SyntaxHighlighter.shared.highlight(text)?.language == expected, "\(expected)")
+            #expect(await SyntaxHighlighter.shared.guess(of: text).verifiedLanguage == expected, "\(expected)")
+            #expect(await SyntaxHighlighter.shared.guess(of: text) == SyntaxHighlighter.shared.guess(of: text))
+        }
+        let invalid = "{\"name\": \"Alice\" \"tags\": [1, 2]}"
+        #expect(await SyntaxHighlighter.shared.highlight(invalid)?.language == "json")
+        let guess = await SyntaxHighlighter.shared.guess(of: invalid)
+        #expect(guess.language == "json" && guess.complete && guess.verifiedLanguage == nil)
+    }
+    /// 审查R5：未闭合 `[` 经共享actor判定，2K→16K耗时有界（此前16K约6.9秒）。
+    @Test func unclosedBracketsDoNotBlockTheHighlighter() async {
+        var timings: [(Int, Duration)] = []
+        for count in [2_000, 4_000, 8_000, 16_000] {
+            let highlighter = SyntaxHighlighter()
+            let start = ContinuousClock.now
+            #expect(await highlighter.guess(of: String(repeating: "[", count: count)).language == nil)
+            #expect(await highlighter.highlight(String(repeating: "[", count: count)) == nil)
+            timings.append((count, ContinuousClock.now - start))
+        }
+        #expect(timings.allSatisfy { $0.1 < .milliseconds(250) }, "\(timings)")
     }
     /// 编辑器允许列表在异步读文件期间撤销后，原智能转换计划必须失效，by AI.Coding。
     @Test func smartPasteEditorOptInRevocationInvalidatesInFlightPlan() throws {
@@ -393,5 +439,72 @@ struct CodePerformanceTests {
             delegate.filePromiseProvider(provider, writePromiseTo: destination) { @Sendable in continuation.resume(returning: $0) }
         }
         #expect(error == nil && (try? Data(contentsOf: destination)) == Data(text.utf8))
+    }
+}
+
+/// 与核心语料共用的已复现样本，集成测试经实际Swift调用链复验，by AI.Coding。
+enum LanguageDetectorTestSamples {
+    static let reproducedProse = [
+        "Do we need a review agent to double confirm your changes? if yes, please generate a review prompt to let other coding agent to review your changes.",
+        "Please help me find the source and test the export function.",
+        "if you can then do this for me and return when done",
+        "Please return true if the type is new and the function is public.",
+        "Please begin the transaction and commit the changes, then return the result.",
+        "Please select a name from the list where the status is active and order by date.",
+        "We need a plan to go from here to there and to finish the review.",
+        "Name: Alice\nStatus: Ready\nOwner: Bob"]
+    static let reviewNegatives = [
+        "{\"name\": \"Alice\"}\nPlease review the report and send it back tomorrow.", "{\"enabled\": True, \"value\": None}",
+        "<?php is the opening tag used by PHP. This paragraph explains the syntax.", "let query = `\nSELECT id FROM users;\n`;",
+        "let message = `\nSystem.out.println(\"hi\");\n`;", "2026-10-19 INFO SELECT id FROM users;",
+        "PLEASE DELETE FROM THE ACCOUNT WHEN THE CUSTOMER REQUESTS IT.", "func greet() {\n    print(\"hi\")\n}",
+        "fun main() {\n    System.out.println(\"Hello\")\n}"]
+    static let reviewPositives: [(String, String)] = [
+        ("json", "{\"name\": \"Alice\"}"), ("python", "def choose(x, y):\n    return x if x is not None else y\n"),
+        ("yaml", "metadata:\n  description: |\n    This is a long description of the service.\n    It should stay inside the configured value.\n  name: demo\n"),
+        ("yaml", "name: Build and test\non: push\njobs:\n  build:\n    runs-on: ubuntu-latest\n"),
+        ("go", "func greet(name string) {\n    print(name)\n}"),
+        ("csharp", "using System;\nclass Example {\n    public int calculate(int value) { return value; }\n    String name = \"test\";\n}"),
+        ("cpp", "# include <stdio.h>\nint main() { return 0; }"), ("xml", "<!--\n<?php\n-->\n<div>Hello</div>")]
+}
+
+/// 识别与导出准备耗时：短文本、典型代码、长内容与1 MiB JSON的冷/热缓存中位数；可选执行，by AI.Coding。
+struct LanguageDetectionPerformanceTests {
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["LOCALCLIP_DETECT_PERF"] == "1"))
+    func detectionTiming() async throws {
+        func ms(_ start: ContinuousClock.Instant) -> Double { let d = ContinuousClock.now - start; return Double(d.components.seconds) * 1000 + Double(d.components.attoseconds) / 1e15 }
+        func median(_ values: [Double]) -> Double { values.sorted()[values.count / 2] }
+        let code = "def f(x):\n    # fixture\n    return x + 42\n" + String(repeating: "    total = compute(values, index) * 2\n", count: 18)
+        let unit = "function sum(values) {\n  let total = 0;\n  for (const value of values) { total += value * 2; }\n  return total;\n}\n"
+        let line = "  {\"id\": 123456, \"name\": \"LocalClip export benchmark\", \"tags\": [\"a\", \"b\"]},\n"
+        var samples: [(String, String)] = [("prose147", "Do we need a review agent to double confirm your changes? if yes, please generate a review prompt to let other coding agent to review your changes."),
+                       ("code700", code), ("long30k", String(repeating: unit, count: 30_000 / unit.utf16.count)), ("long60k", String(repeating: unit, count: 60_000 / unit.utf16.count)),
+                       ("json1MiB", "[\n" + String(repeating: line, count: (1 << 20) / line.utf8.count) + "  {}\n]\n")]
+        // 审查R5最坏输入：未闭合 `[` 与重复 `[a](`；以及跨行注释/模板状态。
+        let worst: [(String, String)] = [2_000, 4_000, 8_000, 16_000].flatMap { (count: Int) -> [(String, String)] in
+            [("brackets\(count)", String(repeating: "[", count: count)), ("links\(count)", String(repeating: "[a](", count: count / 4))]
+        }
+        samples += worst
+        samples += [("htmlComment16k", "<!--" + String(repeating: "<?php ", count: 2_600)), ("template16k", "let q = `\n" + String(repeating: "SELECT id FROM t;\n", count: 900))]
+        var report: [String: Double] = [:]
+        for (name, text) in samples {
+            var exportCold: [Double] = [], exportWarm: [Double] = [], detail: [Double] = [], card: [Double] = []
+            for _ in 0..<9 {
+                let engine = SyntaxHighlighter()
+                var start = ContinuousClock.now; _ = await engine.guess(of: text); exportCold.append(ms(start))
+                start = ContinuousClock.now; _ = await engine.guess(of: text); exportWarm.append(ms(start))
+                let fresh = SyntaxHighlighter()
+                start = ContinuousClock.now; _ = await fresh.guess(of: text); detail.append(ms(start))
+                // 先载入引擎，卡片耗时只比较识别与着色，不含一次性引擎加载。
+                _ = await fresh.highlight("let warm = 1", languageHint: "swift")
+                let preview = String(text.prefix(180))
+                start = ContinuousClock.now; _ = await fresh.highlight(preview); card.append(ms(start))
+            }
+            report[name + ".exportCold"] = median(exportCold); report[name + ".exportWarm"] = median(exportWarm)
+            report[name + ".detailCold"] = median(detail); report[name + ".card180"] = median(card)
+        }
+        if let path = ProcessInfo.processInfo.environment["LOCALCLIP_DETECT_PERF_OUTPUT"] {
+            try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]).write(to: URL(fileURLWithPath: path))
+        }
     }
 }

@@ -94,8 +94,8 @@ import Synchronization
         if types.contains(SupportedType.url) { return nil }
         let (text, markup) = try await Task.detached { (try ContentExportProvider.plainText(access: access, index: index, types: types), try ContentExportProvider.markupSource(access: access, index: index, types: types)) }.value
         guard let text else { return nil }
-        // 拖动开始即需声明文件类型；语言识别只取前512字符（比卡片的180字符预览多），把拖动开始的等待控制在十几毫秒。
-        let language = await SyntaxHighlighter.shared.language(of: text, sample: 512)
+        // 拖动开始即需声明文件类型：只有完整正文验证通过的语言才决定扩展名；超出判定预算返回未确定，按文本或原表示导出。
+        let language = await SyntaxHighlighter.shared.guess(of: text).verifiedLanguage
         let format = ContentInspector.exportFormat(plainText: text, language: language, types: types, markup: markup)
         let fileType: String = switch format {
         case .original(let type, _): type
@@ -111,10 +111,12 @@ import Synchronization
         }
         return nil
     }
-    /// HTML或RTF前64KiB源码只用于判断代码排版标记（等宽字体、pre/code）。
+    /// HTML或RTF完整源码（不超过验证预算）只用于判断代码排版标记（等宽字体、pre/code）。
     nonisolated static func markupSource(access: ClipExportAccess, index: Int, types: [String]) throws -> String? {
         guard let type = [SupportedType.html, SupportedType.rtf].first(where: types.contains) else { return nil }
-        return String(decoding: try access.itemData(index: index, type: type).prefix(65_536), as: UTF8.self)
+        // 超出验证预算时不截取前缀：尾部可能有非等宽正文，返回nil让导出保留原表示。
+        let data = try access.itemData(index: index, type: type)
+        return data.count <= ContentInspector.markupLimit ? String(decoding: data, as: UTF8.self) : nil
     }
     /// 方案对应的写出字节：原样表示或UTF-8纯文本（无BOM、保留原换行）。
     nonisolated static func data(_ plan: Plan, access: ClipExportAccess, index: Int, types: [String]) throws -> Data {

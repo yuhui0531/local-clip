@@ -458,12 +458,145 @@ import LocalClipCore
         #expect(!AppDelegate.showsQuickBadges(.command, quickModifiers: commandOption))
         #expect(!AppDelegate.showsQuickBadges([], quickModifiers: 0))
     }
-    /// 卡片VoiceOver命名动作：原底栏5个入口，隐藏内容与无文本时按原底栏规则收起，by AI.Coding。
-    @Test func cardVoiceOverActionsMatchFooter() {
-        #expect(ClipCard.voiceOverActions(kind: .text, hidden: false, favorite: false) == ["详情", "收藏", "原格式复制", "纯文本复制", "直接粘贴"])
-        #expect(ClipCard.voiceOverActions(kind: .url, hidden: false, favorite: true) == ["详情", "取消收藏", "原格式复制", "纯文本复制", "直接粘贴"])
-        #expect(ClipCard.voiceOverActions(kind: .image, hidden: false, favorite: false) == ["详情", "收藏", "原格式复制", "直接粘贴"])
-        #expect(ClipCard.voiceOverActions(kind: .text, hidden: true, favorite: false) == ["原格式复制"])
+    /// 卡片VoiceOver命名动作：原底栏5个入口；纯文本复制按动作作用的整组在真实存储中的文本表示判定，与“更多”菜单一致，by AI.Coding。
+    @Test func cardVoiceOverPlainCopyFollowsSelection() async throws {
+        let (root, store, model) = try await setup()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let png = try ImageFixtures.image(width: 4, height: 4), now = SystemClock().now() + 100
+        guard case .inserted(let image) = try await store.ingest(.init(payload: .init([.init([.init(SupportedType.png, png)])])), at: now),
+              case .inserted(let mixed) = try await store.ingest(.init(payload: .init([.init([.init(SupportedType.string, Data("mixed".utf8))]), .init([.init(SupportedType.png, png)])])), at: now + 1)
+        else { Issue.record("fixture"); return }
+        model.refresh(); try await wait { model.contains(image) && model.contains(mixed) && !model.historyBusy }
+        #expect(model.items.first { $0.id == mixed }?.kind == .mixed)
+        let texts = model.items.filter { $0.kind == .text }.map(\.id)
+        func actions(_ id: ClipID, hidden: Bool = false) async -> [String] {
+            let allowed = await model.canCopyAsText(ClipCard.voiceOverTargets(id, selection: model.selectedIDs))
+            return ClipCard.voiceOverActions(plainText: allowed, hidden: hidden, favorite: false)
+        }
+        model.select(texts[0])
+        #expect(await actions(texts[0]) == ["详情", "收藏", "原格式复制", "纯文本复制", "直接粘贴"])
+        #expect(await actions(image) == ["详情", "收藏", "原格式复制", "直接粘贴"])
+        #expect(await !actions(mixed).contains("纯文本复制"))
+        // 多选含无文本项：组内任一卡片都不提供；组外文本卡片只作用自身，仍提供。
+        model.choose(image, modifiers: .command)
+        #expect(model.selectedIDs == [texts[0], image])
+        #expect(await !actions(texts[0]).contains("纯文本复制"))
+        #expect(await actions(texts[1]).contains("纯文本复制"))
+        model.select(texts[0]); model.choose(texts[1], modifiers: .command)
+        #expect(await actions(texts[0]).contains("纯文本复制"))
+        #expect(await actions(texts[0], hidden: true) == ["原格式复制"])
+        #expect(ClipCard.voiceOverActions(plainText: true, hidden: false, favorite: true)[1] == "取消收藏")
+    }
+    /// 队列浮窗已存在时切换共享排除，窗口属性立即随设置更新，by AI.Coding。
+    @Test func queuePanelSharingFollowsSetting() {
+        let frame = NSRect(x: 0, y: 0, width: 40, height: 40)
+        let panel = NSPanel(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: true)
+        let queue = NSPanel(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
+        AppDelegate.applySharing(false, to: [panel, queue, nil])
+        #expect(panel.sharingType == .readOnly && queue.sharingType == .readOnly)
+        AppDelegate.applySharing(true, to: [panel, queue])
+        #expect(panel.sharingType == .none && queue.sharingType == .none && !queue.isVisible)
+        AppDelegate.applySharing(false, to: [panel, queue])
+        #expect(panel.sharingType == .readOnly && queue.sharingType == .readOnly)
+    }
+    /// 文件图标读取：取消或记录已删除时不返回结果，卡片据此不写图标、不继续解码，by AI.Coding。
+    @Test func fileIconDropsStaleRequests() async throws {
+        let (root, store, model) = try await setup()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("icon.txt"); try Data("x".utf8).write(to: file)
+        let id = model.items[0].id
+        #expect(await ClipCard.fileIcon(file.path, id: id, model: model) != nil)
+        let cancelled = Task { await ClipCard.fileIcon(file.path, id: id, model: model) }
+        cancelled.cancel()
+        #expect(await cancelled.value == nil)
+        _ = try await store.apply(store.preview(.delete([id])).token)
+        model.refresh(); try await wait { !model.contains(id) && !model.historyBusy }
+        #expect(await ClipCard.fileIcon(file.path, id: id, model: model) == nil)
+    }
+    /// 色值卡片：带空格的rgb/hsl与hex均识别，混有其他文字不识别；透明度与卡片底色合成后选字色，填充保留原透明度，by AI.Coding。
+    @Test func colorCardAcceptsSpacedValuesWithReadableText() {
+        func fill(_ text: String, dark: Bool = false) -> (color: Color, dark: Bool)? {
+            ClipCard.colorFill(ContentInspector.inspect(text, truncated: false), darkAppearance: dark)
+        }
+        for value in ["#34C759", "rgb(52, 199, 89)", "hsl(135, 59%, 49%)", "rgba(0, 0, 0, 0.5)", "  #fff \n"] { #expect(fill(value) != nil, "\(value)") }
+        for value in ["rgb(52, 199, 89) green", "color: #34C759", "#34C759 #000", "hsl(135, 59%, 49%);", "rgb(300, 0, 0)"] { #expect(fill(value) == nil, "\(value)") }
+        // 全透明：浅色底上用黑字，深色底上用白字；不透明色两种外观一致。
+        #expect(fill("#00000000")?.dark == true && fill("#00000000", dark: true)?.dark == false)
+        #expect(fill("#000000")?.dark == false && fill("#000000", dark: true)?.dark == false)
+        #expect(fill("#FFFFFF")?.dark == true && fill("#FFFFFF", dark: true)?.dark == true)
+        // 半透明：按合成色判断。
+        #expect(fill("rgba(0, 0, 0, 0.2)")?.dark == true && fill("rgba(255, 255, 255, 0.2)", dark: true)?.dark == false)
+        #expect(fill("#00000000").map { NSColor($0.color).alphaComponent } == 0)
+        #expect(fill("rgba(52, 199, 89, 0.5)").map { abs(NSColor($0.color).alphaComponent - 0.5) < 0.01 } == true)
+    }
+    /// Space预览：从按下起超过100ms即显示等待；读取中再按Space取消；换选、隐藏面板或隐藏内容后不迟到弹出，也不残留等待或失败，by AI.Coding。
+    @Test func spacePreviewFeedbackAndCancel() async throws {
+        let (root, _, model) = try await setup()
+        defer { try? FileManager.default.removeItem(at: root) }
+        func settled() -> Bool { !model.detailSlow && !model.detailFailed && model.message != "预览不可用，记录已变化" && !model.showingDetail }
+        model.detailDelayForTesting = .milliseconds(300)
+        model.select(model.items[0].id)
+        model.toggleQuickLook()
+        try await wait { model.detailSlow }
+        #expect(!model.showingDetail && model.statusEntry(queryEmpty: true) == .init(level: .notice, text: "正在准备预览…"))
+        model.toggleQuickLook()
+        #expect(settled() && !model.previewFollowsSelection)
+        try await Task.sleep(for: .milliseconds(700))
+        #expect(settled() && model.detail == nil)
+        // 等待反馈连续到详情发布。
+        model.toggleQuickLook()
+        try await wait { model.detailSlow }
+        var gap = false
+        while model.detail == nil { gap = gap || !model.detailSlow; try await Task.sleep(for: .milliseconds(2)) }
+        #expect(!gap && model.showingDetail && !model.detailSlow && model.previewFollowsSelection)
+        model.toggleQuickLook()
+        #expect(!model.showingDetail)
+        // 换选、隐藏面板、隐藏内容都使待弹出的预览作废。
+        model.toggleQuickLook(); try await wait { model.detailSlow }
+        model.select(model.items[2].id)
+        #expect(settled())
+        model.toggleQuickLook(); try await wait { model.detailSlow }
+        model.panelVisibilityChanged(false)
+        #expect(settled())
+        model.panelVisibilityChanged(true)
+        model.toggleQuickLook(); try await wait { model.detailSlow }
+        model.updateSettings { $0.hideContents = true }
+        try await wait { model.settings.hideContents }
+        #expect(settled())
+        try await Task.sleep(for: .milliseconds(700))
+        #expect(settled() && model.detail == nil)
+    }
+    /// 预览跟随越过页尾：直接加载下一页与等待已有预读两种路径都保持预览并加载新卡内容，by AI.Coding。
+    @Test func previewFollowsAcrossPageBoundary() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try HistoryStore(location: root)
+        for index in 0..<110 { _ = try await store.ingest(.init(payload: .init([.init([.init(SupportedType.string, Data("page-\(index)".utf8))])])), at: SystemClock().now() + Int64(index)) }
+        let board = MacPasteboardClient(access: RawBoard()), capture = CaptureCoordinator(board: board, store: store)
+        let model = HistoryViewModel(store: store, capture: capture, paste: PasteCoordinator(board: board, applications: FakeApplications(), store: store, capture: capture), derived: DerivedContentService(store: store))
+        try await model.start(); capture.stop()
+        try await wait { !model.historyBusy && model.items.count == 50 && model.hasMore }
+        model.select(model.items[49].id)
+        model.toggleQuickLook(); try await wait { model.detail?.summary.id == model.items[49].id }
+        model.navigate(1)
+        try await wait { model.items.count > 50 && !model.historyBusy }
+        let direct = model.items[50].id
+        #expect(model.selectedID == direct && model.showingDetail && model.previewFollowsSelection)
+        try await wait { model.detail?.summary.id == direct }
+        // 已有预读在途时到达页尾：记住方向键，页面返回后继续选择并保持预览。
+        let last = model.items.count - 1
+        model.select(model.items[last].id, keepDetail: true)
+        try await wait { model.detail?.summary.id == model.items[last].id }
+        let count = model.items.count
+        model.loadMore(); #expect(model.historyBusy)
+        model.navigate(1)
+        try await wait { model.items.count > count && !model.historyBusy }
+        let queued = model.items[count].id
+        #expect(model.selectedID == queued && model.showingDetail)
+        try await wait { model.detail?.summary.id == queued }
+        // 点击换卡仍关闭预览。
+        model.select(model.items[0].id)
+        #expect(!model.showingDetail)
     }
     /// 来源色头部：任何主色校正后白字对比度≥4.5:1，保持色相、饱和度≤0.85；近灰图标回退中性深灰；按键缓存只算一次，by AI.Coding。
     @Test func headerColorsKeepWhiteTextReadable() {

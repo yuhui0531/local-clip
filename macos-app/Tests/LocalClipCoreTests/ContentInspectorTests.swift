@@ -13,12 +13,15 @@ struct ContentInspectorTests {
         #expect(ContentInspector.exportFormat(plainText: "{\"a\":1}", language: "json", types: plain, markup: nil) == .plain("json"))
         #expect(ContentInspector.exportFormat(plainText: "let a = 1", language: "swift", types: plain, markup: nil) == .plain("swift"))
         // AI对话与编辑器复制的代码带HTML，等宽或pre标记时仍按源码导出。
-        #expect(ContentInspector.exportFormat(plainText: "let a = 1", language: "swift", types: html, markup: "<pre><code class=\"language-swift\">") == .plain("swift"))
-        #expect(ContentInspector.exportFormat(plainText: "let a = 1", language: "swift", types: html, markup: "<div style=\"font-family: Menlo, monospace\">") == .plain("swift"))
+        #expect(ContentInspector.exportFormat(plainText: "let a = 1", language: "swift", types: html, markup: "<pre><code class=\"language-swift\">let a = 1</code></pre>") == .plain("swift"))
+        #expect(ContentInspector.exportFormat(plainText: "let a = 1", language: "swift", types: html, markup: "<div style=\"font-family: Menlo, monospace\">let a = 1</div>") == .plain("swift"))
         // 邮件正文即使被误识别出语言，也因缺少代码排版标记而保留RTF。
         #expect(ContentInspector.exportFormat(plainText: "Hello team", language: "ini", types: rtf, markup: "{\\rtf1{\\fonttbl\\f0 Helvetica;}") == .original(type: SupportedType.rtf, fileExtension: "rtf"))
         #expect(ContentInspector.exportFormat(plainText: "Hello", language: nil, types: [SupportedType.html], markup: "<p>Hello</p>") == .original(type: SupportedType.html, fileExtension: "html"))
-        #expect(ContentInspector.exportFormat(plainText: "# Title\n\n- a\n- b", language: nil, types: html, markup: "<h1>Title</h1>") == .plain("md"))
+        #expect(ContentInspector.exportFormat(plainText: "# Title\n\n- a\n- b", language: "markdown", types: html, markup: "<h1>Title</h1>") == .plain("md"))
+        // Markdown只来自共用判定：未确定时不再由独立规则转换，富文本保留原表示。
+        #expect(ContentInspector.exportFormat(plainText: "# Title\n\n- a\n- b", language: nil, types: html, markup: "<h1>Title</h1>") == .original(type: SupportedType.html, fileExtension: "html"))
+        #expect(ContentInspector.exportFormat(plainText: "# Title\n\n- a\n- b", language: nil, types: plain, markup: nil) == .plain("txt"))
         #expect(ContentInspector.exportFormat(plainText: "just words", language: nil, types: plain, markup: nil) == .plain("txt"))
         #expect(ContentInspector.exportFormat(plainText: "<!DOCTYPE html><html></html>", language: "xml", types: plain, markup: nil) == .plain("html"))
         #expect(ContentInspector.exportFormat(plainText: "<a><b/></a>", language: "xml", types: plain, markup: nil) == .plain("xml"))
@@ -32,6 +35,29 @@ struct ContentInspectorTests {
         #expect(!ContentInspector.textExtensions.contains { $0.contains("/") || $0.contains(".") })
     }
 
+    /// 等宽字体、行内<code>、局部<pre>都只是线索：代码排版必须覆盖整份正文才允许富文本转源码。
+    @Test func codeMarkupMustCoverTheWholeText() {
+        let code = "func add(a: Int, b: Int) -> Int {\n    return a + b\n}"
+        #expect(ContentInspector.codeMarkupCovers("<pre><code>\(code.replacingOccurrences(of: ">", with: "&gt;"))</code></pre>", plainText: code))
+        #expect(ContentInspector.codeMarkupCovers("<meta charset='utf-8'><div style=\"color: #d4d4d4;font-family: Menlo, Monaco, 'Courier New', monospace;white-space: pre;\"><div><span>\(code)</span></div></div>", plainText: code))
+        #expect(ContentInspector.codeMarkupCovers("{\\rtf1\\ansi{\\fonttbl\\f0\\fnil\\fcharset0 Menlo-Regular;\\f1\\fnil\\fcharset0 SFMono-Bold;}\n\\f0 x}", plainText: code))
+        let prose = "Please review the export function and send the report."
+        #expect(!ContentInspector.codeMarkupCovers("<p>Please review the <code>export</code> function and send the report.</p>", plainText: prose))
+        #expect(!ContentInspector.codeMarkupCovers("<p>Intro paragraph explaining the change in detail.</p><pre>x = 1</pre><p>More text follows here.</p>", plainText: "Intro paragraph explaining the change in detail.\nx = 1\nMore text follows here."))
+        #expect(!ContentInspector.codeMarkupCovers("<p style=\"font-family: Helvetica\">Hi <span style=\"font-family: Menlo\">x</span></p>", plainText: "Hi x"))
+        #expect(!ContentInspector.codeMarkupCovers("<p>Hi</p><span style=\"font-family: Menlo\">x</span>", plainText: "Hi x"))
+        #expect(!ContentInspector.codeMarkupCovers("{\\rtf1{\\fonttbl{\\f0\\fswiss Helvetica;}{\\f1\\fmodern Menlo-Regular;}}}", plainText: prose))
+        #expect(!ContentInspector.codeMarkupCovers("<preview>\(prose)</preview>", plainText: prose))
+        #expect(!ContentInspector.codeMarkupCovers("", plainText: prose))
+        // 等宽字体的普通正文：排版覆盖成立，但正文判定不是代码，导出仍保留RTF。
+        let monoProse = "{\\rtf1{\\fonttbl\\f0\\fnil Menlo-Regular;}\\f0 \(prose)}"
+        #expect(ContentInspector.codeMarkupCovers(monoProse, plainText: prose))
+        #expect(ContentInspector.exportFormat(plainText: prose, language: LanguageDetector.detect(prose).verifiedLanguage, types: rtf, markup: monoProse) == .original(type: SupportedType.rtf, fileExtension: "rtf"))
+        // 局部代码的HTML正文：即使正文碰巧被判为代码，排版也不覆盖整篇，保留HTML。
+        #expect(ContentInspector.exportFormat(plainText: "x = 1", language: "python", types: html, markup: "<p>See</p><code>x = 1</code><p>and more text here</p>") == .original(type: SupportedType.html, fileExtension: "html"))
+        #expect(!ContentInspector.codeMarkupCovers("<p>See</p><code>x = 1</code><p>and more text here</p>", plainText: "x = 1"))
+    }
+
     @Test func markdownNeedsTwoSignals() {
         #expect(ContentInspector.looksLikeMarkdown("# Title\n\n```swift\nlet a = 1\n```"))
         #expect(ContentInspector.looksLikeMarkdown("- one\n- two\n\nSee [docs](https://example.com)"))
@@ -43,10 +69,10 @@ struct ContentInspectorTests {
     }
 
     @Test func codeMarkupMarkers() {
-        #expect(ContentInspector.looksLikeCodeMarkup("<PRE>x</PRE>"))
-        #expect(ContentInspector.looksLikeCodeMarkup("{\\fonttbl\\f0\\fmodern Menlo-Regular;}"))
-        #expect(!ContentInspector.looksLikeCodeMarkup("<p style=\"font-family: Helvetica\">Hi</p>"))
-        #expect(!ContentInspector.looksLikeCodeMarkup(""))
+        #expect(ContentInspector.codeMarkupCovers("<PRE>x</PRE>", plainText: "x"))
+        #expect(ContentInspector.codeMarkupCovers("{\\rtf1{\\fonttbl\\f0\\fmodern Menlo-Regular;}}", plainText: "x"))
+        #expect(!ContentInspector.codeMarkupCovers("<p style=\"font-family: Helvetica\">Hi</p>", plainText: "Hi"))
+        #expect(!ContentInspector.codeMarkupCovers("", plainText: "x"))
     }
 
     /// 名称优先；非法字符替换、隐藏文件前缀去除、按字符截到200字节以内，by AI.Coding。
@@ -98,18 +124,17 @@ struct ContentInspectorTests {
         #expect(badge.range(of: "^(\\d{4}-)?\\d{2}-\\d{2} \\d{2}:\\d{2}$", options: .regularExpression) != nil, "\(badge)")
     }
 
-    /// 截图样本：含路径的中文说明、纯路径不做语言猜测；带中文注释的代码仍保留样本，by AI.Coding。
-    @Test func languageSampleSkipsPathsAndCJKProse() throws {
+    /// 截图样本：含路径的中文说明、纯路径不是代码；带中文注释的代码仍识别，分析副本不改原文，by AI.Coding。
+    @Test func pathsAndCJKProseAreNotCode() throws {
         let path = "/Users/ronny/VscodeProjects/rea/macos-app/docs/reviews/LocalClip_Comprehensive_Review_2026-10-14.md"
-        #expect(ContentInspector.languageSample(path) == nil)
-        #expect(ContentInspector.languageSample("  ~/Downloads/a.txt\n") == nil)
-        #expect(ContentInspector.languageSample("请根据review comments **\(path) 进行修复。**  注意，切记功能") == nil)
-        #expect(ContentInspector.languageSample("今天下午三点开会，记得带电脑。") == nil)
-        let sample = try #require(ContentInspector.languageSample("See /usr/local/bin/foo for details"))
-        #expect(!sample.contains("/usr"))
+        for text in [path, "  ~/Downloads/a.txt\n", "请根据review comments **\(path) 进行修复。**  注意，切记功能", "今天下午三点开会，记得带电脑。", "See /usr/local/bin/foo for details"] {
+            #expect(LanguageDetector.detect(text).language == nil, "\(text)")
+        }
         let code = "// 获取用户列表\nfunction getUsers() { return api.get('/users'); }"
-        #expect(ContentInspector.languageSample(code) == code)
-        #expect(ContentInspector.languageSample("x = a/b/c") == "x = a/b/c")
+        let copy = code
+        #expect(LanguageDetector.detect(code).language == "javascript")
+        #expect(code == copy)
+        #expect(!LanguageDetector.mask("See /usr/local/bin/foo").contains("/usr"))
     }
 
     /// AC4与颜色写法互转：hex、rgb()/rgba()、hsl()，越界不算颜色，by AI.Coding。
@@ -166,5 +191,31 @@ struct ContentInspectorTests {
             try JSONSerialization.data(withJSONObject: ["perCardMs": perCard, "count": 7000]).write(to: URL(fileURLWithPath: output))
         }
         #expect(perCard < 1)
+    }
+    /// 审查R1/R2：等宽作用域须实际包住全部可见正文，且解码后的代码区与纯文本逐字对应（忽略空白）；超出验证预算保留原表示。
+    @Test func codeMarkupMustMatchTheExportedText() {
+        let sql = "SELECT id FROM users WHERE active = 1;"
+        for markup in ["<span style=\"font-family: Menlo\"></span><p>\(sql)</p>",
+                       "<pre>This report explains the quarter forecast in full detail.</pre>",
+                       "<span style=\"font-family: Menlo\"></span>" + String(repeating: " ", count: 65_536) + "<p style=\"font-family: Arial\">\(sql)</p>",
+                       "<pre>\(sql)</pre><p>Thanks</p>", "<pre>SELECT id FROM users;</pre>", "<pre>\(sql)\(sql)</pre>",
+                       "<div style=\"font-family: Menlo\"><p style=\"font-family: Helvetica\">\(sql)</p></div>",
+                       "<pre>" + sql + String(repeating: " ", count: 65_536) + "</pre>"] {
+            #expect(!ContentInspector.codeMarkupCovers(markup, plainText: sql), "\(markup.prefix(80))")
+            #expect(ContentInspector.exportFormat(plainText: sql, language: "sql", types: html, markup: markup) == .original(type: SupportedType.html, fileExtension: "html"))
+        }
+        // 实体、<br>、NBSP、标签拆分、注释与head不影响对应关系；中文、emoji与CRLF逐字对应。
+        let code = "if (a < b && c) {\n  run();\n}"
+        #expect(ContentInspector.codeMarkupCovers("<pre><code><span>if</span> (a &lt; b &amp;&amp; c) {<br>&nbsp;&nbsp;run();\n}</code></pre>", plainText: code))
+        #expect(ContentInspector.codeMarkupCovers("<pre>if (a < b && c) {\n  run();\n}</pre>", plainText: code))
+        #expect(ContentInspector.codeMarkupCovers("<html><head><style>p{}</style></head><body><!-- note --><pre>\(sql)</pre></body></html>", plainText: sql))
+        #expect(ContentInspector.codeMarkupCovers("<font face=\"Courier New\">\(sql)</font>", plainText: sql))
+        #expect(ContentInspector.codeMarkupCovers("<pre>\r\n\(sql)\r\n</pre>", plainText: sql + "\r\n"))
+        let unicode = "let 标题 = \"😀\""
+        #expect(ContentInspector.codeMarkupCovers("<pre>let 标题 = &quot;&#x1F600;&quot;</pre>", plainText: unicode))
+        #expect(!ContentInspector.codeMarkupCovers("<pre>let 标题 = \"😃\"</pre>", plainText: unicode))
+        // 未闭合标签或注释：无法验证，保留原表示。
+        #expect(!ContentInspector.codeMarkupCovers("<pre>\(sql)</pre><span style=\"x", plainText: sql))
+        #expect(!ContentInspector.codeMarkupCovers("<pre>\(sql)</pre><!-- <p>hidden", plainText: sql))
     }
 }

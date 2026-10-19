@@ -267,7 +267,7 @@ private struct HistoryScroller: View {
             ScrollView(.horizontal) {
                 LazyHStack(spacing: HistoryView.cardSpacing) {
                     ForEach(Array(strip.model.items.enumerated()), id: \.element.id) { index, item in
-                        ClipCard(item: item, index: index, selected: strip.model.selectedIDs.contains(item.id) || (strip.model.contentEditorPresented && strip.model.contentEditor?.id == item.id), dragging: strip.draggedIDs.contains(item.id), editing: strip.renamingID == item.id, hidden: strip.hideContents, quickModifiers: strip.model.settings.quickModifiers, height: strip.cardHeight, categoryID: strip.categoryID, categories: strip.categories, target: strip.target, selectionCount: strip.model.selectedIDs.contains(item.id) ? strip.model.selectedIDs.count : 0, selectionHasNonText: strip.model.items.contains { strip.model.selectedIDs.contains($0.id) && ($0.kind == .image || $0.kind == .mixed) }, queueShortcut: strip.model.settings.queueShortcut, model: strip.model, previewGeneration: strip.focusRequest, detailPending: strip.detailPending && strip.model.selectedID == item.id, showsQuickBadge: strip.quickBadges).equatable().id(item.id)
+                        ClipCard(item: item, index: index, selected: strip.model.selectedIDs.contains(item.id) || (strip.model.contentEditorPresented && strip.model.contentEditor?.id == item.id), dragging: strip.draggedIDs.contains(item.id), editing: strip.renamingID == item.id, hidden: strip.hideContents, quickModifiers: strip.model.settings.quickModifiers, height: strip.cardHeight, categoryID: strip.categoryID, categories: strip.categories, target: strip.target, selectionCount: strip.model.selectedIDs.contains(item.id) ? strip.model.selectedIDs.count : 0, selectionHasNonText: strip.model.items.contains { strip.model.selectedIDs.contains($0.id) && ($0.kind == .image || $0.kind == .mixed) }, queueShortcut: strip.model.settings.queueShortcut, model: strip.model, previewGeneration: strip.focusRequest, detailPending: strip.detailPending && strip.model.selectedID == item.id, showsQuickBadge: strip.quickBadges, selectionKey: strip.model.selectedIDs.contains(item.id) ? strip.model.selectedIDs.hashValue : 0).equatable().id(item.id)
                             .transition(.opacity.combined(with: .scale(scale: 0.92)))
                             // 详情贴着所选卡片弹出，而不是远在底栏右侧的按钮，by AI.Coding。
                             // 详情内容备好后才弹出，弹出即最终尺寸，by AI.Coding。
@@ -598,6 +598,7 @@ struct ClipCard: View, Equatable {
     @State private var nameDraft = ""
     @FocusState private var nameFocused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var colorScheme
     let height: Double
     let categoryID: String?
     let categories: [ClipCategory]
@@ -612,6 +613,9 @@ struct ClipCard: View, Equatable {
     var detailPending = false
     /// 按住快速粘贴修饰键时才显示⌘N角标，by AI.Coding。
     var showsQuickBadge = false
+    /// 所选组身份：组成员变化时重新判定VoiceOver“纯文本复制”，未选中为0，by AI.Coding。
+    var selectionKey = 0
+    @State private var plainCopyAllowed = false
     @State private var checkedFileGeneration: UUID?
     @State private var fileVersion: FileReferencePreviewVersion?
     @State private var characterCount: (fingerprint: String?, count: Int)?
@@ -675,7 +679,7 @@ struct ClipCard: View, Equatable {
             && lhs.categoryID == rhs.categoryID && lhs.categories == rhs.categories && lhs.target == rhs.target
             && lhs.selectionCount == rhs.selectionCount && lhs.selectionHasNonText == rhs.selectionHasNonText && lhs.queueShortcut == rhs.queueShortcut
             && (lhs.item.kind != .file || lhs.previewGeneration == rhs.previewGeneration) && lhs.detailPending == rhs.detailPending
-            && lhs.showsQuickBadge == rhs.showsQuickBadge
+            && lhs.showsQuickBadge == rhs.showsQuickBadge && lhs.selectionKey == rhs.selectionKey
     }
     private var code: Bool { item.kind == .text && detectedLanguage != nil }
     /// 代码上限12.5pt，普通文本沿用原字号与紧凑布局，by AI.Coding。
@@ -702,14 +706,35 @@ struct ClipCard: View, Equatable {
     private var fadesBody: Bool {
         !tiny && (item.kind == .text || displayedFileText != nil) && !showsFileThumbnail && textHeight > max(0, height - headerHeight - footerHeight) + 0.5
     }
-    /// 仅为颜色值的文本铺满该颜色；明度决定黑或白字，by AI.Coding。
+    /// 仅为颜色值的文本铺满该颜色；识别结果已要求整段文本恰为一个色值，by AI.Coding。
     private var colorValue: (color: Color, dark: Bool)? {
-        guard !hidden, item.kind == .text, case .color(let value)? = detection,
-              !item.preview.trimmingCharacters(in: .whitespacesAndNewlines).contains(where: \.isWhitespace) else { return nil }
-        func linear(_ channel: Int) -> Double { let c = Double(channel) / 255; return c <= 0.03928 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4) }
-        let luminance = 0.2126 * linear(value.red) + 0.7152 * linear(value.green) + 0.0722 * linear(value.blue)
+        guard !hidden, item.kind == .text else { return nil }
+        return Self.colorFill(detection, darkAppearance: colorScheme == .dark)
+    }
+    /// 透明度先与卡片底色合成，再按合成后的明度选黑或白字；填充仍用原色值，by AI.Coding。
+    static func colorFill(_ detection: ContentInspector.Detection?, darkAppearance: Bool) -> (color: Color, dark: Bool)? {
+        guard case .color(let value)? = detection else { return nil }
+        let base = darkAppearance ? cardBackground.dark : cardBackground.light
+        func linear(_ channel: Int, _ index: Int) -> Double {
+            let c = value.alpha * Double(channel) / 255 + (1 - value.alpha) * base[index]
+            return c <= 0.03928 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4)
+        }
+        let luminance = 0.2126 * linear(value.red, 0) + 0.7152 * linear(value.green, 1) + 0.0722 * linear(value.blue, 2)
         return (Color(.sRGB, red: Double(value.red) / 255, green: Double(value.green) / 255, blue: Double(value.blue) / 255, opacity: value.alpha), luminance > 0.179)
     }
+    /// 卡片正文底色（textBackgroundColor）在浅色与深色外观下的sRGB分量。
+    private static let cardBackground: (light: [Double], dark: [Double]) = {
+        func components(_ name: NSAppearance.Name) -> [Double] {
+            var result = [1.0, 1, 1]
+            NSAppearance(named: name)?.performAsCurrentDrawingAppearance {
+                if let color = NSColor.textBackgroundColor.usingColorSpace(.sRGB) {
+                    result = [color.redComponent, color.greenComponent, color.blueComponent].map(Double.init)
+                }
+            }
+            return result
+        }
+        return (components(.aqua), components(.darkAqua))
+    }()
     private var accessibilityDescription: String {
         let title = "\(item.title ?? HistoryView.kindName(item.kind))，\(item.source.name)"
         if hidden { return title + "，内容已隐藏" }
@@ -863,6 +888,13 @@ struct ClipCard: View, Equatable {
             .task(id: item.preview) {
                 detection = item.kind == .text ? ContentInspector.inspect(item.preview, truncated: item.preview.count >= 180) : nil
             }
+            // 与“更多”菜单同一判定；只在可见且作用组或内容变化时查询一次，不随 body 重算，by AI.Coding。
+            .task(id: [String(isOnscreen), String(selectionKey), item.contentFingerprint ?? ""]) {
+                plainCopyAllowed = false
+                guard isOnscreen else { return }
+                let allowed = await model.canCopyAsText(Self.voiceOverTargets(item.id, selection: model.selectedIDs))
+                if !Task.isCancelled { plainCopyAllowed = allowed }
+            }
     }
     private var interactiveCard: some View {
         cardBody
@@ -891,7 +923,7 @@ struct ClipCard: View, Equatable {
             .accessibilityAction(named: Text("编辑内容")) { model.beginContentEdit(item.id) }
             // 原底栏按钮迁为卡片命名动作，可用性与原底栏一致，by AI.Coding。
             .accessibilityActions {
-                ForEach(Self.voiceOverActions(kind: item.kind, hidden: hidden, favorite: item.isFavorite), id: \.self) { name in
+                ForEach(Self.voiceOverActions(plainText: plainCopyAllowed, hidden: hidden, favorite: item.isFavorite), id: \.self) { name in
                     Button(name) { performVoiceOverAction(name) }
                 }
             }
@@ -908,11 +940,18 @@ struct ClipCard: View, Equatable {
     private var quickPasteHelp: String {
         index < 9 ? "\n\(HotKeyService.label(Shortcut(keyCode: [18,19,20,21,23,22,26,28,25][index], modifiers: quickModifiers))) 快速粘贴第 \(index + 1) 条" : ""
     }
-    /// 隐藏内容只留原格式复制；无文本类型不提供纯文本复制，by AI.Coding。
-    static func voiceOverActions(kind: ClipKind, hidden: Bool, favorite: Bool) -> [String] {
-        if hidden { return ["原格式复制"] }
-        return ["详情", favorite ? "取消收藏" : "收藏", "原格式复制"] + (kind == .image ? [] : ["纯文本复制"]) + ["直接粘贴"]
+    /// 图标读取期间离屏、删除或代次变化即作废：不发布图标，也不继续后续解码，by AI.Coding。
+    static func fileIcon(_ path: String, id: ClipID, model: HistoryViewModel) async -> NSImage? {
+        let icon = await Task.detached(priority: .utility) { NSWorkspace.shared.icon(forFile: path) }.value
+        return !Task.isCancelled && model.contains(id) ? icon : nil
     }
+    /// 隐藏内容只留原格式复制；纯文本复制按动作作用的整组是否都有文本表示决定，by AI.Coding。
+    static func voiceOverActions(plainText: Bool, hidden: Bool, favorite: Bool) -> [String] {
+        if hidden { return ["原格式复制"] }
+        return ["详情", favorite ? "取消收藏" : "收藏", "原格式复制"] + (plainText ? ["纯文本复制"] : []) + ["直接粘贴"]
+    }
+    /// 命名动作作用对象：本卡在所选组内时作用整组，否则先选中本卡只作用本卡。
+    static func voiceOverTargets(_ id: ClipID, selection: Set<ClipID>) -> Set<ClipID> { selection.contains(id) ? selection : [id] }
     private func performVoiceOverAction(_ name: String) {
         if !model.selectedIDs.contains(item.id) { model.select(item.id) }
         switch name {
@@ -1002,7 +1041,10 @@ struct ClipCard: View, Equatable {
                     let size = await Task.detached(priority: .utility) { urls.map(ClipContentSize.measure) ?? .unknown }.value
                     guard !Task.isCancelled, model.contains(item.id) else { return }
                     contentSize = size
-                    if let path = urls?.first?.path { fileIcon = await Task.detached(priority: .utility) { NSWorkspace.shared.icon(forFile: path) }.value }
+                    if let path = urls?.first?.path {
+                        guard let icon = await Self.fileIcon(path, id: item.id, model: model) else { return }
+                        fileIcon = icon
+                    }
                     if !model.validateFilePreview(id: item.id, version: version) {
                         fileText = nil; thumbnailState = .loading
                     }
