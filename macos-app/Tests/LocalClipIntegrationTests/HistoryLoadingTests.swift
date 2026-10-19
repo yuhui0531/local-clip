@@ -48,7 +48,8 @@ import LocalClipCore
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let store = try HistoryStore(location: root); try await seed(store, count: 160)
-        let model = makeModel(store); model.configureHistoryViewport(width: 1000, cardWidth: 200)
+        // start()按面板高度重设卡片边长；新几何下 cardSide(340)=268，1300pt 视口与原 1000pt/219pt 同为5张一页，by AI.Coding。
+        let model = makeModel(store); model.configureHistoryViewport(width: 1300, cardWidth: HistoryView.cardSide(height: 340))
         try await model.start(); model.capture.stop()
         try await until { !model.historyBusy && model.items.count == 5 }
         let first = model.selectedID, expected = try await store.search(.init()).items.map(\.id)
@@ -78,7 +79,7 @@ import LocalClipCore
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let store = try HistoryStore(location: root); try await seed(store, count: 160)
-        let model = makeModel(store); model.configureHistoryViewport(width: 1000, cardWidth: 200)
+        let model = makeModel(store); model.configureHistoryViewport(width: 1300, cardWidth: HistoryView.cardSide(height: 340))
         try await model.start(); model.capture.stop()
         try await until { !model.historyBusy && model.items.count == 5 }
         let oldEpoch = model.listState.snapshot.scrollEpoch
@@ -101,7 +102,7 @@ import LocalClipCore
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let store = try HistoryStore(location: root); try await seed(store, count: 80)
-        let model = makeModel(store); model.configureHistoryViewport(width: 1000, cardWidth: 200)
+        let model = makeModel(store); model.configureHistoryViewport(width: 1300, cardWidth: HistoryView.cardSide(height: 340))
         try await model.start(); model.capture.stop(); try await until { !model.historyBusy && model.items.count == 5 }
         model.configureHistoryViewport(width: 1000, cardWidth: 200)
         model.historyScrolled(offset: 500, epoch: model.listState.snapshot.scrollEpoch); try await until { !model.historyBusy && model.items.count == 15 }
@@ -141,7 +142,7 @@ import LocalClipCore
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let store = try HistoryStore(location: root); try await seed(store, count: 100)
-        let model = makeModel(store); model.configureHistoryViewport(width: 1000, cardWidth: 200)
+        let model = makeModel(store); model.configureHistoryViewport(width: 1300, cardWidth: HistoryView.cardSide(height: 340))
         try await model.start(); model.capture.stop(); try await until { !model.historyBusy && model.items.count == 5 }
         model.historyScrolled(offset: 30, epoch: model.listState.snapshot.scrollEpoch); model.edgeSelection(true, extend: false); model.edgeSelection(true, extend: false)
         try await until { !model.historyBusy && !model.hasMore }

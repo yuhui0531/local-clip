@@ -1,6 +1,7 @@
 // 使用模型与不显示的原生控件验证交互，不打开面板或发送桌面事件，by AI.Coding。
 import Foundation
 import AppKit
+import SwiftUI
 import Testing
 import LocalClipCore
 @testable import LocalClipMac
@@ -188,7 +189,8 @@ import LocalClipCore
         #expect(model.hasFilterSelection)
         model.query = "type:text"; model.searchChanged(debounce: false)
         try await wait { !model.historyBusy }
-        #expect(model.hasFilterStrip)
+        // 筛选条已移除：前缀条件留在搜索词中，分类条件计入筛选按钮，几何不再随之变化，by AI.Coding。
+        #expect(!model.queryConditions.isEmpty && model.filterCount == 1)
     }
 
     /// 首次编辑外点只关闭或请求确认，下一次独立点击仍可选卡，不发送粘贴。
@@ -252,5 +254,119 @@ import LocalClipCore
         else { #expect(model.contentEditor == nil) }
         _ = bridge.handle(try event(.leftMouseDown)); _ = bridge.handle(try event(.leftMouseUp))
         #expect(model.selectedID == second)
+    }
+    /// 现状固定（dea4d44 实测）：搜索框编辑时⌘C被底栏复制按钮快捷键接管，复制所选记录。
+    /// 按钮移除后窗口快捷键不再截获，键盘监听显式保留同一结果；输入法组合与无选择时仍归文字，by AI.Coding。
+    @Test func searchCommandCopyOwnership() async throws {
+        _ = NSApplication.shared
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try HistoryStore(location: root)
+        _ = try await store.ingest(.init(payload: .init([.init([.init(SupportedType.string, Data("copy-record".utf8))])])), at: SystemClock().now())
+        let raw = RawBoard(), board = MacPasteboardClient(access: raw), capture = CaptureCoordinator(board: board, store: store)
+        let model = HistoryViewModel(store: store, capture: capture, paste: PasteCoordinator(board: board, applications: FakeApplications(), store: store, capture: capture), derived: DerivedContentService(store: store))
+        try await model.start(); capture.stop(); try await wait { !model.historyBusy && model.selectedID != nil }
+        let host = NSHostingView(rootView: HistoryView(model: model)), window = NSWindow(contentRect: .init(x: 0, y: 0, width: 1440, height: 340), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil; window.close() }
+        host.sizingOptions = []; window.contentView = host; host.frame = .init(x: 0, y: 0, width: 1440, height: 340)
+        func searchField(_ view: NSView) -> NSSearchField? { (view as? NSSearchField) ?? view.subviews.lazy.compactMap(searchField).first }
+        try await wait { host.layoutSubtreeIfNeeded(); return searchField(host) != nil }
+        let field = try #require(searchField(host))
+        try #require(window.makeFirstResponder(field))
+        let editor = try #require(field.currentEditor() as? NSTextView)
+        #expect(AppDelegate.isHistorySearchEditor(editor))
+        let before = raw.count
+        let copy = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .command, timestamp: 0,
+            windowNumber: window.windowNumber, context: nil, characters: "c", charactersIgnoringModifiers: "c", isARepeat: false, keyCode: 8))
+        #expect(!window.performKeyEquivalent(with: copy)); #expect(raw.count == before)
+        #expect(AppDelegate.copiesRecordFromSearch(copy, responder: editor, model: model))
+        try await wait { raw.count != before && model.message == "已复制" }
+        editor.setMarkedText("拼", selectedRange: .init(location: 1, length: 0), replacementRange: .init(location: NSNotFound, length: 0))
+        #expect(!AppDelegate.copiesRecordFromSearch(copy, responder: editor, model: model))
+        editor.unmarkText()
+        // 结果区⌘C沿用键盘监听原有分支，不经过此搜索专用路径。
+        #expect(!AppDelegate.copiesRecordFromSearch(copy, responder: window, model: model))
+        model.select(nil); #expect(!AppDelegate.copiesRecordFromSearch(copy, responder: editor, model: model))
+        #expect(!window.isVisible)
+    }
+    /// 第一响应者变化同步驱动状态槽焦点提示；搜索有词提示进入结果，结果区提示默认动作，by AI.Coding。
+    @Test func focusHintFollowsFirstResponder() async throws {
+        _ = NSApplication.shared
+        let (root, _, model) = try await setup()
+        defer { try? FileManager.default.removeItem(at: root) }
+        model.status = "正常"
+        let window = NSWindow(contentRect: .init(x: 0, y: 0, width: 300, height: 100), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil; window.close() }
+        let search = NSSearchField(frame: .init(x: 0, y: 0, width: 260, height: 30)); window.contentView = search
+        let observation = AppDelegate.observeHistoryFocus(of: window, model: model)
+        defer { observation.invalidate() }
+        try #require(window.makeFirstResponder(search))
+        #expect(model.historyFocus == .search)
+        #expect(model.statusEntry(queryEmpty: true) == nil)
+        #expect(model.statusEntry(queryEmpty: false) == .init(level: .hint, text: "↩ 进入结果"))
+        try #require(window.makeFirstResponder(window))
+        #expect(model.historyFocus == .results)
+        #expect(model.statusEntry(queryEmpty: true)?.text.hasPrefix(model.settings.defaultAction == .directPaste ? "↩ 粘贴到 " : "↩ 复制") == true)
+        #expect(!window.isVisible)
+    }
+    /// 状态槽优先级：错误 > 监控异常 > 队列 > 通知 > 提示；旧通知计时器不能清掉同文字的新错误，by AI.Coding。
+    @Test func statusSlotPriorityAndSeverity() async throws {
+        let (root, _, model) = try await setup()
+        defer { try? FileManager.default.removeItem(at: root) }
+        model.status = "正常"; model.historyFocus = .results
+        #expect(model.statusEntry(queryEmpty: true)?.level == .hint)
+        model.notice("已复制")
+        #expect(model.messageSeverity == .notice && model.statusEntry(queryEmpty: true) == .init(level: .notice, text: "已复制"))
+        model.registerQueueShortcut = { _ in true }
+        model.startPasteQueue(model.items.prefix(2).map(\.id))
+        #expect(model.statusEntry(queryEmpty: true)?.level == .queue)
+        model.status = "用户暂停"
+        #expect(model.statusEntry(queryEmpty: true) == .init(level: .monitoring, text: "已停止监控"))
+        model.message = "已复制"
+        #expect(model.messageSeverity == .failure && model.statusEntry(queryEmpty: true) == .init(level: .failure, text: "已复制"))
+        try await Task.sleep(for: .seconds(4.3))
+        #expect(model.message == "已复制" && model.messageSeverity == .failure)
+        model.showingStatusDetail = true; model.dismissMessage()
+        #expect(model.message.isEmpty && !model.showingStatusDetail && model.statusEntry(queryEmpty: true)?.level == .monitoring)
+        model.status = "正常"
+        #expect(model.statusEntry(queryEmpty: true)?.level == .queue)
+        model.stopPasteQueue()
+        model.query = "app:nothing"; model.searchChanged(debounce: false)
+        try await wait { !model.historyBusy && !model.queryProblems.isEmpty }
+        #expect(model.statusEntry(queryEmpty: false) == .init(level: .failure, text: "未找到来源 nothing"))
+    }
+    /// “更多 › 所选记录”可用性逐项等于原底栏：无选择整组禁用、隐藏内容禁用收藏/分类/详情/编辑，by AI.Coding。
+    @Test func selectedRecordMenuMatchesFormerFooter() async throws {
+        let (root, store, model) = try await setup()
+        defer { try? FileManager.default.removeItem(at: root) }
+        func flags(_ value: SelectedRecordAvailability) -> [Bool] { [value.any, value.plainCopy, value.favorite, value.category, value.detail, value.edit] }
+        let first = model.items[0].id
+        model.select(first)
+        try await wait { model.listState.footerState.snapshot.selectedMetadata?.summary.id == first }
+        let one = model.listState.footerState.snapshot
+        #expect(flags(SelectedRecordAvailability(one, canDisplay: true, canCopyText: true)) == [true, true, true, true, true, true])
+        #expect(SelectedRecordAvailability(one, canDisplay: true, canCopyText: false).plainCopy == false)
+        #expect(flags(SelectedRecordAvailability(one, canDisplay: false, canCopyText: true)) == [true, true, false, false, false, false])
+        var pending = one; pending.selectedMetadata = nil
+        #expect(!SelectedRecordAvailability(pending, canDisplay: true, canCopyText: true).category)
+        var many = one; many.selectedCount = 2
+        #expect(!SelectedRecordAvailability(many, canDisplay: true, canCopyText: true).edit)
+        guard case .inserted(let image) = try await store.ingest(.init(payload: .init([.init([.init(SupportedType.png, try ImageFixtures.image(width: 4, height: 4))])])), at: SystemClock().now() + 100) else { Issue.record("fixture"); return }
+        var picture = one; picture.selectedItem?.kind = .image; picture.selectedID = image
+        #expect(!SelectedRecordAvailability(picture, canDisplay: true, canCopyText: true).edit)
+        model.select(nil)
+        let none = model.listState.footerState.snapshot
+        #expect(flags(SelectedRecordAvailability(none, canDisplay: true, canCopyText: true)) == [false, false, false, false, false, false])
+    }
+    /// 卡片边长只随面板高度严格单调变化，等于 H−72，与筛选、队列、多选无关，by AI.Coding。
+    @Test func cardSideIsStrictlyMonotonic() {
+        var previous: CGFloat = 0
+        for height in 280...520 {
+            let side = HistoryView.cardSide(height: CGFloat(height))
+            #expect(side == CGFloat(height - 72)); #expect(side > previous); previous = side
+        }
+        #expect(HistoryView.cardSide(height: 280) == 208 && HistoryView.cardSide(height: 340) == 268 && HistoryView.cardSide(height: 520) == 448)
     }
 }

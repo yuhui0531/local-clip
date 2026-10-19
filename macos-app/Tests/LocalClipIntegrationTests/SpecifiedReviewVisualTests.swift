@@ -44,7 +44,7 @@ import LocalClipCore
                         while (model.settings.compactLayout != compact || model.settings.hideContents != hidden || model.settings.panelHeight != height), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
                         try #require(model.settings.compactLayout == compact && model.settings.hideContents == hidden && model.settings.panelHeight == height)
                         model.actualPanelHeight = height
-                        model.configureHistoryViewport(width: 1200, cardWidth: HistoryView.cardSide(height: height, filtered: false))
+                        model.configureHistoryViewport(width: 1200, cardWidth: HistoryView.cardSide(height: height))
                         window.setContentSize(.init(width: 1200, height: height))
                         try await Task.sleep(for: .milliseconds(250))
                         host.layoutSubtreeIfNeeded(); window.displayIfNeeded()

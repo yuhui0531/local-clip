@@ -49,6 +49,7 @@ import LocalClipCore
     private var focusState = HistoryPanelFocusState()
     private var outsideClickMonitor: Any?
     private var localClickMonitor: Any?
+    private var focusObservation: NSKeyValueObservation?
     var requestTermination: () -> Void = { NSApp.terminate(nil) }
     private let instances = SingleInstanceService()
     private var startup: Task<Void, Never>?
@@ -113,7 +114,7 @@ import LocalClipCore
             let model = HistoryViewModel(store: store, capture: capture, paste: paste, derived: DerivedContentService(store: store))
             self.model = model; lastExternal = applications.target()
             // 在首次查询前提供屏幕尺寸；SwiftUI随后用实际视口修正，不先读固定50条，by AI.Coding。
-            model.configureHistoryViewport(width: NSScreen.main?.frame.width ?? 1400, cardWidth: HistoryView.cardSide(height: initialSettings.panelHeight, filtered: false))
+            model.configureHistoryViewport(width: NSScreen.main?.frame.width ?? 1400, cardWidth: HistoryView.cardSide(height: initialSettings.panelHeight))
             model.panelVisibilityChanged(false)
             model.closePanel = { [weak self] in self?.dismissHistory() }
             // 非激活面板不抢前台；置顶时前台应用即当前要粘贴的目标，by AI.Coding。
@@ -395,7 +396,7 @@ import LocalClipCore
         let screen = targetScreen()
         let rect = screen?.frame ?? NSRect(x: 0, y: 0, width: 1400, height: 380)
         let panelHeight = Self.clampedPanelHeight(model.settings.panelHeight, screenHeight: rect.height)
-        model.configureHistoryViewport(width: rect.width, cardWidth: HistoryView.cardSide(height: panelHeight, filtered: model.hasFilterStrip))
+        model.configureHistoryViewport(width: rect.width, cardWidth: HistoryView.cardSide(height: panelHeight))
         model.panelVisibilityChanged(true)
         model.target = lastExternal
         model.revalidateVisibleContent()
@@ -416,6 +417,7 @@ import LocalClipCore
             panel.contentView = host; panel.minSize = NSSize(width: 680, height: 280)
             panel.onCancel = { [weak self] in self?.dismissHistory() }
             self.panel = panel
+            focusObservation = Self.observeHistoryFocus(of: panel, model: model)
         }
         if let panel {
             panelScreenID = screen?.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber
@@ -485,7 +487,7 @@ import LocalClipCore
     private func dismissHistory() {
         focusState.reset()
         model?.panelVisibilityChanged(false)
-        focusDismissal?.cancel(); model?.showingDetail = false; model?.showingCategoryEditor = false; model?.showingFilters = false
+        focusDismissal?.cancel(); model?.showingDetail = false; model?.showingCategoryEditor = false; model?.showingFilters = false; model?.showingStatusDetail = false
         panel?.orderOut(nil)
         #if DEBUG
         if let model { GUIAcceptanceProbe.event("panel-dismissed", model) }
@@ -503,7 +505,7 @@ import LocalClipCore
                 settings: self.settingsWindow, feedback: self.feedbackPanel,
                 showingDetail: self.model?.showingDetail == true,
                 showingCategoryEditor: self.model?.showingCategoryEditor == true,
-                showingFilters: self.model?.showingFilters == true,
+                showingFilters: self.model?.showingFilters == true || self.model?.showingStatusDetail == true,
                 showingContentEditor: self.model?.contentEditorPresented == true)
             guard self.focusState.shouldDismiss(panelIsKey: panel.isKeyWindow, ownsKeyWindow: ownsKey,
                 dragging: self.model?.dragActive == true, confirming: self.model?.confirmingChange == true || self.model?.contentEditorPresented == true,
@@ -547,6 +549,29 @@ import LocalClipCore
     static func isHistorySearchEditor(_ responder: NSResponder?) -> Bool {
         guard let editor = responder as? NSTextView, editor.isEditable, editor.isFieldEditor else { return false }
         return editor.delegate is NSSearchField
+    }
+    /// 原底栏复制按钮的⌘C在搜索框中复制所选记录；按钮移除后显式保留，无选择或输入法组合时仍归文字，by AI.Coding。
+    static func copiesRecordFromSearch(_ event: NSEvent, responder: NSResponder?, model: HistoryViewModel) -> Bool {
+        guard event.modifierFlags.intersection([.command, .option, .control, .shift]) == [.command], event.keyCode == 8,
+              isHistorySearchEditor(responder), (responder as? NSTextView)?.hasMarkedText() != true, model.selectedID != nil else { return false }
+        model.perform(action: .copy); return true
+    }
+    /// 状态槽焦点提示的归类：搜索编辑器、结果响应者，其余控件不提示，by AI.Coding。
+    static func historyFocus(_ responder: NSResponder?, panel: NSWindow) -> HistoryViewModel.HistoryFocus {
+        // 搜索框成为第一响应者后由field editor接管，KVO只通知前一步，两者都算搜索焦点。
+        if isHistorySearchEditor(responder) || responder is NSSearchField { return .search }
+        return responder == nil || responder === panel ? .results : .other
+    }
+    /// 第一响应者变化时同步改写焦点归类，状态槽提示在同一渲染周期更新，by AI.Coding。
+    static func observeHistoryFocus(of panel: NSWindow, model: HistoryViewModel) -> NSKeyValueObservation {
+        panel.observe(\.firstResponder, options: [.initial, .new]) { [weak model] panel, _ in
+            MainActor.assumeIsolated {
+                // field editor接管瞬间尚未挂代理，沿用刚交出焦点的控件归类；之后不会再收到通知。
+                if let editor = panel.firstResponder as? NSTextView, editor.isFieldEditor, editor.delegate == nil { return }
+                let focus = historyFocus(panel.firstResponder, panel: panel)
+                if model?.historyFocus != focus { model?.historyFocus = focus }
+            }
+        }
     }
     /// 搜索和结果共享明确的记录动作；不接管复制、全选、撤销及输入法候选，by AI.Coding。
     static func handleRecordCommand(_ event: NSEvent, responder: NSResponder?, model: HistoryViewModel) -> Bool {
@@ -633,7 +658,7 @@ import LocalClipCore
             guard let self, let panel = self.panel, panel.isVisible else { return event }
             if Self.ownsHistoryWindow(event.window, panel: panel, settings: self.settingsWindow, feedback: self.feedbackPanel,
                 showingDetail: self.model?.showingDetail == true, showingCategoryEditor: self.model?.showingCategoryEditor == true,
-                showingFilters: self.model?.showingFilters == true, showingContentEditor: self.model?.contentEditorPresented == true) {
+                showingFilters: self.model?.showingFilters == true || self.model?.showingStatusDetail == true, showingContentEditor: self.model?.contentEditorPresented == true) {
                 // 迟到的旧输入不能取消较新的外部关闭任务，by AI.Coding。
                 if self.focusState.ownedInteraction(at: event.timestamp) { self.focusDismissal?.cancel() }
             } else if event.window != nil {
@@ -729,7 +754,7 @@ import LocalClipCore
             guard let panel = self.panel, panel.isVisible, let model = self.model,
                   Self.ownsHistoryWindow(event.window, panel: panel, settings: self.settingsWindow, feedback: self.feedbackPanel,
                       showingDetail: model.showingDetail, showingCategoryEditor: model.showingCategoryEditor,
-                      showingFilters: model.showingFilters, showingContentEditor: model.contentEditorPresented) || (event.window == nil && panel.isKeyWindow) else { return event }
+                      showingFilters: model.showingFilters || model.showingStatusDetail, showingContentEditor: model.contentEditorPresented) || (event.window == nil && panel.isKeyWindow) else { return event }
             self.focusState.ownedInteraction(at: event.timestamp)
             // 弹窗归属只用于保留交互，不能把详情文字或确认按钮按键当作历史操作，by AI.Coding。
             guard Self.routesHistoryShortcuts(event.window, panel: panel,
@@ -747,11 +772,12 @@ import LocalClipCore
             if event.keyCode == 53 {
                 if model.showingCategoryEditor { model.showingCategoryEditor = false }
                 else if model.showingFilters { model.showingFilters = false }
+                else if model.showingStatusDetail { model.showingStatusDetail = false }
                 else if model.showingDetail { model.showingDetail = false }
                 else { self.dismissHistory() }
                 return nil
             }
-            if model.showingCategoryEditor || model.showingFilters { return event }
+            if model.showingCategoryEditor || model.showingFilters || model.showingStatusDetail { return event }
             let flags = event.modifierFlags.intersection([.command,.option,.control,.shift])
             let editing = editor?.isEditable == true
             if flags == [.command], event.keyCode == 3 {
@@ -773,6 +799,7 @@ import LocalClipCore
             if flags == [.command], event.keyCode == 43 { model.openSettings?(); return nil }
             // 搜索文字未改变且最后动作是记录删除时，仍可撤销该记录。
             if flags == [.command], event.keyCode == 6, editing, model.canUndoFromSearch { model.undoDeletion(); return nil }
+            if Self.copiesRecordFromSearch(event, responder: panel.firstResponder, model: model) { return nil }
             if Self.handleRecordCommand(event, responder: panel.firstResponder, model: model) { return nil }
             if flags == [.command] && !editing {
                 switch event.keyCode {

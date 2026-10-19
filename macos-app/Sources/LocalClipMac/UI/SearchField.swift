@@ -8,9 +8,11 @@ public struct SearchField: NSViewRepresentable {
     var onNavigate: (Int) -> Void
     var onEnter: () -> Void
     var onEscape: () -> Void
+    /// 占位文字显示当前条数，随统计快照更新，by AI.Coding。
+    var placeholder = "搜索历史"
     /// 原生 field editor 决定输入法候选，不抢 Enter。
     public func makeNSView(context: Context) -> NSSearchField {
-        let field = NSSearchField(); field.placeholderString = "搜索历史"
+        let field = NSSearchField(); field.placeholderString = placeholder
         field.delegate = context.coordinator; field.sendsSearchStringImmediately = true
         field.controlSize = .large; field.toolTip = "搜索内容、名称或来源 · ⌘F"; field.setAccessibilityLabel("搜索历史")
         return field
@@ -19,6 +21,7 @@ public struct SearchField: NSViewRepresentable {
     public func updateNSView(_ field: NSSearchField, context: Context) {
         context.coordinator.parent = self
         if field.stringValue != text { field.stringValue = text }
+        if field.placeholderString != placeholder { field.placeholderString = placeholder }
         if context.coordinator.focus != focus {
             context.coordinator.focus = focus
             DispatchQueue.main.async { field.window?.makeFirstResponder(field) }

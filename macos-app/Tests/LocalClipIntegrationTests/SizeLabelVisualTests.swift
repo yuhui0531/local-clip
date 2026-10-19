@@ -50,7 +50,7 @@ import LocalClipCore
                 let deadline = ContinuousClock.now + .seconds(3)
                 while (model.settings.hideContents != hidden || model.settings.panelHeight != height), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
                 model.actualPanelHeight = height
-                model.configureHistoryViewport(width: 1200, cardWidth: HistoryView.cardSide(height: height, filtered: false))
+                model.configureHistoryViewport(width: 1200, cardWidth: HistoryView.cardSide(height: height))
                 window.setContentSize(.init(width: 1200, height: height))
                 try await Task.sleep(for: .milliseconds(600))
                 host.layoutSubtreeIfNeeded(); window.displayIfNeeded()

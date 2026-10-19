@@ -70,7 +70,7 @@ struct HistoryScrollMetrics: Equatable {
         func needsReveal(index: Int, cardWidth: CGFloat) -> Bool {
             guard metrics.viewport > 0 else { return false }
             // 正方形卡片随视口高度变化；定位与实际渲染使用相同边长。
-            let left = 24 + CGFloat(index) * (cardWidth + 16)
+            let left = HistoryView.cardInset + CGFloat(index) * (cardWidth + HistoryView.cardSpacing)
             return left < metrics.offset || left + cardWidth > metrics.offset + metrics.viewport
         }
 

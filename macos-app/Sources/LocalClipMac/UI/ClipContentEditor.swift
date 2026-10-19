@@ -250,9 +250,10 @@ struct ClipContentEditor: View {
             }
         }
         let width = min(max(cardHeight, 160), max(160, available.width))
-        let topOffset: CGFloat = 56
+        // 回退锚点贴在卡片区顶部：拖动条加固定工具栏，by AI.Coding。
+        let topOffset = HistoryView.dragHandleHeight + HistoryView.toolbarHeight
         let y = isFlipped ? min(hostBounds.maxY - 2, topOffset) : max(hostBounds.minY, hostBounds.maxY - topOffset)
-        return NSRect(x: max(hostBounds.minX + 24, available.minX), y: y, width: width, height: 2)
+        return NSRect(x: max(hostBounds.minX + HistoryView.cardInset, available.minX), y: y, width: width, height: 2)
     }
 
     func makeCoordinator() -> Coordinator { Coordinator(model: model) }
@@ -367,8 +368,7 @@ struct ClipContentEditor: View {
             popover.animates = !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
             popover.delegate = self
 
-            let filtered = model.sourceFilter != nil || model.dateFilterEnabled || !model.queryConditions.isEmpty || !model.queryProblems.isEmpty || model.pasteQueueActive
-            let cardHeight = HistoryView.cardSide(height: hostView.bounds.height, filtered: filtered)
+            let cardHeight = HistoryView.cardSide(height: hostView.bounds.height)
             let cardRect = resolvedCardRect(for: editor.id, in: hostView, window: window)
             let rect = ClipContentEditorPopover.anchorRect(in: hostView.bounds, cardRect: cardRect, cardHeight: cardHeight, isFlipped: hostView.isFlipped)
             let edge: NSRectEdge = hostView.isFlipped ? .minY : .maxY

@@ -49,7 +49,8 @@ import LocalClipCore
     @Published public var dateFilterEnabled = false
     /// 同一筛选状态用于图标与预布局预算，分类条件也属于筛选，by AI.Coding。
     var hasFilterSelection: Bool { sourceFilter != nil || dateFilterEnabled || !categoryFilters.isEmpty }
-    var hasFilterStrip: Bool { sourceFilter != nil || dateFilterEnabled || !queryConditions.isEmpty || !queryProblems.isEmpty || pasteQueueActive }
+    /// 筛选按钮显示的生效条件数：来源、日期、多分类各计一项。
+    var filterCount: Int { (sourceFilter != nil ? 1 : 0) + (dateFilterEnabled ? 1 : 0) + (categoryFilters.isEmpty ? 0 : 1) }
     @Published public var dateFrom = Date()
     @Published public var dateUntil = Date()
     @Published public var showingFilters = false {
@@ -95,15 +96,52 @@ import LocalClipCore
     @Published private(set) var detailEditable = false
     @Published public private(set) var previewMessage = ""
     @Published public var status = "准备中"
-    @Published public var message = ""
+    /// 错误与警告直接赋值message，默认按失败级别显示；只有notice()降为短暂通知，by AI.Coding。
+    @Published public var message = "" { didSet { if messageSeverity != .failure { messageSeverity = .failure } } }
+    enum MessageSeverity { case notice, failure }
+    @Published private(set) var messageSeverity = MessageSeverity.failure
     private var noticeClear: Task<Void, Never>?
-    /// 成功提示只在底栏短暂显示后恢复状态；错误与警告直接赋值message，保留到下一次操作，by AI.Coding。
+    /// 成功提示只在状态槽短暂显示后恢复状态；错误与警告保留到下一次操作或点按关闭，by AI.Coding。
     func notice(_ text: String) {
-        message = text; noticeClear?.cancel()
+        message = text; messageSeverity = .notice; noticeClear?.cancel()
         noticeClear = Task { [weak self] in
             try? await Task.sleep(for: .seconds(4))
-            guard let self, !Task.isCancelled, self.message == text else { return }
+            // 同文字的新错误不能被旧通知计时器清掉。
+            guard let self, !Task.isCancelled, self.message == text, self.messageSeverity == .notice else { return }
             self.message = ""
+        }
+    }
+    /// 状态槽弹窗内关闭错误全文；通知和状态不受影响。
+    func dismissMessage() { if messageSeverity == .failure { message = "" }; showingStatusDetail = false }
+    /// 焦点提示所需的第一响应者归类，由宿主随窗口第一响应者变化同步更新，by AI.Coding。
+    enum HistoryFocus { case search, results, other }
+    @Published var historyFocus = HistoryFocus.other
+    /// 状态槽全文弹窗；与筛选同样属于自有浮层，Esc和点击归属一致，by AI.Coding。
+    @Published var showingStatusDetail = false {
+        didSet { if oldValue && !showingStatusDetail { rememberNativePopoverDismissal() } }
+    }
+    /// 工具栏状态槽单条内容；按优先级取最高一条，低优先级动作另有入口，by AI.Coding。
+    struct StatusEntry: Equatable {
+        enum Level: Int, Comparable { case failure = 1, monitoring, queue, notice, hint
+            static func < (lhs: Self, rhs: Self) -> Bool { lhs.rawValue < rhs.rawValue } }
+        var level: Level
+        var text: String
+    }
+    /// 错误 → 监控异常 → 队列 → 通知 → 焦点提示；隐藏内容时文案均不含正文，by AI.Coding。
+    func statusEntry(queryEmpty: Bool) -> StatusEntry? {
+        if !message.isEmpty, messageSeverity == .failure { return .init(level: .failure, text: message) }
+        if capture.capacityBlocked { return .init(level: .failure, text: HistoryView.statusLabel("容量已满")) }
+        if let problem = queryProblems.first { return .init(level: .failure, text: queryProblems.count > 1 ? queryProblems.joined(separator: "；") : problem) }
+        if recordingPaused || status != "正常" {
+            return .init(level: .monitoring, text: HistoryView.statusLabel(recordingPaused && status == "正常" ? "用户暂停" : status))
+        }
+        if let queue = pasteQueueStatus { return .init(level: .queue, text: queue) }
+        if !message.isEmpty { return .init(level: .notice, text: message) }
+        switch historyFocus {
+        case .search where !queryEmpty: return .init(level: .hint, text: "↩ 进入结果")
+        case .results where selectedID != nil:
+            return .init(level: .hint, text: settings.defaultAction == .directPaste ? "↩ 粘贴到 \(MacApplicationClient.targetName(target))" : "↩ 复制")
+        default: return nil
         }
     }
     /// 成功结果静默或短提示；回退、失败与智能粘贴降级保留原因，by AI.Coding。
@@ -122,7 +160,7 @@ import LocalClipCore
     private(set) var scrollRestoration: ScrollRestoration? { get { listState[\.scrollRestoration] } set { listState[\.scrollRestoration] = newValue } }
     private var viewportPageSize = 50
     private var historyViewport: CGFloat = 0
-    private var historyStride: CGFloat = 195
+    private var historyStride: CGFloat = HistoryView.cardSide(height: 340) + HistoryView.cardSpacing
     private var scrollAnchor: (id: ClipID, relative: CGFloat)?
     private var historyOffset: CGFloat = 0
     private var started = false
@@ -176,13 +214,14 @@ import LocalClipCore
     func dismissPopoverForBackdropClick(count: Int, timestamp: TimeInterval? = nil) -> Bool {
         if count <= 1, timestamp == nil || timestamp != dismissedPopoverEventTime { dismissedPopoverClickSequence = false }
         if dismissedPopoverClickSequence { return true }
-        guard contentEditorPresented || showingDetail || showingFilters || showingCategoryEditor || transformMenu != nil else { return false }
+        guard contentEditorPresented || showingDetail || showingFilters || showingStatusDetail || showingCategoryEditor || transformMenu != nil else { return false }
         dismissedPopoverClickSequence = true
         dismissedPopoverEventTime = timestamp
         if contentEditorPresented { requestCancelContentEdit(); return true }
         if showingCategoryEditor && savingCategory { return true }
         if showingDetail { showingDetail = false }
         if showingFilters { showingFilters = false }
+        if showingStatusDetail { showingStatusDetail = false }
         if showingCategoryEditor { showingCategoryEditor = false }
         transformMenu?.close()
         return true
@@ -261,7 +300,7 @@ import LocalClipCore
     /// 列表先刷新；来源和空间仅在相关入口读取，事实仍来自存储，by AI.Coding。
     public func start(resumeCapture: Bool = false) async throws {
         settings = try await store.settings()
-        configureHistoryViewport(width: historyViewport, cardWidth: HistoryView.cardSide(height: settings.panelHeight, filtered: hasFilterStrip))
+        configureHistoryViewport(width: historyViewport, cardWidth: HistoryView.cardSide(height: settings.panelHeight))
         categories = try await store.categories()
         capture.onState = { [weak self] state in self?.acceptCaptureState(state) }
         capture.onSourcePending = { [weak self] source in
@@ -518,7 +557,7 @@ import LocalClipCore
                 // 新记录插入头部时保留正在浏览的卡片与卡内偏移，不用旧像素位置显示别的记录，by AI.Coding。
                 if preserveWindow, historyOffset > 0,
                    let anchor = scrollAnchor, let index = visible.firstIndex(where: { $0.id == anchor.id }) {
-                    let offset = max(0, 24 + CGFloat(index) * historyStride + anchor.relative)
+                    let offset = max(0, HistoryView.cardInset + CGFloat(index) * historyStride + anchor.relative)
                     if abs(offset - historyOffset) > 0.5 { scrollRestoration = .init(offset: offset) }
                 }
                 listState.update {
@@ -554,8 +593,8 @@ import LocalClipCore
     /// 首屏只读足够填满可见区域的摘要；尺寸变化只补不足，不截断浏览窗口或选择，by AI.Coding。
     func configureHistoryViewport(width: CGFloat, cardWidth: CGFloat) {
         guard width.isFinite, cardWidth.isFinite, width > 48, cardWidth > 0 else { return }
-        historyViewport = width; historyStride = cardWidth + 16
-        viewportPageSize = min(50, max(1, Int(ceil((width - 48 + 16) / historyStride))))
+        historyViewport = width; historyStride = cardWidth + HistoryView.cardSpacing
+        viewportPageSize = min(50, max(1, Int(ceil((width - 2 * HistoryView.cardInset + HistoryView.cardSpacing) / historyStride))))
         fillHistoryViewport()
     }
     /// 发布后复核最新视口；补屏查询只取缺少的行，零偏移也不会一直留空，by AI.Coding。
@@ -569,11 +608,11 @@ import LocalClipCore
         guard historyViewport > 0, offset.isFinite else { return }
         historyOffset = max(0, offset)
         if !items.isEmpty {
-            let index = min(items.count - 1, max(0, Int(floor((historyOffset - 24) / historyStride))))
-            scrollAnchor = (items[index].id, historyOffset - (24 + CGFloat(index) * historyStride))
+            let index = min(items.count - 1, max(0, Int(floor((historyOffset - HistoryView.cardInset) / historyStride))))
+            scrollAnchor = (items[index].id, historyOffset - (HistoryView.cardInset + CGFloat(index) * historyStride))
         }
         guard historyOffset > 1, !dragActive, !historyBusy, hasMore else { return }
-        let end = 48 + CGFloat(items.count) * historyStride - 16
+        let end = 2 * HistoryView.cardInset + CGFloat(items.count) * historyStride - HistoryView.cardSpacing
         if end - (historyOffset + historyViewport) < historyViewport { loadMore() }
     }
     /// 分页携带同输入和storeRevision；失效时重新查询。
@@ -809,7 +848,7 @@ import LocalClipCore
             else { requestCancelContentEdit(); return }
         }
         guard canDisplayContents, panelVisible, !dragActive, contains(id), contentEditor == nil else { return }
-        cancelRename(); showingDetail = false; showingCategoryEditor = false; showingFilters = false
+        cancelRename(); showingDetail = false; showingCategoryEditor = false; showingFilters = false; showingStatusDetail = false
         let request = UUID(); contentEditRequest = request
         Task {
             do {
@@ -1333,7 +1372,7 @@ import LocalClipCore
                 activeSearchSignature = currentSearchSignature; locatedSearchSignature = currentSearchSignature
                 listState.update {
                     items = visible; cursor = next; loading = false; select(wanted)
-                    scrollRestoration = .init(offset: max(0, 24 + CGFloat(index) * historyStride))
+                    scrollRestoration = .init(offset: max(0, HistoryView.cardInset + CGFloat(index) * historyStride))
                 }
                 focusResults?()
             } catch is CancellationError { }
