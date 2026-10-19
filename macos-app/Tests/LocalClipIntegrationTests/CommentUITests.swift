@@ -435,6 +435,16 @@ import LocalClipCore
         model.toggleQuickLook(); try await Task.sleep(for: .milliseconds(150))
         #expect(!model.showingDetail)
     }
+    /// 入队触发的关闭立即隐藏，不走用户关闭的淡出，by AI.Coding。
+    @Test func queueClosesPanelWithoutFade() async throws {
+        let (root, _, model) = try await setup()
+        defer { try? FileManager.default.removeItem(at: root) }
+        var closes: [Bool] = []
+        model.closePanel = { closes.append($0) }; model.registerQueueShortcut = { _ in true }
+        model.startPasteQueue(model.items.prefix(2).map(\.id))
+        #expect(closes == [false])
+        model.stopPasteQueue()
+    }
     /// 状态槽优先级：错误 > 监控异常 > 队列 > 通知 > 提示；旧通知计时器不能清掉同文字的新错误，by AI.Coding。
     @Test func statusSlotPriorityAndSeverity() async throws {
         let (root, _, model) = try await setup()

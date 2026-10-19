@@ -316,7 +316,10 @@ import LocalClipCore
     /// 导出元数据与预览共用注入时钟，by AI.Coding。
     var previewClock: any ClipClock { clock }
     private var categoryDrag: (token: String, ids: [ClipID], expiresAt: Instant)?
-    public var closePanel: (() -> Void)?
+    /// 参数为是否淡出：用户关闭淡出，粘贴与入队立即隐藏，by AI.Coding。
+    public var closePanel: ((Bool) -> Void)?
+    /// 入场位移（pt），由面板显示驱动；减弱动态效果时保持0，by AI.Coding。
+    @Published var panelEntrance: CGFloat = 0
     public var openSettings: (() -> Void)?
     public var quitApplication: (() -> Void)?
     public var registerShortcut: ((Shortcut) -> Bool)?
@@ -1472,7 +1475,7 @@ import LocalClipCore
         pasteQueueTask?.cancel(); pasteQueueTask = nil; pasteQueueGeneration = UUID(); pasteQueueBusy = false
         activeQueueShortcut = shortcut
         pasteQueue = ids; pasteQueuePosition = 0; touchPasteQueue()
-        closePanel?()
+        closePanel?(false)
         showPasteFeedback?("已加入粘贴队列 0/\(ids.count) · \(HotKeyService.label(shortcut)) 粘贴下一项", false)
         pasteQueueChanged?()
     }

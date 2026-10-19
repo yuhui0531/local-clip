@@ -29,7 +29,8 @@ struct SmartPastePlan {
     private let finder = FinderFileService()
     private var performing = false
     public private(set) var smartPasteNotice: String?
-    public var closePanel: (() -> Void)?
+    /// 参数为是否淡出；粘贴与队列触发的关闭立即隐藏，by AI.Coding。
+    public var closePanel: ((Bool) -> Void)?
     /// Finder 复制暂存登记目录；nil 时保持原有进程内收尾（测试默认）。
     public var copyJournal: URL?
     public init(board: any PasteboardClient, applications: any ApplicationClient, store: any HistoryRepository, capture: CaptureCoordinator, clock: any ClipClock = SystemClock()) {
@@ -105,7 +106,7 @@ struct SmartPastePlan {
                 return safeFallback("目标已变化，请确认输入位置后手动粘贴")
             }
             try Task.checkCancellation()
-            closePanel?()
+            closePanel?(false)
             guard applications.isFrontmost(target) || applications.activate(target) else { return safeFallback("请确认目标位置后手动粘贴") }
             let deadline = ContinuousClock.now + .milliseconds(500)
             while !applications.isFrontmost(target) && ContinuousClock.now < deadline {
@@ -243,7 +244,7 @@ struct SmartPastePlan {
         if let current = applications.target(), current.pid != target.pid || current.bundleID != target.bundleID || current.launchedAt != target.launchedAt {
             return fallback("目标已变化，请在Finder手动粘贴", receipt: receipt)
         }
-        closePanel?()
+        closePanel?(false)
         guard applications.activate(target) else { return fallback("请在Finder手动粘贴", receipt: receipt) }
         let deadline = ContinuousClock.now + .milliseconds(500)
         while !applications.isFrontmost(target) && ContinuousClock.now < deadline {

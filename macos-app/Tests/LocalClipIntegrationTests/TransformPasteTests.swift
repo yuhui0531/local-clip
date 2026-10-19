@@ -61,7 +61,7 @@ import Testing
         let h = try harness(); defer { try? FileManager.default.removeItem(at: h.root) }
         let id = try await ingest(h.store, "{\n  \"a\": oops\n}")
         h.raw.user("USER-CLIPBOARD"); let count = h.raw.count
-        var closed = false; h.paste.closePanel = { closed = true }
+        var closed = false; h.paste.closePanel = { _ in closed = true }
         let result = await h.paste.perform(.init(ids: [id], action: .directPaste, target: h.apps.remembered, transform: .formatJSON))
         guard case .failed(let message) = result else { Issue.record("Expected failure, got \(result)"); return }
         #expect(message.hasPrefix("不是有效 JSON") && message.contains("列"), "\(message)")

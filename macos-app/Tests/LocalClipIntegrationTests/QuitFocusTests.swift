@@ -58,6 +58,17 @@ import Testing
         #expect(!focus.shouldDismiss(panelIsKey: false, ownsKeyWindow: false, dragging: false, confirming: false, hasModal: false, pinned: true))
         #expect(focus.shouldDismiss(panelIsKey: false, ownsKeyWindow: false, dragging: false, confirming: false, hasModal: false, pinned: false))
     }
+    /// 淡出重入：旧代次结束不得隐藏已重新打开的面板；当前代次结束才隐藏并复原透明度与鼠标，by AI.Coding。
+    @Test func panelFadeGenerationGuardsReopen() {
+        _ = NSApplication.shared
+        final class Counting: NSWindow { var orderOuts = 0; override func orderOut(_ sender: Any?) { orderOuts += 1; super.orderOut(sender) } }
+        let panel = Counting(contentRect: .init(x: 0, y: 0, width: 40, height: 40), styleMask: .borderless, backing: .buffered, defer: true)
+        panel.alphaValue = 0.4; panel.ignoresMouseEvents = true
+        AppDelegate.finishPanelFade(panel, generation: 1, current: 2)
+        #expect(panel.orderOuts == 0 && panel.alphaValue < 1 && panel.ignoresMouseEvents)
+        AppDelegate.finishPanelFade(panel, generation: 2, current: 2)
+        #expect(panel.orderOuts == 1 && panel.alphaValue == 1 && !panel.ignoresMouseEvents && !panel.isVisible)
+    }
     /// 面板兜底的Esc与取消命令走统一收起回调，不再绕过状态复位。
     @Test func panelCancelRoutesThroughDismissal() throws {
         _ = NSApplication.shared

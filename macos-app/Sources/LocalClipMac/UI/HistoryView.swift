@@ -49,7 +49,7 @@ public struct HistoryView: View {
                             .popover(isPresented: $model.showingFilters) { FilterEditor(model: model) }
                         HistoryMoreMenu(model: model, footer: model.listState.footerState)
                         ToolbarIconButton(symbol: model.pinned ? "pin.fill" : "pin", tint: model.pinned ? .accentColor : nil, help: model.pinned ? "取消置顶" : "置顶（失焦不隐藏）", label: model.pinned ? "取消置顶" : "置顶") { model.pinned.toggle(); model.panelInteractionChanged?() }
-                        ToolbarIconButton(symbol: "xmark", help: "关闭 · Esc") { model.closePanel?() }
+                        ToolbarIconButton(symbol: "xmark", help: "关闭 · Esc") { model.closePanel?(true) }
                     }
                 }.padding(.horizontal, Self.cardInset).frame(height: Self.toolbarHeight)
                 HistoryStrip(model: model, list: model.listState, cardHeight: cardHeight,
@@ -61,6 +61,7 @@ public struct HistoryView: View {
                 .clipShape(UnevenRoundedRectangle(topLeadingRadius: 18, topTrailingRadius: 18))
                 .overlay(UnevenRoundedRectangle(topLeadingRadius: 18, topTrailingRadius: 18).strokeBorder(.white.opacity(0.30), lineWidth: 1))
                 .clipped()
+                .offset(y: model.panelEntrance)
                 .onGeometryChange(for: CGSize.self) { CGSize(width: $0.size.width, height: cardHeight) } action: { size in
                     model.configureHistoryViewport(width: size.width, cardWidth: size.height)
                 }
@@ -195,7 +196,7 @@ private struct HistorySearchInput: View {
     var body: some View {
         let value = footer.snapshot
         SearchField(text: $input.literal, focus: focus, onChange: { model.searchChanged() },
-            onNavigate: model.navigate, onEnter: { model.focusResults?() }, onEscape: { if model.handleEscape() { model.closePanel?() } },
+            onNavigate: model.navigate, onEnter: { model.focusResults?() }, onEscape: { if model.handleEscape() { model.closePanel?(true) } },
             placeholder: "搜索 \(value.itemCount)\(value.hasMore ? "+" : "") 条", onRegister: { model.searchField = $0 })
             .overlay(alignment: .trailing) {
                 if value.loading { ProgressView().controlSize(.mini).padding(.trailing, 26).accessibilityLabel("正在读取") }
@@ -283,7 +284,7 @@ private struct HistoryScroller: View {
                 .onScrollGeometryChange(for: HistoryScrollMetrics.self) { geometry in
                     HistoryScrollMetrics(offset: max(0, geometry.contentOffset.x), maximum: max(0, geometry.contentSize.width - geometry.containerSize.width), viewport: geometry.containerSize.width)
                 } action: { _, metrics in scrollWheelState.update(metrics); strip.model.historyScrolled(offset: metrics.offset, epoch: epoch) }
-                .background(HistoryScrollWheel(state: scrollWheelState) { x in scrollPosition.scrollTo(x: x) })
+                .background(HistoryScrollWheel(state: scrollWheelState, presented: { strip.model.panelVisible }) { x in scrollPosition.scrollTo(x: x) })
                 .onChange(of: strip.model.selectedID) { _, id in
                     if let id, let index = strip.model.items.firstIndex(where: { $0.id == id }), scrollWheelState.needsReveal(index: index, cardWidth: strip.cardHeight) {
                         proxy.scrollTo(id)

@@ -52,6 +52,11 @@ import LocalClipCore
     private var outsideClickMonitor: Any?
     private var localClickMonitor: Any?
     private var focusObservation: NSKeyValueObservation?
+    /// 面板是否处于打开状态；淡出期间窗口仍可见但已视为关闭，by AI.Coding。
+    private var panelPresented = false
+    /// 每次显示或关闭递增；旧淡出结束时代次已变则不隐藏重新打开的面板，by AI.Coding。
+    private var panelAnimationGeneration = 0
+    private var panelFade: Task<Void, Never>?
     var requestTermination: () -> Void = { NSApp.terminate(nil) }
     private let instances = SingleInstanceService()
     private var startup: Task<Void, Never>?
@@ -118,7 +123,7 @@ import LocalClipCore
             // 在首次查询前提供屏幕尺寸；SwiftUI随后用实际视口修正，不先读固定50条，by AI.Coding。
             model.configureHistoryViewport(width: NSScreen.main?.frame.width ?? 1400, cardWidth: HistoryView.cardSide(height: initialSettings.panelHeight))
             model.panelVisibilityChanged(false)
-            model.closePanel = { [weak self] in self?.dismissHistory() }
+            model.closePanel = { [weak self] animated in self?.dismissHistory(animated: animated) }
             // 非激活面板不抢前台；置顶时前台应用即当前要粘贴的目标，by AI.Coding。
             model.refreshPinnedTarget = { [weak self, weak model] in
                 guard let self, let model, let target = self.applications.target() else { return }
@@ -159,7 +164,7 @@ import LocalClipCore
                         UpdateChecker.shared.checkIfDue(enabled: model.settings.autoCheckUpdates)
                     }
                     #if DEBUG
-                    GUIAcceptanceProbe.attach(model: model, board: access, show: { [weak self] in self?.showHistory() }, hide: { [weak self] in self?.dismissHistory() })
+                    GUIAcceptanceProbe.attach(model: model, board: access, show: { [weak self] in self?.showHistory() }, hide: { [weak self] in self?.dismissHistory(animated: false) })
                     #endif
                 } catch { model.message = "启动恢复失败，未开启采集"; model.status = "存储异常"; updateMenu() }
             }
@@ -376,7 +381,7 @@ import LocalClipCore
     @objc private func stopPasteQueue() { model?.stopPasteQueue() }
     /// 同一快捷键按实际可见状态切换；关闭不刷新历史或重记粘贴目标。
     private func toggleHistory() {
-        if panel?.isVisible == true { dismissHistory() }
+        if panelPresented { dismissHistory() }
         else { showHistory() }
     }
     /// 记住外部目标后展示面板，铺满当前显示器底边，禁止拖动和缩放。
@@ -427,9 +432,23 @@ import LocalClipCore
             model.actualPanelHeight = panelHeight
             panel.sharingType = model.settings.excludeFromSharing ? .none : .readOnly
             placePanel(to: screen)
+            // 窗口frame一次定为最终值不移动；内容在窗口内位移12pt并淡入，减弱动态效果时直接显示。
+            // 起始位移先于首帧布局写入，随后的动画才有起点，by AI.Coding。
+            let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+            panelAnimationGeneration += 1; panelFade?.cancel(); panelFade = nil
+            panel.ignoresMouseEvents = false
+            if !panel.isVisible { panel.alphaValue = reduceMotion ? 1 : 0; if !reduceMotion { model.panelEntrance = 12 } }
             panel.contentView?.layoutSubtreeIfNeeded()
             panel.contentView?.displayIfNeeded()
+            panelPresented = true
             panel.makeKeyAndOrderFront(nil)
+            if panel.alphaValue < 1 {
+                NSAnimationContext.runAnimationGroup {
+                    $0.duration = 0.18; $0.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 0.9, 0.3, 1)
+                    panel.animator().alphaValue = 1
+                }
+            }
+            if model.panelEntrance != 0 { withAnimation(.timingCurve(0.2, 0.9, 0.3, 1, duration: 0.18)) { model.panelEntrance = 0 } }
             // U-01第2步（打开即聚焦结果）须先通过IME首键交互验收，未验证前仍聚焦搜索框，by AI.Coding。
             model.focusRequest = UUID(); model.searchFocusRequest = UUID()
         }
@@ -488,11 +507,27 @@ import LocalClipCore
         model.actualPanelHeight = model.settings.panelHeight; placePanel(to: panel?.screen)
     }
     /// 隐藏历史和其详情，不激活旧目标，也不改变系统剪贴板。
-    private func dismissHistory() {
+    private func dismissHistory(animated: Bool = true) {
+        guard panelPresented else { return }
+        panelPresented = false
         focusState.reset()
         model?.panelVisibilityChanged(false)
         focusDismissal?.cancel(); model?.showingDetail = false; model?.showingCategoryEditor = false; model?.showingFilters = false; model?.showingStatusDetail = false
-        panel?.orderOut(nil)
+        panelAnimationGeneration += 1; panelFade?.cancel(); panelFade = nil
+        if let panel {
+            // 用户关闭淡出0.12s且期间不接收鼠标；粘贴与入队立即隐藏，by AI.Coding。
+            if animated && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion && panel.isVisible {
+                let generation = panelAnimationGeneration
+                panel.ignoresMouseEvents = true
+                // 不用异步动画completion：其闭包跨并发边界，严格并发检查下无法编译，by AI.Coding。
+                NSAnimationContext.runAnimationGroup({ $0.duration = 0.12; panel.animator().alphaValue = 0 }, completionHandler: nil)
+                panelFade = Task { [weak self] in
+                    try? await Task.sleep(for: .milliseconds(120))
+                    guard let self else { return }
+                    Self.finishPanelFade(panel, generation: generation, current: self.panelAnimationGeneration)
+                }
+            } else { Self.finishPanelFade(panel, generation: panelAnimationGeneration, current: panelAnimationGeneration) }
+        }
         #if DEBUG
         if let model { GUIAcceptanceProbe.event("panel-dismissed", model) }
         #endif
@@ -501,10 +536,10 @@ import LocalClipCore
     private func scheduleFocusDismissal(externalInteraction: Bool = false, at time: TimeInterval = ProcessInfo.processInfo.systemUptime) {
         if externalInteraction { focusState.externalInteraction(at: time) }
         focusDismissal?.cancel()
-        guard let panel, panel.isVisible else { return }
+        guard let panel, panelPresented else { return }
         focusDismissal = Task { [weak self] in
             do { try await Task.sleep(for: .milliseconds(60)) } catch { return }
-            guard let self, !Task.isCancelled, panel.isVisible else { return }
+            guard let self, !Task.isCancelled, self.panelPresented else { return }
             let ownsKey = Self.ownsHistoryWindow(NSApp.keyWindow, panel: panel,
                 settings: self.settingsWindow, feedback: self.feedbackPanel,
                 showingDetail: self.model?.showingDetail == true,
@@ -516,6 +551,11 @@ import LocalClipCore
                 hasModal: NSApp.modalWindow != nil, pinned: self.model?.pinned == true) else { return }
             self.dismissHistory()
         }
+    }
+    /// 淡出结束只在代次未变时隐藏并复原；重新打开已递增代次，旧结束不得隐藏面板，by AI.Coding。
+    static func finishPanelFade(_ panel: NSWindow, generation: Int, current: Int) {
+        guard generation == current else { return }
+        panel.orderOut(nil); panel.alphaValue = 1; panel.ignoresMouseEvents = false
     }
     /// 父子窗口与自有弹窗共享面板交互，设置和反馈不属于历史，by AI.Coding。
     static func ownsHistoryWindow(_ window: NSWindow?, panel: NSWindow?, settings: NSWindow?,
@@ -666,7 +706,7 @@ import LocalClipCore
         }
         // 全局监视不接收本应用事件；面板真实重入和点击设置由本地监视区分，by AI.Coding。
         localClickMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak self] event in
-            guard let self, let panel = self.panel, panel.isVisible else { return event }
+            guard let self, let panel = self.panel, self.panelPresented else { return event }
             if Self.ownsHistoryWindow(event.window, panel: panel, settings: self.settingsWindow, feedback: self.feedbackPanel,
                 showingDetail: self.model?.showingDetail == true, showingCategoryEditor: self.model?.showingCategoryEditor == true,
                 showingFilters: self.model?.showingFilters == true || self.model?.showingStatusDetail == true, showingContentEditor: self.model?.contentEditorPresented == true) {
@@ -762,7 +802,9 @@ import LocalClipCore
                 }
                 return event
             }
-            guard let panel = self.panel, panel.isVisible, let model = self.model,
+            // 淡出中的面板不再接收按键，避免改动搜索词或触发历史操作，by AI.Coding。
+            if let panel = self.panel, !self.panelPresented, panel.isVisible, event.window === panel { return nil }
+            guard let panel = self.panel, self.panelPresented, let model = self.model,
                   Self.ownsHistoryWindow(event.window, panel: panel, settings: self.settingsWindow, feedback: self.feedbackPanel,
                       showingDetail: model.showingDetail, showingCategoryEditor: model.showingCategoryEditor,
                       showingFilters: model.showingFilters || model.showingStatusDetail, showingContentEditor: model.contentEditorPresented) || (event.window == nil && panel.isKeyWindow) else { return event }

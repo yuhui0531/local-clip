@@ -34,6 +34,8 @@ struct HistoryScrollMetrics: Equatable {
 
 @MainActor struct HistoryScrollWheel: NSViewRepresentable {
     var state: State
+    /// 面板呈现状态由模型提供；淡出期间窗口仍可见但不再消费滚轮，by AI.Coding。
+    var presented: () -> Bool = { true }
     var onScroll: (CGFloat) -> Void
 
     /// 背景只用于限定事件区域，不接管卡片点击和双击。
@@ -45,7 +47,7 @@ struct HistoryScrollMetrics: Equatable {
 
     /// 真实滚动几何同步边界；尚未渲染的连续滚轮增量不能丢失。
     func updateNSView(_ nsView: NSView, context: Context) {
-        context.coordinator.onScroll = onScroll
+        context.coordinator.onScroll = onScroll; context.coordinator.presented = presented
     }
 
     func makeCoordinator() -> Coordinator { Coordinator(state: state) }
@@ -90,6 +92,7 @@ struct HistoryScrollMetrics: Equatable {
         private var monitor: Any?
         private let state: State
         var onScroll: ((CGFloat) -> Void)?
+        var presented: () -> Bool = { true }
 
         init(state: State) { self.state = state }
 
@@ -98,7 +101,7 @@ struct HistoryScrollMetrics: Equatable {
             region = view
             monitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel, .leftMouseDown]) { [weak self] event in
                 guard let self, let region = self.region, let window = region.window,
-                      window.isVisible, event.window === window, !region.isHiddenOrHasHiddenAncestor,
+                      window.isVisible, self.presented(), event.window === window, !region.isHiddenOrHasHiddenAncestor,
                       region.visibleRect.contains(region.convert(event.locationInWindow, from: nil)) else { return event }
                 if event.type == .leftMouseDown {
                     self.state.pendingOffset = nil
