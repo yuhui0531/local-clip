@@ -21,6 +21,10 @@ struct SmartPastePlan {
 }
 
 @MainActor public final class PasteCoordinator {
+    /// 权限回退原因供状态层准确识别，不能按文案片段误清除其他错误，by AI.Coding。
+    static let permissionFallbackReason = "请授予当前LocalClip辅助功能权限，之后在目标应用重新打开历史"
+    /// 读取当前进程真实权限；状态刷新不触发授权引导或补发粘贴。
+    var pastePermissionGranted: Bool { applications.permitted }
     private let board: any PasteboardClient
     private let applications: any ApplicationClient
     private let store: any HistoryRepository
@@ -99,7 +103,7 @@ struct SmartPastePlan {
             // 权限失败留在面板显示原因，不能先关闭面板让用户以为粘贴无响应。
             guard applications.permitted else {
                 applications.requestPastePermission()
-                return safeFallback("请授予当前LocalClip辅助功能权限，之后在目标应用重新打开历史")
+                return safeFallback(Self.permissionFallbackReason)
             }
             guard let target = request.target, applications.isAlive(target) else { return safeFallback("请选择目标应用后粘贴") }
             // 用户已经转向其他应用时不把焦点抢回旧目标。

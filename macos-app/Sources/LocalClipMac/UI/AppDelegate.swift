@@ -171,6 +171,15 @@ import LocalClipCore
                     #if DEBUG
                     GUIAcceptanceProbe.attach(model: model, board: access, show: { [weak self] in self?.showHistory() }, hide: { [weak self] in self?.dismissHistory(animated: false) })
                     #endif
+                    // 等首屏查询完成再隐藏预热；若用户已经打开，则复用其面板，不重复创建或夺取焦点。
+                    let preparationDeadline = ContinuousClock.now + .seconds(2)
+                    while model.historyBusy && panel == nil && ContinuousClock.now < preparationDeadline && !Task.isCancelled {
+                        try? await Task.sleep(for: .milliseconds(20))
+                    }
+                    if !Task.isCancelled, !model.historyBusy, panel == nil {
+                        let rect = NSScreen.main?.frame ?? NSRect(x: 0, y: 0, width: 1400, height: 380)
+                        prepareHistoryPanel(frame: rect, height: Self.clampedPanelHeight(model.settings.panelHeight, screenHeight: rect.height))
+                    }
                 } catch { model.message = "启动恢复失败，未开启采集"; model.status = "存储异常"; updateMenu() }
             }
             observeLifecycle(); installKeyboard()
@@ -413,36 +422,21 @@ import LocalClipCore
         model.target = lastExternal
         model.revalidateVisibleContent()
         if model.items.isEmpty && !model.historyBusy { model.refresh() }
-        let initialFrame = NSRect(x: rect.minX, y: rect.minY, width: rect.width, height: panelHeight)
-        if panel == nil {
-            // 非激活面板保留外部应用身份与文档焦点；搜索框仍可成为key接收键盘。
-            // 先确定最终屏幕尺寸再挂载SwiftUI，避免1400pt初始布局到全宽的可见跳变。
-            let panel = ClipPanel(contentRect: initialFrame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
-            panel.title = "LocalClip"; panel.isOpaque = false; panel.backgroundColor = .clear; panel.hasShadow = true
-            panel.isMovable = false; panel.isMovableByWindowBackground = false
-            panel.animationBehavior = .none
-            // 底部覆盖Dock所在区域，避免按钮被Dock遮挡；关闭面板即恢复原桌面。
-            panel.isReleasedWhenClosed = false; panel.level = .statusBar; panel.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
-            // 窗口尺寸由屏幕和高度设置唯一决定，不让SwiftUI固有尺寸改变内容视口。
-            let host = CategoryDropHostingView(rootView: HistoryView(model: model), model: model)
-            host.sizingOptions = []
-            panel.contentView = host; panel.minSize = NSSize(width: 680, height: 280)
-            panel.onCancel = { [weak self] in if self?.model?.handleEscape() != false { self?.dismissHistory() } }
-            panel.onClose = { [weak self] in self?.dismissHistory() }
-            self.panel = panel
-            focusObservation = Self.observeHistoryFocus(of: panel, model: model)
-        }
+        // 显示周期与入场起点必须在挂载/布局前确定；首帧后改代次会重启文件预览并再次请求焦点，by AI.Coding。
+        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        model.actualPanelHeight = panelHeight
+        model.focusRequest = UUID(); model.searchFocusRequest = UUID()
+        if panel?.isVisible != true { model.panelEntrance = reduceMotion ? 0 : 12 }
+        prepareHistoryPanel(frame: rect, height: panelHeight)
         if let panel {
             panelScreenID = screen?.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber
-            model.actualPanelHeight = panelHeight
             panel.sharingType = model.settings.excludeFromSharing ? .none : .readOnly
             placePanel(to: screen)
             // 窗口frame一次定为最终值不移动；内容在窗口内位移12pt并淡入，减弱动态效果时直接显示。
             // 起始位移先于首帧布局写入，随后的动画才有起点，by AI.Coding。
-            let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
             panelAnimationGeneration += 1; panelFade?.cancel(); panelFade = nil
             panel.ignoresMouseEvents = false
-            if !panel.isVisible { panel.alphaValue = reduceMotion ? 1 : 0; if !reduceMotion { model.panelEntrance = 12 } }
+            if !panel.isVisible { panel.alphaValue = reduceMotion ? 1 : 0 }
             panel.contentView?.layoutSubtreeIfNeeded()
             panel.contentView?.displayIfNeeded()
             panelPresented = true
@@ -454,9 +448,34 @@ import LocalClipCore
                 }
             }
             if model.panelEntrance != 0 { withAnimation(.timingCurve(0.2, 0.9, 0.3, 1, duration: 0.18)) { model.panelEntrance = 0 } }
-            // U-01第2步（打开即聚焦结果）须先通过IME首键交互验收，未验证前仍聚焦搜索框，by AI.Coding。
-            model.focusRequest = UUID(); model.searchFocusRequest = UUID()
         }
+    }
+    /// 只创建、布局隐藏面板，不置前、不变更目标应用；首屏成本不留到用户第一次点击，by AI.Coding。
+    private func prepareHistoryPanel(frame rect: NSRect, height panelHeight: CGFloat) {
+        guard panel == nil, let model else { return }
+        let began = ContinuousClock.now
+        model.actualPanelHeight = panelHeight
+        let initialFrame = NSRect(x: rect.minX, y: rect.minY, width: rect.width, height: panelHeight)
+        // 非激活面板保留外部应用身份与文档焦点；搜索框仍可成为key接收键盘。
+        // 先确定最终屏幕尺寸再挂载SwiftUI，避免1400pt初始布局到全宽的可见跳变。
+        let panel = ClipPanel(contentRect: initialFrame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.title = "LocalClip"; panel.isOpaque = false; panel.backgroundColor = .clear; panel.hasShadow = true
+        panel.isMovable = false; panel.isMovableByWindowBackground = false
+        panel.animationBehavior = .none
+        // 底部覆盖Dock所在区域，避免按钮被Dock遮挡；关闭面板即恢复原桌面。
+        panel.isReleasedWhenClosed = false; panel.level = .statusBar; panel.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
+        // 窗口尺寸由屏幕和高度设置唯一决定，不让SwiftUI固有尺寸改变内容视口。
+        let host = CategoryDropHostingView(rootView: HistoryView(model: model), model: model)
+        host.sizingOptions = []
+        panel.contentView = host; panel.minSize = NSSize(width: 680, height: 280)
+        panel.onCancel = { [weak self] in if self?.model?.handleEscape() != false { self?.dismissHistory() } }
+        panel.onClose = { [weak self] in self?.dismissHistory() }
+        self.panel = panel
+        focusObservation = Self.observeHistoryFocus(of: panel, model: model)
+        panel.alphaValue = 0
+        panel.contentView?.layoutSubtreeIfNeeded()
+        panel.contentView?.displayIfNeeded()
+        if model.settings.timingEnabled { StageTiming.record("history_panel_prepared", since: began, count: model.items.count) }
     }
     /// 面板高度限制在280–520pt，且不超过所在屏幕。
     private static func clampedPanelHeight(_ height: Double, screenHeight: CGFloat) -> Double { min(max(280, height), min(520, screenHeight)) }

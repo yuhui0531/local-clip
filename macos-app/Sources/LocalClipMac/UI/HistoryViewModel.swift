@@ -108,7 +108,16 @@ import LocalClipCore
     @Published public private(set) var previewMessage = ""
     @Published public var status = "准备中"
     /// 错误与警告直接赋值message，默认按失败级别显示；只有notice()降为短暂通知，by AI.Coding。
-    @Published public var message = "" { didSet { if messageSeverity != .failure { messageSeverity = .failure } } }
+    @Published public var message = "" {
+        didSet {
+            if messageSeverity != .failure { messageSeverity = .failure }
+            // 新操作或手动关闭接管状态槽，旧授权检查不能清掉后来的消息，by AI.Coding。
+            waitingForPastePermission = false
+            permissionNoticeTask?.cancel(); permissionNoticeTask = nil
+        }
+    }
+    private var waitingForPastePermission = false
+    private var permissionNoticeTask: Task<Void, Never>?
     enum MessageSeverity { case notice, failure }
     @Published private(set) var messageSeverity = MessageSeverity.failure
     private var noticeClear: Task<Void, Never>?
@@ -159,12 +168,32 @@ import LocalClipCore
     }
     /// 成功结果静默或短提示；回退、失败与智能粘贴降级保留原因，by AI.Coding。
     private func showPasteResult(_ result: PasteResult) {
+        if result == .fallback(PasteCoordinator.permissionFallbackReason) {
+            message = result.message
+            waitingForPastePermission = true
+            refreshPastePermissionNotice()
+            return
+        }
         if let notice = paste.smartPasteNotice { message = result.message + "；" + notice; return }
         switch result {
         case .copied: notice("已复制")
         case .commandSent: notice(result.message)
         case .filesCopied(let text): notice(text)
         case .fallback, .failed: message = result.message
+        }
+    }
+    /// 仅可见且仍有授权警告时检查权限；隐藏后停止，重开立即复核，by AI.Coding。
+    private func refreshPastePermissionNotice() {
+        permissionNoticeTask?.cancel(); permissionNoticeTask = nil
+        guard waitingForPastePermission, panelVisible else { return }
+        if paste.pastePermissionGranted { message = ""; return }
+        permissionNoticeTask = Task { [weak self] in
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .milliseconds(600)) } catch { return }
+                guard let self, self.panelVisible, self.waitingForPastePermission else { return }
+                // 授权成功只撤销已过时的警告，不能向旧目标自动补发粘贴。
+                if self.paste.pastePermissionGranted { self.message = ""; return }
+            }
         }
     }
     public private(set) var loading: Bool { get { listState[\.loading] } set { listState[\.loading] = newValue } }
@@ -401,6 +430,7 @@ import LocalClipCore
     /// 隐藏期间只记失效，30秒后回收离屏图片；快速重开取消清理，by AI.Coding。
     public func panelVisibilityChanged(_ visible: Bool) {
         panelVisible = visible
+        refreshPastePermissionNotice()
         thumbnailCleanup?.cancel(); thumbnailCleanup = nil
         if !visible {
             // 尚未打开的编辑请求与Space预览不在隐藏面板上弹出；已经输入的草稿保留到下次打开。

@@ -27,7 +27,11 @@ public struct SearchField: NSViewRepresentable {
         if field.placeholderString != placeholder { field.placeholderString = placeholder }
         if context.coordinator.focus != focus {
             context.coordinator.focus = focus
-            DispatchQueue.main.async { field.window?.makeFirstResponder(field) }
+            // 隐藏预热只准备布局；实际打开的新focus令牌才允许接管输入焦点，by AI.Coding。
+            DispatchQueue.main.async {
+                guard let window = field.window, window.isVisible else { return }
+                window.makeFirstResponder(field)
+            }
         }
     }
     public func makeCoordinator() -> Coordinator { Coordinator(self) }

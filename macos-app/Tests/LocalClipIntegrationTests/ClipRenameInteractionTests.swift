@@ -88,10 +88,11 @@ private final class RenameClock: ClipClock, @unchecked Sendable {
         defer { window.contentView = nil; window.close() }
         host.layoutSubtreeIfNeeded()
         func bridges(_ v: NSView) -> [HistoryDragBridge.DragView] { (v as? HistoryDragBridge.DragView).map { [$0] } ?? v.subviews.flatMap(bridges) }
+        func nameFields(_ v: NSView) -> [ClipNameField.Field] { (v as? ClipNameField.Field).map { [$0] } ?? v.subviews.flatMap(nameFields) }
         try await wait { bridges(host).first?.headerRect.width ?? 0 > 0 }
         let view = try #require(bridges(host).first)
-        // 命中区收窄到标题文字：宽度远小于整行，位于头部顶端内，by AI.Coding。
-        #expect(view.headerRect.width > 0 && view.headerRect.width < view.bounds.width / 2)
+        // 短标题右侧空白仍属于改名行，图标与下一行时间不包含在内，by AI.Coding。
+        #expect(view.headerRect.width > view.bounds.width / 2 && view.headerRect.maxX < view.bounds.width - 20)
         #expect(view.headerRect.minY < 28 && view.headerRect.maxY <= 40)
         // 可选输出是真实托管像素，仍不显示窗口或读取系统剪贴板，by AI.Coding。
         if let path = ProcessInfo.processInfo.environment["LOCALCLIP_RENAME_RENDER_DIR"] {
@@ -114,11 +115,18 @@ private final class RenameClock: ClipClock, @unchecked Sendable {
         }
         let count = raw.count
         let title = NSPoint(x: view.headerRect.midX, y: view.bounds.height - view.headerRect.midY)
-        for local in [title, .init(x: view.headerRect.minX + 2, y: view.bounds.height - view.headerRect.midY)] {
+        for local in [title, .init(x: view.headerRect.minX + 2, y: view.bounds.height - view.headerRect.midY), .init(x: view.headerRect.maxX - 2, y: view.bounds.height - view.headerRect.midY)] {
             let point = view.convert(local, to: nil)
             #expect(view.handle(event(.leftMouseDown, point)) == nil)
             #expect(view.handle(event(.leftMouseUp, point)) == nil)
             #expect(model.renamingID == view.id && raw.count == count)
+            // 原生输入焦点必须真正离开搜索；仅renamingID变化不能证明能输入名称，by AI.Coding。
+            try await wait { host.layoutSubtreeIfNeeded(); return nameFields(host).first?.currentEditor() != nil }
+            let field = try #require(nameFields(host).first)
+            let editor = try #require(field.currentEditor() as? NSTextView)
+            #expect(window.firstResponder === editor)
+            editor.insertText("rename-draft", replacementRange: NSRange(location: NSNotFound, length: 0))
+            #expect(model.query.isEmpty && raw.count == count)
             let editing = event(.leftMouseDown, point)
             #expect(view.handle(editing) === editing)
             model.cancelRename()
