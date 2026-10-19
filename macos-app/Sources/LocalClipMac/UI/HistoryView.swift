@@ -942,8 +942,10 @@ struct ClipCard: View, Equatable {
     }
     /// 图标读取期间离屏、删除或代次变化即作废：不发布图标，也不继续后续解码，by AI.Coding。
     static func fileIcon(_ path: String, id: ClipID, model: HistoryViewModel) async -> NSImage? {
-        let icon = await Task.detached(priority: .utility) { NSWorkspace.shared.icon(forFile: path) }.value
-        return !Task.isCancelled && model.contains(id) ? icon : nil
+        // 后台只传回可发送的图像数据，兼容未将NSImage标为Sendable的SDK；失效后不再解码。
+        let data = await Task.detached(priority: .utility) { NSWorkspace.shared.icon(forFile: path).tiffRepresentation }.value
+        guard !Task.isCancelled, model.contains(id), let data else { return nil }
+        return NSImage(data: data)
     }
     /// 隐藏内容只留原格式复制；纯文本复制按动作作用的整组是否都有文本表示决定，by AI.Coding。
     static func voiceOverActions(plainText: Bool, hidden: Bool, favorite: Bool) -> [String] {

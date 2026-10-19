@@ -506,9 +506,10 @@ import LocalClipCore
         let file = root.appendingPathComponent("icon.txt"); try Data("x".utf8).write(to: file)
         let id = model.items[0].id
         #expect(await ClipCard.fileIcon(file.path, id: id, model: model) != nil)
-        let cancelled = Task { await ClipCard.fileIcon(file.path, id: id, model: model) }
+        // 任务只返回判定值，避免测试自身跨任务传递不可发送的NSImage。
+        let cancelled = Task { await ClipCard.fileIcon(file.path, id: id, model: model) == nil }
         cancelled.cancel()
-        #expect(await cancelled.value == nil)
+        #expect(await cancelled.value)
         _ = try await store.apply(store.preview(.delete([id])).token)
         model.refresh(); try await wait { !model.contains(id) && !model.historyBusy }
         #expect(await ClipCard.fileIcon(file.path, id: id, model: model) == nil)
