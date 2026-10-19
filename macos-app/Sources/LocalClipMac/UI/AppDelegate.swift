@@ -640,7 +640,7 @@ import LocalClipCore
     /// 搜索和结果共享明确的记录动作；不接管复制、全选、撤销及输入法候选，by AI.Coding。
     static func handleRecordCommand(_ event: NSEvent, responder: NSResponder?, model: HistoryViewModel) -> Bool {
         guard event.modifierFlags.intersection([.command, .option, .control, .shift]) == [.command],
-              [UInt16(5), 31, 14, 34, 17].contains(event.keyCode) else { return false }
+              [UInt16(5), 31, 14, 34, 17, 15].contains(event.keyCode) else { return false }
         let editor = responder as? NSTextView
         guard editor?.hasMarkedText() != true,
               editor?.isEditable != true || isHistorySearchEditor(responder) else { return false }
@@ -652,6 +652,7 @@ import LocalClipCore
         case 14: model.editSelectedContent()
         case 34: if model.canDisplayContents, model.selectedID != nil { model.showingDetail.toggle() }
         case 17: model.showTransformMenu(atSelectedCard: true)
+        case 15: if let id = model.selectedID { model.beginRename(id) }
         default: return false
         }
         return true

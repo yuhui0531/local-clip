@@ -918,13 +918,14 @@ struct ClipCard: View, Equatable {
     /// 菜单独立展开，避免单个SwiftUI泛型表达式超出编译器推断范围，by AI.Coding。
     private var menuCard: some View {
         interactiveCard.contextMenu {
+                // 四组：使用／整理／查看／删除；快捷键由系统在右侧显示，按键仍由键盘监听处理，不另外绑定执行，by AI.Coding。
+                Button("直接粘贴") { if !model.selectedIDs.contains(item.id) { model.select(item.id) }; model.perform(action: .directPaste) }.disabled(hidden)
                 Button("原格式复制") { if !model.selectedIDs.contains(item.id) { model.select(item.id) }; model.perform(.original, action: .copy) }
                 // 与原格式复制共用选择规则和输出管线；无文本项由整组校验拒绝，绝不静默跳过。
                 Button("纯文本复制") { if !model.selectedIDs.contains(item.id) { model.select(item.id) }; model.perform(.plainText, action: .copy) }.disabled(hidden)
-                Button("直接粘贴") { if !model.selectedIDs.contains(item.id) { model.select(item.id) }; model.perform(action: .directPaste) }.disabled(hidden)
-                Button("转换后粘贴… · ⌘T") { if !model.selectedIDs.contains(item.id) { model.select(item.id) }; model.showTransformMenu() }
+                Button("转换后粘贴…") { if !model.selectedIDs.contains(item.id) { model.select(item.id) }; model.showTransformMenu() }
+                    .keyboardShortcut("t", modifiers: .command)
                     .disabled(item.kind == .image || item.kind == .file)
-                if item.kind == .image || item.kind == .mixed || isImageFile { Button("复制图中文字") { model.copyImageText(id: item.id) }.disabled(hidden) }
                 // 多选时才出现；换行沿用原有合并（含原格式），其余只输出纯文本；含图片时整组置灰，by AI.Coding。
                 if selectionCount > 1 && selected {
                     let blocked = selectionHasNonText
@@ -936,30 +937,38 @@ struct ClipCard: View, Equatable {
                     Button("加入粘贴队列") { model.startPasteQueue(model.orderedSelection) }
                         .help("每按一次 \(HotKeyService.label(model.settings.queueShortcut)) 依次粘贴下一项")
                 }
-                // 输出、整理、检视各自分组，保留全部已有菜单项，by AI.Coding。
                 Divider()
-                Button("编辑内容… · ⌘E") {
+                Button("编辑内容…") {
                     if !model.selectedIDs.contains(item.id) { model.select(item.id) }
                     model.beginContentEdit(item.id)
                 }
+                    .keyboardShortcut("e", modifiers: .command)
                     .disabled(hidden || ![ClipKind.text, .url].contains(item.kind))
-                Button("重命名") { model.beginRename(item.id) }
+                Button("重命名") { model.beginRename(item.id) }.keyboardShortcut("r", modifiers: .command)
                 Button(item.isFavorite ? "取消收藏" : "收藏") { model.change(.favorites(model.selectedIDs.contains(item.id) ? model.orderedSelection : [item.id], !item.isFavorite)) }
                 Menu("加入分类") {
                     ForEach(model.categories) { category in Button(category.name) { model.setCategory(item.id, categoryID: category.id, included: true) } }
                     Divider(); Button("新建分类…") { model.editCategory() }
                 }
-                if let categoryID { Button("从当前分类移除") { model.setCategory(item.id, categoryID: categoryID, included: false) } }
-                if categoryID != nil { Button("向前移动") { model.select(item.id); model.moveSelected(-1) }; Button("向后移动") { model.select(item.id); model.moveSelected(1) } }
+                if let categoryID {
+                    Button("从当前分类移除") { model.setCategory(item.id, categoryID: categoryID, included: false) }
+                    Menu("移动") { Button("向前移动") { model.select(item.id); model.moveSelected(-1) }; Button("向后移动") { model.select(item.id); model.moveSelected(1) } }
+                }
                 Divider()
-                Button("在历史中定位 · ⌘G") { model.select(item.id); model.jumpToHistory() }
-                Menu("在分类中定位") { ForEach(categories) { category in Button(category.name) { model.select(item.id); model.jumpToHistory(category: category.id) } } }
+                Button("预览") { model.select(item.id); model.quickLook() }.keyboardShortcut(.space, modifiers: [])
                 // 显式详情入口同步完成选择，再开启目标详情。
-                Button("详情") { model.showDetail(id: item.id) }
-                Button("预览 · Space") { model.select(item.id); model.quickLook() }
-                Button("打开 · ⌘O") { model.select(item.id); model.openSelected() }
-                if item.kind != .file { Button("存储为文件…") { model.select(item.id); model.saveSelectedToFile() } }
+                Button("详情") { model.showDetail(id: item.id) }.keyboardShortcut("i", modifiers: .command)
+                Menu("定位") {
+                    Button("在历史中定位") { model.select(item.id); model.jumpToHistory() }.keyboardShortcut("g", modifiers: .command)
+                    if !categories.isEmpty {
+                        Divider()
+                        ForEach(categories) { category in Button("在“\(category.name)”中定位") { model.select(item.id); model.jumpToHistory(category: category.id) } }
+                    }
+                }
+                Button("打开") { model.select(item.id); model.openSelected() }.keyboardShortcut("o", modifiers: .command)
                 if item.kind == .file { Button("在Finder中显示") { model.select(item.id); model.openSelected(reveal: true) }; Button("打开方式…") { model.select(item.id); model.openSelected(withApplication: true) } }
+                if item.kind != .file { Button("存储为文件…") { model.select(item.id); model.saveSelectedToFile() } }
+                if item.kind == .image || item.kind == .mixed || isImageFile { Button("复制图中文字") { model.copyImageText(id: item.id) }.disabled(hidden) }
                 Divider(); Button("删除", role: .destructive) { model.change(.delete(model.selectedIDs.contains(item.id) ? model.orderedSelection : [item.id])) }
             }
     }

@@ -513,6 +513,41 @@ import LocalClipCore
         let queue = NSPanel(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: true)
         #expect(!AppDelegate.ownsHistoryWindow(queue, panel: panel, settings: nil, feedback: nil, showingDetail: true, showingCategoryEditor: false, showingFilters: false, queue: queue))
     }
+    /// ⌘R在结果区与搜索框中重命名所选记录，查询在途时拦截；输入法组合时归文字；右键菜单的快捷键只作展示，不在窗口中重复执行，by AI.Coding。
+    @Test func renameShortcutAndMenuShortcutsRunOnce() async throws {
+        _ = NSApplication.shared
+        let (root, _, model) = try await setup()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let window = NSWindow(contentRect: .init(x: 0, y: 0, width: 300, height: 300), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil; window.close() }
+        func key(_ code: UInt16, _ characters: String = "") throws -> NSEvent {
+            try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .command, timestamp: 0, windowNumber: window.windowNumber, context: nil, characters: characters, charactersIgnoringModifiers: characters, isARepeat: false, keyCode: code))
+        }
+        let first = model.items[0].id
+        model.select(first)
+        #expect(AppDelegate.handleRecordCommand(try key(15), responder: window, model: model) && model.renamingID == first)
+        model.cancelRename()
+        let search = NSSearchField(frame: .init(x: 0, y: 0, width: 260, height: 30)); window.contentView = search
+        try #require(window.makeFirstResponder(search))
+        let editor = try #require(search.currentEditor() as? NSTextView)
+        #expect(AppDelegate.handleRecordCommand(try key(15), responder: editor, model: model) && model.renamingID == first)
+        model.cancelRename()
+        editor.setMarkedText("拼", selectedRange: .init(location: 1, length: 0), replacementRange: .init(location: NSNotFound, length: 0))
+        #expect(!AppDelegate.handleRecordCommand(try key(15), responder: editor, model: model) && model.renamingID == nil)
+        editor.unmarkText()
+        model.query = "row"; model.searchChanged()
+        #expect(AppDelegate.handleRecordCommand(try key(15), responder: editor, model: model) && model.renamingID == nil)
+        try await wait { !model.historyBusy }
+        let item = try #require(model.items.first)
+        let card = ClipCard(item: item, index: 0, selected: true, dragging: false, editing: false, hidden: false, quickModifiers: 0, height: 268, categoryID: nil, categories: [], target: nil, selectionCount: 1, selectionHasNonText: false, queueShortcut: model.settings.queueShortcut, model: model, previewGeneration: UUID())
+        let host = NSHostingView(rootView: card); host.frame = .init(x: 0, y: 0, width: 300, height: 300); window.contentView = host
+        host.layoutSubtreeIfNeeded()
+        for (code, characters) in [(UInt16(17), "t"), (5, "g"), (31, "o"), (14, "e"), (15, "r"), (34, "i")] {
+            #expect(!window.performKeyEquivalent(with: try key(code, characters)))
+        }
+        #expect(model.renamingID == nil && model.contentEditor == nil && !model.showingDetail)
+    }
     /// 状态槽优先级：错误 > 监控异常 > 队列 > 通知 > 提示；旧通知计时器不能清掉同文字的新错误，by AI.Coding。
     @Test func statusSlotPriorityAndSeverity() async throws {
         let (root, _, model) = try await setup()
