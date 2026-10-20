@@ -652,8 +652,9 @@ struct ClipCard: View, Equatable {
     /// 缓存中的空串表示已确认不是文本，不再重复读取。
     private var cachedFileText: String? { checkedFileGeneration == previewGeneration ? model.fileTexts.object(forKey: item.id as NSString).map(String.init) : nil }
     private var displayedFileText: String? { checkedFileGeneration == previewGeneration ? fileText ?? cachedFileText.flatMap { $0.isEmpty ? nil : $0 } : nil }
-    /// 第一个文件名加总数，预览文本截断且尚未读取时写“多个”。
+    /// 第一个文件名加总数，预览文本截断且尚未读取时写“多个”；Footer 已给出数量（.files）时只写文件名，by AI.Coding。
     private func fileCaption(_ paths: (first: String, count: Int?), unit: String) -> String {
+        if case .files = contentSize { return (paths.first as NSString).lastPathComponent }
         let more = (model.fileCounts.object(forKey: item.id as NSString)?.intValue ?? paths.count).map { $0 > 1 ? " 等\($0)\(unit)" : "" } ?? " 等多\(unit)"
         return (paths.first as NSString).lastPathComponent + more
     }
@@ -706,11 +707,15 @@ struct ClipCard: View, Equatable {
         case .text, .url: return displayedCharacterCount.map { "\($0) 字" } ?? ""
         case .image: return sizeLabel ?? ""
         case .mixed: return "混合内容"
-        case .file:
-            guard !hidden, case let .files(known, count, unknown, folders) = contentSize else { return sizeLabel ?? "文件引用" }
-            if folders == count { return count == 1 ? "文件夹" : "\(count) 个文件夹" }
-            return "\(count) 项 · " + (unknown + folders == count ? "大小未知" : HistoryViewModel.bytes(known))
+        case .file: return hidden ? "文件引用" : Self.fileFooter(contentSize)
         }
+    }
+    /// 文件卡 Footer：单文件只写大小，数量只在此处出现，文件名行不再重复，by AI.Coding。
+    static func fileFooter(_ size: ClipContentSize) -> String {
+        guard case let .files(known, count, unknown, folders) = size else { return size.label ?? "文件引用" }
+        if folders == count { return count == 1 ? "文件夹" : "\(count) 个文件夹" }
+        let bytes = unknown + folders == count ? "大小未知" : HistoryViewModel.bytes(known)
+        return count == 1 ? bytes : "\(count) 项 · " + bytes
     }
     /// 仅文本与代码在内容溢出时加底部渐隐，图片与短文本不被遮住，by AI.Coding。
     private var fadesBody: Bool {
@@ -775,7 +780,7 @@ struct ClipCard: View, Equatable {
     private var tiny: Bool { height < 130 }
     // 来源只是辅助信息，缩小标题与图标，把固定方形卡片的高度优先留给正文。
     private var headerHeight: Double { tiny ? 28 : height < 150 ? 32 : 40 }
-    private var footerHeight: Double { tiny ? 18 : 22 }
+    private var footerHeight: Double { tiny ? 18 : 24 }
     private var iconSize: Double { tiny ? 18 : 26 }
     // 圆角为原来的一半，卡片更规整，by AI.Coding。
     private var cardRadius: Double { min(LCStyle.Radius.card, height * 0.06) }
@@ -850,7 +855,7 @@ struct ClipCard: View, Equatable {
                     }
                 }
             HStack(spacing: 4) {
-                Text(footerText).lineLimit(1)
+                Text(footerText).lineLimit(1).layoutPriority(1)
                 Spacer(minLength: 2)
                 // 编辑、详情、收藏三个固定槽位始终占位，悬停或选中才显示，度量文字与角标位置不随之移动，by AI.Coding。
                 if !tiny {
@@ -861,14 +866,14 @@ struct ClipCard: View, Equatable {
                                     if !model.selectedIDs.contains(item.id) { model.select(item.id) }
                                     model.beginContentEdit(item.id)
                                 } label: { slotIcon("square.and.pencil") }
-                                    .buttonStyle(.plain).foregroundStyle(Color.accentColor).help("编辑内容 · ⌘E").accessibilityLabel("编辑内容")
+                                    .buttonStyle(CardSlotStyle(active: nil)).help("编辑内容 · ⌘E").accessibilityLabel("编辑内容")
                             } else { Color.clear.frame(width: 24, height: 24) }
                             Button { model.showDetail(id: item.id) } label: {
                                 if detailPending { ProgressView().controlSize(.mini).frame(width: 24, height: 24) } else { slotIcon("info.circle") }
-                            }.buttonStyle(.plain).foregroundStyle(Color.accentColor).help("详情 · ⌘I").accessibilityLabel(detailPending ? "正在准备预览" : "详情")
+                            }.buttonStyle(CardSlotStyle(active: nil)).help("详情 · ⌘I").accessibilityLabel(detailPending ? "正在准备预览" : "详情")
                             Button { model.change(.favorites(model.selectedIDs.contains(item.id) ? model.orderedSelection : [item.id], !item.isFavorite)) } label: {
                                 slotIcon(item.isFavorite ? "star.fill" : "star")
-                            }.buttonStyle(.plain).foregroundStyle(item.isFavorite ? Color.orange : Color.accentColor).help(item.isFavorite ? "取消收藏" : "收藏").accessibilityLabel(item.isFavorite ? "取消收藏" : "收藏")
+                            }.buttonStyle(CardSlotStyle(active: item.isFavorite ? .orange : nil)).help(item.isFavorite ? "取消收藏" : "收藏").accessibilityLabel(item.isFavorite ? "取消收藏" : "收藏")
                         }
                     }.opacity(slotsVisible ? 1 : 0).allowsHitTesting(slotsVisible).accessibilityHidden(!slotsVisible)
                         .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(item.id)) } action: { infoRect = $0 }
@@ -882,7 +887,8 @@ struct ClipCard: View, Equatable {
                         .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: showsQuickBadge)
                         .accessibilityHidden(true)
                 }
-            }.font(.system(size: LCStyle.FontSize.caption)).foregroundStyle(.secondary).padding(.horizontal, tiny ? 8 : 12)
+            // 度量文字用 meta 等宽数字；tiny 卡片仍用 caption，角标自带字体不受影响，by AI.Coding。
+            }.font(.system(size: tiny ? LCStyle.FontSize.caption : LCStyle.FontSize.meta).monospacedDigit()).foregroundStyle(.secondary).padding(.horizontal, tiny ? 8 : 12)
                 .frame(height: footerHeight)
         }.frame(width: height, height: height).background(Color(nsColor: .textBackgroundColor))
             .clipShape(RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
@@ -925,7 +931,7 @@ struct ClipCard: View, Equatable {
             .scaleEffect(dragging ? 0.96 : 1)
             .opacity(dragging ? 0.55 : 1)
             .animation(reduceMotion ? nil : .spring(response: 0.22, dampingFraction: 0.82), value: dragging)
-            .help((item.kind == .file ? "双击复制到Finder当前目录或原应用" : "单击选择，双击粘贴到：\(MacApplicationClient.targetName(model.target))") + quickPasteHelp)
+            .help((item.kind == .file ? "双击复制到Finder当前目录或原应用" : "单击选择，双击粘贴到：\(MacApplicationClient.targetName(model.target))") + "，选中后按空格预览" + quickPasteHelp)
             // 隐藏内容时辅助功能也不朗读正文，与界面模糊保持同一隐私承诺，by AI.Coding。
             // 每张卡片只暴露一个可操作元素；重命名时保留原生输入框，by AI.Coding。
             .accessibilityElement(children: editing ? .contain : .ignore)
@@ -1129,7 +1135,7 @@ struct ClipCard: View, Equatable {
             VStack(spacing: 0) {
                 ThumbnailPreview(state: displayedThumbnail, tint: tint, compact: tiny)
                 if !tiny, checkedFileGeneration == previewGeneration, let paths = filePaths {
-                    Text(fileCaption(paths, unit: isImageFile ? "张" : "个")).font(.system(size: LCStyle.FontSize.meta, weight: .medium)).lineLimit(1).truncationMode(.middle)
+                    Text(fileCaption(paths, unit: isImageFile ? "张" : "个")).font(.system(size: LCStyle.FontSize.meta, weight: .medium)).foregroundStyle(Color.primary.opacity(0.85)).lineLimit(1).truncationMode(.middle).help(paths.first)
                         .padding(.horizontal, 10).padding(.vertical, 5)
                 }
             }
@@ -1141,7 +1147,7 @@ struct ClipCard: View, Equatable {
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).clipped()
                     .padding(.horizontal, tiny ? 6 : height < 200 ? 10 : 14).padding(.top, tiny ? 3 : 10).padding(.bottom, tiny ? 0 : 4)
                 if !tiny {
-                    Text(fileCaption(paths, unit: "个")).font(.system(size: LCStyle.FontSize.meta, weight: .medium)).lineLimit(1).truncationMode(.middle)
+                    Text(fileCaption(paths, unit: "个")).font(.system(size: LCStyle.FontSize.meta, weight: .medium)).foregroundStyle(Color.primary.opacity(0.85)).lineLimit(1).truncationMode(.middle).help(paths.first)
                         .padding(.horizontal, 10).padding(.vertical, 5)
                 }
             }
@@ -1157,7 +1163,7 @@ struct ClipCard: View, Equatable {
                     else { Image(systemName: "doc").font(.system(size: 34, weight: .light)).foregroundStyle(tint) }
                 }.frame(width: height < 200 ? 40 : 56, height: height < 200 ? 40 : 56).accessibilityHidden(true)
                 if let paths = filePaths {
-                    Text(fileCaption(paths, unit: "个")).font(.system(size: 12, weight: .medium)).lineLimit(2).truncationMode(.middle).multilineTextAlignment(.center)
+                    Text(fileCaption(paths, unit: "个")).font(.system(size: LCStyle.FontSize.meta, weight: .medium)).foregroundStyle(Color.primary.opacity(0.85)).lineLimit(2).truncationMode(.middle).multilineTextAlignment(.center).help(paths.first)
                 }
                 if let status = fileStatus { Text(status).font(.system(size: LCStyle.FontSize.caption)).foregroundStyle(.secondary) }
                 Spacer(minLength: 0)
@@ -1176,7 +1182,11 @@ struct ClipCard: View, Equatable {
             VStack(alignment: .leading, spacing: 10) { Image(systemName: "link").font(.system(size: 22, weight: .light)).foregroundStyle(tint); Text(ClipboardPayload.webLink(item.preview)?.host ?? "链接").font(.system(size: LCStyle.FontSize.heading, weight: .semibold, design: .rounded)).lineLimit(1); Text(item.context).font(.system(size: LCStyle.FontSize.meta, design: .monospaced)).foregroundStyle(.secondary).lineLimit(4); Spacer(minLength: 0) }.padding(14)
         } else {
             // 卡片正文自动高亮代码，普通内容保持原有排版，by AI.Coding。
-            SyntaxText(text: item.context, size: previewFontSize, spacing: tiny ? 0 : 3, onLanguage: { detectedLanguage = $0 })
+            // 摘要被截断时追加省略行；不拼进正文，语言识别与高亮缓存键不变，by AI.Coding。
+            VStack(alignment: .leading, spacing: 0) {
+                SyntaxText(text: item.context, size: previewFontSize, spacing: tiny ? 0 : 3, onLanguage: { detectedLanguage = $0 })
+                if previewTruncated { Text("…").font(.system(size: previewFontSize)).foregroundStyle(.secondary).accessibilityHidden(true) }
+            }
                 .lineSpacing(tiny ? 0 : 3).frame(maxWidth: .infinity, alignment: .topLeading)
                 .padding(.horizontal, tiny ? 6 : height < 200 ? 10 : 14).padding(.top, tiny ? 3 : 10).padding(.bottom, tiny ? 0 : 4)
                 .fixedSize(horizontal: false, vertical: true)
@@ -1184,6 +1194,9 @@ struct ClipCard: View, Equatable {
         }
     }
 
+    /// 摘要只存前180字符；无搜索片段时达到上限即视为截断，by AI.Coding。
+    // ponytail: 恰好180字符的原文也会显示省略行，需精确时改用 displayedCharacterCount > preview.count（异步到达，省略行会晚出现）。
+    private var previewTruncated: Bool { item.context == item.preview && item.preview.count >= 180 }
     /// 目录与失效文件给出状态文字；可读普通文件不加说明，by AI.Coding。
     private var fileStatus: String? {
         guard case let .files(_, count, unknown, folders) = contentSize else { return nil }
@@ -1384,6 +1397,24 @@ struct ToolbarTabStyle: ButtonStyle {
                 .contentShape(Capsule())
                 .onHover { hovering = $0 }
                 .opacity(isEnabled ? 1 : 0.45)
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: hovering)
+        }
+    }
+}
+/// 卡片槽位按钮：默认次要灰，单按钮悬停/按下才显示强调色与浅底；已收藏常驻橙色，by AI.Coding。
+private struct CardSlotStyle: ButtonStyle {
+    let active: Color?
+    func makeBody(configuration: Configuration) -> some View { SlotBody(configuration: configuration, active: active) }
+    struct SlotBody: View {
+        let configuration: Configuration
+        let active: Color?
+        @State private var hovering = false
+        @Environment(\.accessibilityReduceMotion) private var reduceMotion
+        var body: some View {
+            configuration.label
+                .foregroundStyle(active ?? (hovering || configuration.isPressed ? Color.accentColor : Color.secondary))
+                .background(Color.primary.opacity(configuration.isPressed ? 0.10 : hovering ? 0.06 : 0), in: RoundedRectangle(cornerRadius: LCStyle.Radius.control, style: .continuous))
+                .onHover { hovering = $0 }
                 .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: hovering)
         }
     }

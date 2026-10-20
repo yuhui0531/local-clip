@@ -36,7 +36,11 @@ struct ThumbnailPreview: View {
             Rectangle().fill(state.image != nil ? Color.primary.opacity(0.05) : tint.opacity(0.06))
             switch state {
             case .ready(let image):
-                Image(nsImage: image).resizable().scaledToFit().padding(compact ? 2 : 4)
+                // 细描边与圆角给白底截图划出边界；不加阴影，by AI.Coding。
+                Image(nsImage: image).resizable().scaledToFit()
+                    .clipShape(RoundedRectangle(cornerRadius: compact ? 2 : 4, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: compact ? 2 : 4, style: .continuous).strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5))
+                    .padding(compact ? 2 : 4)
                     .accessibilityLabel(state.label)
             case .loading:
                 VStack(spacing: 9) {

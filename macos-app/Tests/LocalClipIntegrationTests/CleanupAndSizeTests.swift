@@ -155,4 +155,16 @@ struct CleanupAndSizeTests {
         #expect(ClipContentSize.stored(bytes: 1024, items: 1).label == HistoryViewModel.bytes(1024))
         #expect(ClipContentSize.stored(bytes: Int64.max, items: 1).label?.isEmpty == false)
     }
+    /// T4：文件卡 Footer 单文件只写大小，数量只出现在 Footer；不可读引用沿用原标签，by AI.Coding。
+    @Test func fileFooterOmitsSingleItemCount() {
+        let mb = HistoryViewModel.bytes(1_258_291)
+        #expect(ClipCard.fileFooter(.files(known: 428_000, count: 1, unknown: 0, folders: 0)) == HistoryViewModel.bytes(428_000))
+        #expect(ClipCard.fileFooter(.files(known: 1_258_291, count: 3, unknown: 0, folders: 0)) == "3 项 · " + mb)
+        #expect(ClipCard.fileFooter(.files(known: 0, count: 1, unknown: 0, folders: 1)) == "文件夹")
+        #expect(ClipCard.fileFooter(.files(known: 0, count: 2, unknown: 0, folders: 2)) == "2 个文件夹")
+        #expect(ClipCard.fileFooter(.files(known: 0, count: 2, unknown: 2, folders: 0)) == "2 项 · 大小未知")
+        #expect(ClipCard.fileFooter(.files(known: 0, count: 1, unknown: 1, folders: 0)) == "大小未知")
+        #expect(ClipCard.fileFooter(.unknown) == "大小未知")
+        #expect(ClipCard.fileFooter(.loading) == "文件引用")
+    }
 }
