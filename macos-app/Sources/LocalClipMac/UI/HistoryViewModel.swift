@@ -255,8 +255,13 @@ import LocalClipCore
     func previewMetadata(id: ClipID) async throws -> ClipMetadata { try await store.metadata(id: id, at: clock.now()) }
     /// 只读取轻量字符数，不向视图暴露存储调用细节。
     func previewCharacterCount(id: ClipID) async throws -> Int? { try await store.textCharacterCount(id: id, at: clock.now()) }
-    /// 图片主表示的已保存字节数；只读计数列，不加载正文。
-    func previewImageSize(id: ClipID) async throws -> (bytes: Int64, items: Int)? { try await store.imageByteCount(id: id, at: clock.now()) }
+    /// 图片主表示的已保存字节数；只读计数列，不加载正文。单张图片顺带读≤256KB前缀解析像素，失败只缺像素，by AI.Coding。
+    func previewImageSize(id: ClipID) async throws -> (bytes: Int64, items: Int, pixels: PixelSize?)? {
+        guard let size = try await store.imageByteCount(id: id, at: clock.now()) else { return nil }
+        guard size.items == 1, let header = try? await store.imageHeaderPrefix(id: id, at: clock.now()) else { return (size.bytes, size.items, nil) }
+        let pixels = await Task.detached(priority: .utility) { ThumbnailRenderer.pixelSize(header: header) }.value
+        return (size.bytes, size.items, pixels)
+    }
     @Published public var showingDetail = false {
         didSet {
             if oldValue && !showingDetail { rememberNativePopoverDismissal(); previewFollowsSelection = false }

@@ -716,14 +716,20 @@ struct ClipCard: View, Equatable {
     private var footerText: String {
         switch item.kind {
         case .text, .url: return displayedCharacterCount.map { "\($0) 字" } ?? ""
-        case .image: return sizeLabel ?? ""
+        case .image: return hidden ? "" : contentSize.bytesLabel ?? ""
         case .mixed: return "混合内容"
         case .file: return hidden ? "文件引用" : Self.fileFooter(contentSize)
         }
     }
+    /// 单张图片/单个图片文件宽度够时显示“W × H · 大小”，不够退回只显示大小，不出现截断省略号，by AI.Coding。
+    @ViewBuilder private var footerLabel: some View {
+        if !hidden, let pixels = contentSize.pixels {
+            ViewThatFits(in: .horizontal) { Text(pixels.label + " · " + footerText).fixedSize(); Text(footerText) }
+        } else { Text(footerText) }
+    }
     /// 文件卡 Footer：单文件只写大小，数量只在此处出现，文件名行不再重复，by AI.Coding。
-    static func fileFooter(_ size: ClipContentSize) -> String {
-        guard case let .files(known, count, unknown, folders) = size else { return size.label ?? "文件引用" }
+    nonisolated static func fileFooter(_ size: ClipContentSize) -> String {
+        guard case let .files(known, count, unknown, folders, _) = size else { return size.bytesLabel ?? "文件引用" }
         if folders == count { return count == 1 ? "文件夹" : "\(count) 个文件夹" }
         let bytes = unknown + folders == count ? "大小未知" : HistoryViewModel.bytes(known)
         return count == 1 ? bytes : "\(count) 项 · " + bytes
@@ -867,7 +873,7 @@ struct ClipCard: View, Equatable {
                     }
                 }
             HStack(spacing: 4) {
-                Text(footerText).lineLimit(1).layoutPriority(1)
+                footerLabel.lineLimit(1).layoutPriority(1)
                 Spacer(minLength: 2)
                 // 编辑、详情、收藏三个固定槽位始终占位，悬停或选中才显示，度量文字与角标位置不随之移动，by AI.Coding。
                 if !tiny {
@@ -1107,7 +1113,7 @@ struct ClipCard: View, Equatable {
                 if item.kind == .image, contentSize == .loading {
                     let size = try? await model.previewImageSize(id: item.id)
                     guard !Task.isCancelled, model.contains(item.id) else { return }
-                    contentSize = size.map { .stored(bytes: $0.bytes, items: $0.items) } ?? .unknown
+                    contentSize = size.map { .stored(bytes: $0.bytes, items: $0.items, pixels: $0.pixels) } ?? .unknown
                 }
                 // 只为实际出现的文字卡片统计全文，计数缓存不随选中状态重算。
                 if [.text, .url].contains(item.kind), displayedCharacterCount == nil {
@@ -1211,7 +1217,7 @@ struct ClipCard: View, Equatable {
     private var previewTruncated: Bool { item.context == item.preview && item.preview.count >= 180 }
     /// 目录与失效文件给出状态文字；可读普通文件不加说明，by AI.Coding。
     private var fileStatus: String? {
-        guard case let .files(_, count, unknown, folders) = contentSize else { return nil }
+        guard case let .files(_, count, unknown, folders, _) = contentSize else { return nil }
         if folders == count { return "文件夹" }
         return unknown == count ? "文件已移动、删除或无法访问" : nil
     }

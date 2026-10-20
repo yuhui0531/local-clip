@@ -26,6 +26,24 @@ public enum ThumbnailRenderer {
         guard let source = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary) else { return .unavailable }
         return render(source)
     }
+    /// 只解析图片头部前缀取像素尺寸，不解码像素；TIFF尾部IFD等解析不到时返回nil，by AI.Coding。
+    static func pixelSize(header: Data) -> PixelSize? {
+        let source = CGImageSourceCreateIncremental(nil)
+        CGImageSourceUpdateData(source, header as CFData, false)
+        return pixelSize(source)
+    }
+    /// 图片文件只读头部属性，不缓存、不解码。
+    static func pixelSize(fileAt url: URL) -> PixelSize? {
+        CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary).flatMap(pixelSize)
+    }
+    /// EXIF方向5–8为旋转90°，宽高互换后与显示一致。
+    private static func pixelSize(_ source: CGImageSource) -> PixelSize? {
+        guard let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let width = (properties[kCGImagePropertyPixelWidth] as? NSNumber)?.intValue, let height = (properties[kCGImagePropertyPixelHeight] as? NSNumber)?.intValue,
+              width > 0, height > 0 else { return nil }
+        let orientation = (properties[kCGImagePropertyOrientation] as? NSNumber)?.intValue ?? 1
+        return (5...8).contains(orientation) ? PixelSize(width: height, height: width) : PixelSize(width: width, height: height)
+    }
     /// 只派生第一帧的有界缩略图，不修改原始图片或多页TIFF。
     private static func render(_ source: CGImageSource) -> ThumbnailResult {
         guard let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],

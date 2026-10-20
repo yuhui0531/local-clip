@@ -1,5 +1,6 @@
 // F-07 导出逐项清理、F-08 Finder暂存定向恢复、N-01 图片/文件大小；只用临时目录与合成数据，by AI.Coding。
 import Foundation
+import ImageIO
 import Testing
 @testable import LocalClipCore
 @testable import LocalClipMac
@@ -154,6 +155,47 @@ struct CleanupAndSizeTests {
         #expect(HistoryViewModel.bytes(1023) != HistoryViewModel.bytes(1024))
         #expect(ClipContentSize.stored(bytes: 1024, items: 1).label == HistoryViewModel.bytes(1024))
         #expect(ClipContentSize.stored(bytes: Int64.max, items: 1).label?.isEmpty == false)
+    }
+    /// T13：单张图片按主表示前缀解析像素（含EXIF方向6、>256KB PNG）；多张与损坏数据不带像素；图片文件引用读头部，by AI.Coding。
+    @Test func imagePixelSizesFromHeaderPrefix() async throws {
+        let root = try Self.root(); defer { Self.unlock(root) }
+        let store = try HistoryStore(location: root.appendingPathComponent("db"))
+        func encode(_ width: Int, _ height: Int, type: String, orientation: Int? = nil, noise: Bool = false) throws -> Data {
+            let context = try #require(CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+            if noise, let pixels = context.data { arc4random_buf(pixels, width * height * 4) }
+            let image = try #require(context.makeImage()), output = NSMutableData()
+            let destination = try #require(CGImageDestinationCreateWithData(output, type as CFString, 1, nil))
+            CGImageDestinationAddImage(destination, image, orientation.map { [kCGImagePropertyOrientation: $0] as CFDictionary })
+            #expect(CGImageDestinationFinalize(destination))
+            return output as Data
+        }
+        let png = try encode(40, 30, type: SupportedType.png), rotated = try encode(40, 30, type: SupportedType.jpeg, orientation: 6)
+        let large = try encode(400, 300, type: SupportedType.png, noise: true)
+        #expect(large.count > 262_144)
+        let now = SystemClock().now()
+        var ids: [ClipID] = []
+        for (index, payload) in [ClipboardPayload([.init([.init(SupportedType.png, png)])]), .init([.init([.init(SupportedType.jpeg, rotated)])]), .init([.init([.init(SupportedType.png, large)])]),
+                                 .init([.init([.init(SupportedType.png, Data("broken".utf8))])]), .init([.init([.init(SupportedType.png, png)]), .init([.init(SupportedType.jpeg, rotated)])])].enumerated() {
+            guard case .inserted(let id) = try await store.ingest(.init(payload: payload), at: now + Int64(index)) else { throw StoreError.notFound }
+            ids.append(id)
+        }
+        func pixels(_ id: ClipID) async throws -> PixelSize? { try await store.imageHeaderPrefix(id: id, at: now + 10).flatMap(ThumbnailRenderer.pixelSize(header:)) }
+        #expect(try await pixels(ids[0]) == PixelSize(width: 40, height: 30))
+        #expect(try await pixels(ids[1]) == PixelSize(width: 30, height: 40))
+        #expect(try await store.imageHeaderPrefix(id: ids[2], at: now + 10)?.count == 262_144)
+        #expect(try await pixels(ids[2]) == PixelSize(width: 400, height: 300))
+        #expect(try await pixels(ids[3]) == nil)
+        #expect(try await store.imageHeaderPrefix(id: ids[4], at: now + 10) == nil)
+        let bytes = HistoryViewModel.bytes(Int64(png.count))
+        #expect(ClipContentSize.stored(bytes: Int64(png.count), items: 1, pixels: PixelSize(width: 40, height: 30)).label == "40 × 30 · " + bytes)
+        #expect(ClipContentSize.stored(bytes: Int64(png.count), items: 1, pixels: PixelSize(width: 40, height: 30)).detail == "已保存图片内容的大小，像素尺寸为原图")
+        #expect(ClipContentSize.stored(bytes: 10, items: 2, pixels: PixelSize(width: 1, height: 1)).pixels == nil)
+        #expect(ClipContentSize.stored(bytes: Int64(png.count), items: 1).label == bytes)
+        let file = root.appendingPathComponent("shot.png"); try png.write(to: file)
+        let measured = ClipContentSize.measure([file])
+        #expect(measured.pixels == PixelSize(width: 40, height: 30) && measured.label == "40 × 30 · " + bytes)
+        #expect(ClipCard.fileFooter(measured) == bytes)
+        #expect(ClipContentSize.measure([file, file]).pixels == nil)
     }
     /// T4：文件卡 Footer 单文件只写大小，数量只出现在 Footer；不可读引用沿用原标签，by AI.Coding。
     @Test func fileFooterOmitsSingleItemCount() {

@@ -91,6 +91,17 @@ final class SQLiteConnection {
             return rows
         }
     }
+    /// 增量读取 BLOB 前缀；不经语句取列值，避免把整段溢出页读入内存，by AI.Coding。
+    func blobPrefix(table: String, column: String, rowid: Int64, limit: Int) throws -> Data {
+        var blob: OpaquePointer?
+        try check(sqlite3_blob_open(handle, "main", table, column, rowid, 0, &blob))
+        guard let blob else { throw StoreError.ioFailure }
+        defer { sqlite3_blob_close(blob) }
+        let count = max(0, min(limit, Int(sqlite3_blob_bytes(blob))))
+        var data = Data(count: count)
+        if count > 0 { try check(data.withUnsafeMutableBytes { sqlite3_blob_read(blob, $0.baseAddress, Int32(count), 0) }) }
+        return data
+    }
     /// 标量结果用于 schema 与 pragma 验证。
     func scalarInt(_ sql: String, _ values: [SQLValue] = []) throws -> Int64 { try rows(sql, values).first?.values.first?.int ?? 0 }
     /// 标量文本用于完整性检查。

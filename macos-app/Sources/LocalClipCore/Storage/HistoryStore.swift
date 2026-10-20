@@ -408,6 +408,19 @@ public actor HistoryStore: HistoryRepository {
             return (total, primary.count)
         }
     }
+    /// T13：仅单张图片记录，按同一主表示顺序取前 limit 字节供解析像素尺寸；用 sqlite3_blob 前缀读取，不读完整原图，by AI.Coding。
+    public func imageHeaderPrefix(id: ClipID, at: Instant, limit: Int = 262_144) throws -> Data? {
+        let settings = try settings()
+        return try strategy.read { db in
+            guard let row = try db.rows("SELECT *, (\(protectedSQL)) AS isProtected FROM clips WHERE id=?", [.text(id)]).first,
+                  visible(row, at: at, settings: settings) else { throw StoreError.notFound }
+            let order = [SupportedType.png, SupportedType.tiff, SupportedType.jpeg]
+            let rows = try db.rows("SELECT itemIndex,type,blobs.rowid AS blobRow FROM representations JOIN blobs ON digest=blobDigest WHERE clipID=? AND type IN(?,?,?)", [.text(id)] + order.map(SQLValue.text))
+            guard Set(rows.map { $0.int("itemIndex") }).count == 1,
+                  let primary = rows.min(by: { order.firstIndex(of: $0.text("type")) ?? 3 < order.firstIndex(of: $1.text("type")) ?? 3 }) else { return nil }
+            return try db.blobPrefix(table: "blobs", column: "payload", rowid: primary.int("blobRow"), limit: limit)
+        }
+    }
     public func textCharacterCount(id: ClipID, at: Instant) throws -> Int? {
         let settings = try settings()
         return try strategy.read { db in
