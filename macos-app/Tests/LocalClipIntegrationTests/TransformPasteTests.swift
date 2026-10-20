@@ -47,7 +47,8 @@ import Testing
         // 切换应用后目标已被清空：置顶时仍能直接粘贴到当前前台应用。
         model.target = nil; model.pinned = true
         model.perform(action: .directPaste, ids: [id])
-        let deadline = ContinuousClock.now + .seconds(3)
+        // 全量并行时 CPU 饥饿可使异步写入超过3秒；满足即退出，放宽上限不拖慢正常路径，by AI.Coding。
+        let deadline = ContinuousClock.now + .seconds(10)
         while h.apps.events == 0 && ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(20)) }
         #expect(refreshes == 1); #expect(h.apps.events == 1)
         model.pinned = false; model.target = nil
@@ -159,11 +160,13 @@ import Testing
             let enter = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: option ? [.option] : [], timestamp: 0, windowNumber: 0, context: nil, characters: "\r", charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36))
             #expect(menu.handleKey(enter))
         } else { menu.choose(.camelCase, modifiers: option ? [.option] : []) }
-        let deadline = ContinuousClock.now + .seconds(3)
+        // 全量并行时 CPU 饥饿可使异步写入超过3秒；满足即退出，放宽上限不拖慢正常路径，by AI.Coding。
+        let deadline = ContinuousClock.now + .seconds(10)
         while h.raw.count == count && ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(20)) }
-        // 直接粘贴包含写入后的异步目标恢复，等待fake收件而不启动真实应用。
+        // 直接粘贴包含写入后的异步目标恢复，等待fake收件而不启动真实应用；单独计时。
         if !option {
-            while h.apps.events == 0 && ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(20)) }
+            let sent = ContinuousClock.now + .seconds(10)
+            while h.apps.events == 0 && ContinuousClock.now < sent { try await Task.sleep(for: .milliseconds(20)) }
         }
         #expect(h.raw.count > count)
         #expect(h.raw.items.first?[SupportedType.string] == Data("userId".utf8))

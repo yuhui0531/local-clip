@@ -66,7 +66,8 @@ import LocalClipCore
         let capture = CaptureCoordinator(board: board, store: store); try await capture.start(); capture.stop()
         for index in 0..<10 { raw.user("queue-\(index)"); capture.tick() }
         #expect(capture.lastIgnored?.0 == .busy)
-        let deadline = ContinuousClock.now + .seconds(3)
+        // 全量并行时 CPU 饥饿可使异步写入超过3秒；满足即退出，放宽上限不拖慢正常路径，by AI.Coding。
+        let deadline = ContinuousClock.now + .seconds(10)
         while try await store.search(.init()).items.count < 8, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
         #expect(try await store.search(.init()).items.count == 8)
         raw.onRead = { _, _ in var settings = capture.policy; settings.captureEnabled = false; capture.updatePolicy(settings) }

@@ -126,7 +126,8 @@ struct SmartPastePlan {
             let focusDeadline = ContinuousClock.now + .milliseconds(700)
             var readySince: ContinuousClock.Instant?
             var focusReady = false
-            while ContinuousClock.now < focusDeadline {
+            // 每次休眠后先采样再判截止：系统繁忙时一次休眠可能越过截止时间，不能因少采一次就误判焦点未恢复；稳定40ms要求不变，by AI.Coding。
+            while true {
                 try Task.checkCancellation()
                 guard board.matches(receipt) else { return .failed("剪贴板已变化，请重新选择") }
                 guard applications.permitted, applications.isAlive(target), applications.isFrontmost(target) else {
@@ -136,6 +137,7 @@ struct SmartPastePlan {
                     if let readySince, ContinuousClock.now - readySince >= .milliseconds(40) { focusReady = true; break }
                     if readySince == nil { readySince = ContinuousClock.now }
                 } else { readySince = nil }
+                guard ContinuousClock.now < focusDeadline else { break }
                 try await Task.sleep(for: .milliseconds(20))
             }
             guard focusReady else { return safeFallback((applications.pasteFailureReason ?? "原目标焦点未恢复") + "，请手动粘贴") }
