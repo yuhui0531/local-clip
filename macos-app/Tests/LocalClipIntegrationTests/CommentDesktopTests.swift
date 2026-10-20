@@ -64,10 +64,13 @@ import ServiceManagement
         window.makeKey(); host.layoutSubtreeIfNeeded()
     }
     private func key(_ code: UInt16, _ text: String, in window: NSWindow) throws {
-        window.sendEvent(try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil, characters: text, charactersIgnoringModifiers: text, isARepeat: false, keyCode: code)))
+        let event = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil, characters: text, charactersIgnoringModifiers: text, isARepeat: false, keyCode: code))
+        // 测试宿主常拿不到前台激活，非 key 窗口的 sendEvent 会先结束字段编辑；正在编辑时直接交给字段编辑器，by AI.Coding。
+        if let editor = window.firstResponder as? NSTextView { editor.keyDown(with: event) } else { window.sendEvent(event) }
     }
     private func type(_ text: String, into field: NSTextField, window: NSWindow) throws {
-        try #require(window.makeFirstResponder(field))
+        // 已在编辑时不再 makeFirstResponder：重复设置会先结束当前编辑会话，触发 onCancel 撤销改名，by AI.Coding。
+        if field.currentEditor() == nil { try #require(window.makeFirstResponder(field)) }
         let editor = try #require(field.currentEditor() as? NSTextView)
         editor.setSelectedRange(NSRange(location: 0, length: editor.string.utf16.count))
         editor.insertText(text, replacementRange: editor.selectedRange())
@@ -98,6 +101,8 @@ import ServiceManagement
         try await wait { views(host, NSTextField.self).contains { $0.placeholderString == "名称" } }
         let field = try #require(views(host, NSTextField.self).first { $0.placeholderString == "名称" })
         let invalid = String(repeating: "x", count: 1025)
+        // 等原生字段完成首次异步聚焦再输入，与真实用户时序一致；抢先输入会被随后的聚焦结束编辑，by AI.Coding。
+        try await wait { field.currentEditor() != nil }
         try type(invalid, into: field, window: window); try key(36, "\r", in: window)
         try await wait { model.message.contains("重命名失败") }
         #expect(model.renamingID == id && field.stringValue == invalid)
