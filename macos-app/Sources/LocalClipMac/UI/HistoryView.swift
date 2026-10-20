@@ -38,12 +38,12 @@ public struct HistoryView: View {
                     // 范围与类型之间用和分类前相同的分隔线，间距与标签一致，by AI.Coding。
                     HStack(spacing: 2) {
                         HStack(spacing: 2) { filter("剪贴板", nil); favoritesTab }.fixedSize()
-                        Divider().frame(height: 16).padding(.horizontal, 6)
+                        Divider().frame(height: 14).padding(.horizontal, 8)
                         categoryNavigation(compact: compact)
                     }
                     // 状态槽与多选操作条共用同一位置；导航区和搜索在多选时保持可用，by AI.Coding。
                     HistoryToolbarStatus(model: model, footer: model.listState.footerState, input: model.queryState, compact: compact)
-                    HistorySearchInput(model: model, input: model.queryState, footer: model.listState.footerState, focus: model.searchFocusRequest).frame(width: compact ? 160 : 200, height: 30)
+                    HistorySearchInput(model: model, input: model.queryState, footer: model.listState.footerState, focus: model.searchFocusRequest, placeholder: searchPlaceholder).frame(width: compact ? 160 : 200, height: 30)
                     HStack(spacing: 2) {
                         filterButton
                             .popover(isPresented: $model.showingFilters) { FilterEditor(model: model) }
@@ -79,6 +79,15 @@ public struct HistoryView: View {
             // 编辑气泡贴靠目标卡片顶部弹出，独立于滚动卡片存活，不作为Sheet撑高或抬起底栏面板，by AI.Coding。
             .background { ClipContentEditorPopover(model: model) }
     }
+    /// 占位按当前范围说明搜索对象；不写已加载条数，避免误读为总数，by AI.Coding。
+    private var searchPlaceholder: String {
+        if model.favorites { return "搜索收藏" }
+        let active = model.activeCategories
+        if active.count > 1 { return "搜索所选分类" }
+        if let id = active.first, let name = model.categories.first(where: { $0.id == id })?.name { return "搜索“\(name)”" }
+        if let kind = model.kind { return "搜索" + Self.kindName(kind) }
+        return "搜索剪贴板"
+    }
     /// 筛选按钮携带生效条件数；单项清除与“清除筛选”仍在FilterEditor中，by AI.Coding。
     @ViewBuilder private var filterButton: some View {
         let count = model.filterCount
@@ -101,7 +110,7 @@ public struct HistoryView: View {
                         HStack(spacing: 2) {
                             // 紧凑布局把类型收进一个菜单，窄屏剩余宽度优先留给自定义分类，by AI.Coding。
                             if compact { kindMenu } else { ForEach(ClipKind.allCases, id: \.self) { kindTab($0) } }
-                            if !model.categories.isEmpty { Divider().frame(height: 16).padding(.horizontal, 6) }
+                            if !model.categories.isEmpty { Divider().frame(height: 14).padding(.horizontal, 8) }
                             ForEach(model.categories) { categoryTab($0).id($0.id) }
                             ToolbarIconButton(symbol: "plus", help: "新建分类") { model.editCategory() }
                         // 标签从收藏右侧依次排列，剩余空间不能把分类推到第二行，by AI.Coding。
@@ -195,11 +204,13 @@ private struct HistorySearchInput: View {
     @ObservedObject var input: HistoryQueryState
     @ObservedObject var footer: HistoryFooterState
     let focus: UUID
+    /// 占位由 HistoryView 按范围传入；本视图不观察 model，不能自行读取范围，by AI.Coding。
+    let placeholder: String
     var body: some View {
         let value = footer.snapshot
         SearchField(text: $input.literal, focus: focus, onChange: { model.searchChanged() },
             onNavigate: model.navigate, onEnter: { model.focusResults?() }, onEscape: { if model.handleEscape() { model.closePanel?(true) } },
-            placeholder: "搜索 \(value.itemCount)\(value.hasMore ? "+" : "") 条", onRegister: { model.searchField = $0 })
+            placeholder: placeholder, onRegister: { model.searchField = $0 })
             .overlay(alignment: .trailing) {
                 if value.loading { ProgressView().controlSize(.mini).padding(.trailing, 26).accessibilityLabel("正在读取") }
             }
@@ -577,7 +588,7 @@ private struct CategoryEditor: View {
             TextField("分类名称", text: $model.categoryDraft).textFieldStyle(.roundedBorder)
                 .focused($nameFocused).disabled(model.savingCategory).onSubmit { model.saveCategory() }
             HStack(spacing: 10) {
-                ForEach([("34C759","绿色"),("8E8E93","灰色"),("FFCC00","黄色"),("FF3B30","红色"),("007AFF","蓝色"),("AF52DE","紫色")], id: \.0) { hex, name in
+                ForEach(HistoryViewModel.categoryPalette, id: \.hex) { hex, name in
                     Button { model.categoryColor = hex } label: { Circle().fill(Color(nsColor: RichContent.colorValue(hex))).frame(width:20,height:20).overlay(Circle().strokeBorder(model.categoryColor == hex ? Color.primary : .clear, lineWidth:2).padding(-3)) }.buttonStyle(.plain)
                         .help(name).accessibilityLabel(name).accessibilityAddTraits(model.categoryColor == hex ? .isSelected : [])
                 }
@@ -825,7 +836,7 @@ struct ClipCard: View, Equatable {
                     cardTitle
                     if height >= 150 {
                         CopyAge(copiedAt: item.lastCopiedAt)
-                            .font(.system(size: LCStyle.FontSize.caption)).foregroundStyle(Color.white.opacity(0.75)).lineLimit(1)
+                            .font(.system(size: LCStyle.FontSize.meta)).foregroundStyle(Color.white.opacity(0.85)).lineLimit(1)
 
                     }
                 }
@@ -838,7 +849,8 @@ struct ClipCard: View, Equatable {
                 }
                 // 应用图标自带外形，直接显示不再垫白底；系统图标四周留有透明边距，略放大与标题对齐，by AI.Coding。
                 Group {
-                    if let appIcon { Image(nsImage: appIcon).resizable().interpolation(.high).scaledToFit().scaleEffect(1.12) }
+                    // 细暗投影勾出图标轮廓，同色头部上也可辨认，by AI.Coding。
+                    if let appIcon { Image(nsImage: appIcon).resizable().interpolation(.high).scaledToFit().scaleEffect(1.12).shadow(color: .black.opacity(0.25), radius: 0.5, y: 0.5) }
                     else { Image(systemName: symbol).font(.system(size: tiny ? 11 : 15, weight: .medium)).foregroundStyle(.white)
                         .frame(maxWidth: .infinity, maxHeight: .infinity).background(Color.white.opacity(0.18), in: RoundedRectangle(cornerRadius: LCStyle.Radius.control, style: .continuous)) }
                 }.frame(width: iconSize, height: iconSize).help(sourceDescription)
@@ -1392,7 +1404,7 @@ struct ToolbarTabStyle: ButtonStyle {
             configuration.label
                 .font(.system(size: LCStyle.FontSize.body, weight: selected ? .semibold : .regular))
                 .foregroundStyle(selected ? Color.primary : Color.secondary)
-                .padding(.horizontal, 10).frame(height: 28)
+                .padding(.horizontal, 8).frame(height: 28)
                 .background(Color.primary.opacity(selected ? 0.09 : configuration.isPressed ? 0.08 : hovering ? 0.05 : 0), in: Capsule())
                 .contentShape(Capsule())
                 .onHover { hovering = $0 }

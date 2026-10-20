@@ -27,8 +27,9 @@ struct CategoryDropTarget: NSViewRepresentable {
         button.font = .systemFont(ofSize: LCStyle.FontSize.body, weight: selected ? .semibold : .regular)
         button.attributedTitle = NSAttributedString(string: category.name, attributes: [.font: button.font!, .foregroundColor: selected ? NSColor.labelColor : NSColor.secondaryLabelColor])
         let color = RichContent.colorValue(category.colorHex)
-        button.image = NSImage(size: .init(width: 16, height: 14), flipped: false) { rect in
-            let circle = NSBezierPath(ovalIn: .init(x: 0, y: 1, width: 12, height: 12))
+        // 8pt圆点与13pt文字垂直居中，标签更轻，by AI.Coding。
+        button.image = NSImage(size: .init(width: 12, height: 14), flipped: false) { rect in
+            let circle = NSBezierPath(ovalIn: .init(x: 0, y: 3, width: 8, height: 8))
             color.setFill(); circle.fill()
             NSColor.black.withAlphaComponent(0.14).setStroke(); circle.lineWidth = 0.5; circle.stroke()
             return true
@@ -51,7 +52,8 @@ struct CategoryDropTarget: NSViewRepresentable {
         private var hovering = false
         override var intrinsicContentSize: NSSize {
             let width = (title as NSString).size(withAttributes: [.font: font ?? NSFont.systemFont(ofSize: 13)]).width
-            return .init(width: ceil(width) + 40, height: 28)
+            // 图片宽减4pt、内边距与SwiftUI标签同为8pt，共减8pt，by AI.Coding。
+            return .init(width: ceil(width) + 32, height: 28)
         }
         override func updateTrackingAreas() {
             super.updateTrackingAreas()

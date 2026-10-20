@@ -1126,10 +1126,17 @@ import LocalClipCore
         guard let id = selectedID, contains(id), !changingHistory else { return }
         change(.delete(orderedSelection))
     }
+    /// 分类色板：编辑器显示顺序与新建分类的默认色轮换顺序，by AI.Coding。
+    static let categoryPalette: [(hex: String, name: String)] = [("34C759", "绿色"), ("007AFF", "蓝色"), ("AF52DE", "紫色"), ("FFCC00", "黄色"), ("FF3B30", "红色"), ("8E8E93", "灰色")]
+    /// 新建分类默认取首个未被使用的颜色；全部用过则按分类数取模轮换，by AI.Coding。
+    var nextCategoryColor: String {
+        let used = Set(categories.map { $0.colorHex.uppercased() })
+        return Self.categoryPalette.first { !used.contains($0.hex) }?.hex ?? Self.categoryPalette[categories.count % Self.categoryPalette.count].hex
+    }
     /// 分类在面板内编辑，只有持久化成功后才更新标签和归属入口。
     public func editCategory(_ category: ClipCategory? = nil) {
         guard !savingCategory else { return }
-        categoryBeingEdited = category; categoryDraft = category?.name ?? ""; categoryColor = category?.colorHex ?? "34C759"; categoryError = ""
+        categoryBeingEdited = category; categoryDraft = category?.name ?? ""; categoryColor = category?.colorHex ?? nextCategoryColor; categoryError = ""
         showingDetail = false; showingCategoryEditor = true
     }
     public func saveCategory() {

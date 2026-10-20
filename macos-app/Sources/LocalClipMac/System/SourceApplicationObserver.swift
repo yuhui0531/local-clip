@@ -88,27 +88,35 @@ import LocalClipCore
         let color = readableHeader(base); headerColors["kind:" + key] = color
         return color
     }
-    /// 绘制到8×8位图，饱和度加权平均，排除饱和度<0.15的近灰像素；全为灰时返回nil。
+    /// 绘制到8×8位图，排除饱和度<0.15的近灰像素；按色相分12桶取饱和度权重最大的桶，返回桶内加权平均，避免双色图标混成脏色；全为灰时返回nil，by AI.Coding。
+    // ponytail: 红色跨0/1边界时桶0与桶11不合并，红色图标通常集中在一侧；需要时把两端合并为环形相邻桶。
     static func dominantColor(_ image: NSImage) -> NSColor? {
         guard let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 8, pixelsHigh: 8, bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0) else { return nil }
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
         image.draw(in: NSRect(x: 0, y: 0, width: 8, height: 8))
         NSGraphicsContext.restoreGraphicsState()
-        var red = 0.0, green = 0.0, blue = 0.0, weight = 0.0
+        var red = [CGFloat](repeating: 0, count: 12), green = red, blue = red, weight = red
         for x in 0..<8 { for y in 0..<8 {
             guard let pixel = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB), pixel.alphaComponent > 0.5 else { continue }
             let saturation = pixel.saturationComponent
             guard saturation >= 0.15 else { continue }
-            red += pixel.redComponent * saturation; green += pixel.greenComponent * saturation; blue += pixel.blueComponent * saturation; weight += saturation
+            let index = min(11, Int(pixel.hueComponent * 12))
+            red[index] += pixel.redComponent * saturation; green[index] += pixel.greenComponent * saturation
+            blue[index] += pixel.blueComponent * saturation; weight[index] += saturation
         } }
-        guard weight > 0 else { return nil }
-        return NSColor(srgbRed: red / weight, green: green / weight, blue: blue / weight, alpha: 1)
+        // 严格大于才替换，并列时保留下标小者，结果确定。
+        var best = 0
+        for index in 1..<12 where weight[index] > weight[best] { best = index }
+        guard weight[best] > 0 else { return nil }
+        return NSColor(srgbRed: red[best] / weight[best], green: green[best] / weight[best], blue: blue[best] / weight[best], alpha: 1)
     }
-    /// 保持色相，饱和度上限0.85，逐步降低亮度直到白字对比度≥4.5:1。
+    /// 头部饱和度上限；不设下限，低饱和图标保持原样，by AI.Coding。
+    static let maxHeaderSaturation: CGFloat = 0.72
+    /// 保持色相，饱和度上限 maxHeaderSaturation，逐步降低亮度直到白字对比度≥4.5:1。
     static func readableHeader(_ color: NSColor) -> NSColor {
         guard let value = color.usingColorSpace(.sRGB) else { return neutralHeader }
-        let hue = value.hueComponent, saturation = min(value.saturationComponent, 0.85)
+        let hue = value.hueComponent, saturation = min(value.saturationComponent, maxHeaderSaturation)
         var brightness = value.brightnessComponent
         var result = NSColor(hue: hue, saturation: saturation, brightness: brightness, alpha: 1)
         while whiteContrast(result) < 4.5 && brightness > 0 {

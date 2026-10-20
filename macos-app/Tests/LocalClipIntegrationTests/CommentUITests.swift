@@ -599,13 +599,13 @@ import LocalClipCore
         model.select(model.items[0].id)
         #expect(!model.showingDetail)
     }
-    /// 来源色头部：任何主色校正后白字对比度≥4.5:1，保持色相、饱和度≤0.85；近灰图标回退中性深灰；按键缓存只算一次，by AI.Coding。
+    /// 来源色头部：任何主色校正后白字对比度≥4.5:1，保持色相、饱和度≤上限；双色图标取主色桶而非RGB平均；近灰图标回退中性深灰；按键缓存只算一次，by AI.Coding。
     @Test func headerColorsKeepWhiteTextReadable() {
         let samples: [NSColor] = [.systemYellow, .yellow, NSColor(srgbRed: 0.6, green: 1, blue: 0.6, alpha: 1), .white, .cyan, .green, .orange, .red, .blue, .magenta, .systemTeal, NSColor(srgbRed: 1, green: 0.98, blue: 0.4, alpha: 1), .black]
         for sample in samples {
             let header = SourceApplicationObserver.readableHeader(sample)
             #expect(SourceApplicationObserver.whiteContrast(header) >= 4.5)
-            #expect(header.saturationComponent <= 0.85 + 0.001)
+            #expect(header.saturationComponent <= SourceApplicationObserver.maxHeaderSaturation + 0.001)
         }
         let yellow = SourceApplicationObserver.readableHeader(.systemYellow).usingColorSpace(.sRGB)!
         #expect(abs(yellow.hueComponent - NSColor.systemYellow.usingColorSpace(.sRGB)!.hueComponent) < 0.02)
@@ -615,6 +615,16 @@ import LocalClipCore
         let dominant = SourceApplicationObserver.dominantColor(image(.systemOrange))?.usingColorSpace(.sRGB)
         #expect(dominant.map { abs($0.hueComponent - NSColor.systemOrange.usingColorSpace(.sRGB)!.hueComponent) < 0.03 } == true)
         #expect(SourceApplicationObserver.dominantColor(image(.gray)) == nil)
+        // 左5/8绿、右3/8紫：结果为绿色主色，不是RGB平均出的灰紫。
+        let green = NSColor(srgbRed: 0.2, green: 0.78, blue: 0.35, alpha: 1), purple = NSColor(srgbRed: 0.69, green: 0.32, blue: 0.87, alpha: 1)
+        let split = NSImage(size: .init(width: 32, height: 32), flipped: false) { rect in
+            green.setFill(); NSRect(x: 0, y: 0, width: 20, height: 32).fill()
+            purple.setFill(); NSRect(x: 20, y: 0, width: 12, height: 32).fill(); return true
+        }
+        let average = NSColor(srgbRed: (0.2 * 5 + 0.69 * 3) / 8, green: (0.78 * 5 + 0.32 * 3) / 8, blue: (0.35 * 5 + 0.87 * 3) / 8, alpha: 1)
+        let mixed = SourceApplicationObserver.dominantColor(split)?.usingColorSpace(.sRGB)
+        #expect(mixed.map { abs($0.hueComponent - green.hueComponent) < 0.03 } == true)
+        #expect(mixed.map { abs($0.hueComponent - average.hueComponent) > 0.05 } == true)
         #expect(SourceApplicationObserver.whiteContrast(SourceApplicationObserver.neutralHeader) >= 4.5)
         let first = SourceApplicationObserver.headerColor(fallback: "test-kind", base: .systemGreen)
         #expect(first === SourceApplicationObserver.headerColor(fallback: "test-kind", base: .systemGreen))

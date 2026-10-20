@@ -70,6 +70,21 @@ extension HistoryStore {
         try await until { !model.historyBusy && model.items.count == 3 }
         #expect(!status.switching)
     }
+    /// T10：新建分类默认取首个未用色（大小写不敏感），六色用尽按分类数取模轮换；编辑已有分类保留原色，by AI.Coding。
+    @Test func newCategoryRotatesDefaultColor() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try HistoryStore(location: root)
+        _ = try await store.createCategory(name: "绿", colorHex: "34c759"); let blue = try await store.createCategory(name: "蓝", colorHex: "007AFF")
+        let model = makeModel(store); try await model.start(); model.capture.stop()
+        try await until { model.categories.count == 2 }
+        model.editCategory(); #expect(model.categoryColor == "AF52DE")
+        model.editCategory(blue); #expect(model.categoryColor == "007AFF")
+        for (index, hex) in ["AF52DE", "FFCC00", "FF3B30", "8E8E93", "AF52DE"].enumerated() { _ = try await store.createCategory(name: "c\(index)", colorHex: hex) }
+        let full = makeModel(store); try await full.start(); full.capture.stop()
+        #expect(full.categories.count == 7)
+        full.editCategory(); #expect(full.categoryColor == HistoryViewModel.categoryPalette[7 % 6].hex)
+    }
     /// 失败后重试期间保持失败提示，再次失败仍保留，成功后才清除，by AI.Coding。
     @Test func failedQueryRetryAndChangeKeepStatus() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
