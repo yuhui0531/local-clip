@@ -728,9 +728,9 @@ struct ClipCard: View, Equatable {
             ForEach(candidates, id: \.self) { Text($0).fixedSize(horizontal: $0 != candidates.last, vertical: false) }
         }
     }
-    /// Footer 候选由长到短：像素在前；多项时去掉“合计”，再只留数量，by AI.Coding。
+    /// Footer 候选由长到短：图片优先保留长宽，放不下大小时只显示长宽；多项时去掉“合计”，再只留数量，by AI.Coding。
     nonisolated static func footerCandidates(_ text: String, pixels: PixelSize?) -> [String] {
-        if let pixels { return [pixels.label + " · " + text, text] }
+        if let pixels { return [pixels.label + " · " + text, pixels.label, text] }
         guard let range = text.range(of: " · ") else { return [text] }
         return [text, text.replacingOccurrences(of: "合计 ", with: ""), String(text[..<range.lowerBound])]
             .reduce(into: []) { if !$0.contains($1) { $0.append($1) } }
