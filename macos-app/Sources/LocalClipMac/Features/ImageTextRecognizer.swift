@@ -13,7 +13,12 @@ public enum ImageTextRecognizer {
         let image = try decode(payload)
         let box = RequestBox()
         try await withTaskCancellationHandler {
-            try await Task.detached { try VNImageRequestHandler(cgImage: image.image, orientation: image.orientation).perform([box.request]) }.value
+            // Vision 的同步 perform 内部会等待自身队列；放在 GCD 而不是协作线程池，并发识别占满线程池时不会互相等死，by AI.Coding。
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                DispatchQueue.global(qos: .userInitiated).async {
+                    continuation.resume(with: Result { try VNImageRequestHandler(cgImage: image.image, orientation: image.orientation).perform([box.request]) })
+                }
+            }
         } onCancel: { box.request.cancel() }
         try Task.checkCancellation()
         let lines = (box.request.results ?? []).compactMap { $0.topCandidates(1).first?.string }.filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }

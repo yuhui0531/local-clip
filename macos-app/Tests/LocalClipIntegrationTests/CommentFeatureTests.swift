@@ -85,7 +85,8 @@ import LocalClipCore
         raw.user("between-polls"); capture.applicationDidDeactivate("local.private"); capture.tick()
         raw.user("allowed-after"); capture.tick()
         let expected = enabled ? 2 : 3
-        let deadline = ContinuousClock.now + .seconds(3)
+        // 全量并行时主线程争用可使入库超过3秒；满足即退出，放宽上限不拖慢正常路径，by AI.Coding。
+        let deadline = ContinuousClock.now + .seconds(10)
         while try await store.search(.init()).items.count < expected, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(5)) }
         let values = try await store.search(.init()).items.map(\.preview)
         #expect(values.contains("allowed-before") && values.contains("allowed-after"))

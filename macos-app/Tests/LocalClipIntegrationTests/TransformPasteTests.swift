@@ -218,7 +218,9 @@ import Testing
         let count = h.raw.count
         menu.choose(.camelCase, modifiers: [.option])
         if invalidation == "none" {
-            while h.raw.count == count && ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
+            // 写入等待单独计时；与弹出等待共用截止时间时，满负载并行下会被前一段耗尽，by AI.Coding。
+            let written = ContinuousClock.now + .seconds(3)
+            while h.raw.count == count && ContinuousClock.now < written { try await Task.sleep(for: .milliseconds(10)) }
             #expect(h.raw.items.first?[SupportedType.string] == Data("userId".utf8))
         } else {
             try await Task.sleep(for: .milliseconds(50))
