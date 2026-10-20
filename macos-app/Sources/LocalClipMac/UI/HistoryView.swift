@@ -650,6 +650,11 @@ struct ClipCard: View, Equatable {
         return thumbnailState
     }
     private var thumbnail: NSImage? { displayedThumbnail.image }
+    /// 缓存命中须转存为本卡状态：共享缓存按LRU淘汰，仍可见的卡片不能因此退回加载态且无人重载；离屏时照常释放，by AI.Coding。
+    private func adoptCachedThumbnail() -> Bool {
+        if case .loading = thumbnailState, let image = model.thumbnails.object(forKey: item.id as NSString) { thumbnailState = .ready(image) }
+        return thumbnailState.image != nil
+    }
     /// 完整路径来自已验证的原始引用；摘要只在加载前用于标题，不能决定预览格式，by AI.Coding。
     private var filePaths: (first: String, count: Int?)? {
         guard item.kind == .file else { return nil }
@@ -1098,7 +1103,7 @@ struct ClipCard: View, Equatable {
                     fileVersion = version; checkedFileGeneration = previewGeneration
                     guard let version, let url = version.references.first else { thumbnailState = .failed; return }
                     model.fileCounts.setObject(version.references.count as NSNumber, forKey: item.id as NSString)
-                    if displayedFileText != nil || thumbnail != nil { return }
+                    if displayedFileText != nil || adoptCachedThumbnail() { return }
                     // 图片、文本和常见文档共用内容预览入口，文本解码失败不能提前吞掉图片/文档预览。
                     let result = await FileCardPreview.render(fileAt: url)
                     guard !Task.isCancelled, model.contains(item.id),
@@ -1132,7 +1137,7 @@ struct ClipCard: View, Equatable {
                     characterCount = count.map { (item.contentFingerprint, $0) }
                     if let count { model.characterCounts.setObject(count as NSNumber, forKey: characterCountKey) }
                 }
-                guard item.kind == .image || item.kind == .mixed, thumbnail == nil else { return }
+                guard item.kind == .image || item.kind == .mixed, !adoptCachedThumbnail() else { return }
                 // 可见即自动加载；失败必须退出加载态，不把错误伪装成等待用户操作。
                 thumbnailState = .loading
                 let result = await model.derived.thumbnail(id: item.id)

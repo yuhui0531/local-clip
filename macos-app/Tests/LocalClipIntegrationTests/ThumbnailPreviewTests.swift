@@ -223,3 +223,43 @@ struct ThumbnailPreviewTests {
         }
     }
 }
+
+/// 共享缓存淘汰仍可见卡片的缩略图后，卡片不能退回加载态；窗口从不显示，无桌面副作用，by AI.Coding。
+@MainActor struct ThumbnailCacheEvictionTests {
+    @Test func visibleCardKeepsCachedThumbnailAfterEviction() async throws {
+        _ = NSApplication.shared
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try HistoryStore(location: root), data = try ImageFixtures.image(width: 320, height: 240)
+        guard case .inserted(let id) = try await store.ingest(.init(payload: .init([.init([.init(SupportedType.png, data)])])), at: SystemClock().now()) else { throw StoreError.notFound }
+        let board = MacPasteboardClient(access: RawBoard()), capture = CaptureCoordinator(board: board, store: store)
+        let model = HistoryViewModel(store: store, capture: capture,
+            paste: PasteCoordinator(board: board, applications: FakeApplications(), store: store, capture: capture),
+            derived: DerivedContentService(store: store))
+        try await model.start(); capture.stop()
+        // 预置缓存命中：卡片走复用路径而非自行生成。
+        model.thumbnails.setObject(try #require(NSImage(data: data)), forKey: id as NSString)
+        let host = NSHostingView(rootView: HistoryView(model: model)); host.sizingOptions = []
+        let window = NSWindow(contentRect: .init(x: 0, y: 0, width: 1000, height: 340), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false; window.contentView = host
+        defer { window.contentView = nil; window.close() }
+        func text() throws -> String {
+            host.layoutSubtreeIfNeeded(); window.displayIfNeeded()
+            let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: bitmap)
+            let request = VNRecognizeTextRequest(); request.recognitionLanguages = ["zh-Hans"]
+            try VNImageRequestHandler(cgImage: #require(bitmap.cgImage)).perform([request])
+            return (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: "\n")
+        }
+        try await Task.sleep(for: .milliseconds(800))
+        #expect(!(try text()).contains("正在加载"))
+        // 淘汰后任意重绘都不能露出无人重载的加载占位；切换隐藏内容只为触发卡片重绘。
+        model.thumbnails.removeObject(forKey: id as NSString)
+        model.updateSettings { $0.hideContents = true }
+        try await Task.sleep(for: .milliseconds(300))
+        model.updateSettings { $0.hideContents = false }
+        try await Task.sleep(for: .milliseconds(800))
+        let after = try text()
+        #expect(!after.contains("正在加载"), "\(after)")
+    }
+}
