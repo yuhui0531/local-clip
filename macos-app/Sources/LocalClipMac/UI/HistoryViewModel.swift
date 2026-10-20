@@ -1524,9 +1524,10 @@ import LocalClipCore
                 let currentSettings = try await store.settings()
                 // 纯图片在等待反馈内解码原图，Space再按仍可取消；超过40MP或损坏时不分配巨大位图。
                 // 多张图片逐项解码，与文件引用一样可在窗口内上一项/下一项切换；单项损坏不遮蔽其它图片。
-                let images = detail.payload.fileURLs == nil && detail.summary.kind == .image
+                // 仅把Sendable图片数据带回主线程；旧版SDK的NSImage/预览条目不能跨任务传递，by AI.Coding。
+                let imageData = detail.payload.fileURLs == nil && detail.summary.kind == .image
                     ? await Task.detached(priority: .userInitiated) {
-                        detail.payload.items.compactMap { item in RichContent.fullImage(.init([item])).flatMap { data in NSImage(data: data).map { QuickPreview.Item.image($0, bytes: data.count) } } }
+                        detail.payload.items.compactMap { RichContent.fullImage(.init([$0])) }
                     }.value : []
                 // 被取消或代次变化的旧请求不碰任何状态，等待与失败由取消方清理。
                 guard !Task.isCancelled, generation == contentGeneration else { return }
@@ -1540,6 +1541,7 @@ import LocalClipCore
                     quickPreview.show(urls.map(QuickPreview.Item.file), parent: previewParent?(), excludeFromSharing: settings.excludeFromSharing)
                 } else if detail.summary.kind == .image {
                     closeDetailKeepingFollow()
+                    let images = imageData.compactMap { data in NSImage(data: data).map { QuickPreview.Item.image($0, bytes: data.count) } }
                     guard !images.isEmpty else { quickPreview.close(); message = "图片预览不可用：数据无法解码或超过40MP，原始数据已保留"; return }
                     quickPreview.show(images, parent: previewParent?(), excludeFromSharing: settings.excludeFromSharing)
                 } else {
