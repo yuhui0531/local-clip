@@ -175,6 +175,8 @@ import Testing
         #expect(try await h.store.loadPayload(id: id, at: SystemClock().now()).plainText == "user_id")
     }
 
+    // 依赖仅调试构建存在的测试钩子；release基准构建跳过，by AI.Coding。
+    #if DEBUG
     /// 详情关闭的延迟回调不能取消用户刚请求的转换；只挂载隐藏卡片窗口，最终展示由测试接管，by AI.Coding。
     @Test(arguments: [false, true], ["none", "selection", "panel", "privacy"])
     func detailDismissalKeepsRequestedTransform(afterPresentation: Bool, invalidation: String) async throws {
@@ -232,6 +234,7 @@ import Testing
         #expect(h.apps.events == 0 && h.apps.activations == 0)
         #expect(try await h.store.loadPayload(id: id, at: SystemClock().now()).plainText == "user_id")
     }
+    #endif
 
     /// F18：AC1 SQL列表只写纯文本并按选择顺序；AC2换行与原有合并逐字节一致；AC3含图片时拒绝且剪贴板不变，by AI.Coding。
     @Test func joinStylesThroughPaste() async throws {

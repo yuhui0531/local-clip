@@ -382,6 +382,8 @@ import LocalClipCore
         item.kind = .file
         #expect(card(first) == card(first) && !(card(first) == card(second)))
     }
+    // 依赖仅调试构建存在的测试钩子；release基准构建跳过，by AI.Coding。
+    #if DEBUG
     /// 详情等待反馈：快速完成不闪转圈；500ms时显示等待；换选后旧请求不再弹出，by AI.Coding。
     @Test func detailLoadingFeedback() async throws {
         let (root, _, model) = try await setup()
@@ -408,6 +410,7 @@ import LocalClipCore
         model.select(first)
         #expect(!model.detailSlow && !model.showingDetail)
     }
+    #endif
     /// Space开关预览；Space打开后方向键换选保持预览并加载新内容；点击换卡仍关闭；隐藏内容时无效，by AI.Coding。
     @Test func spaceTogglesFollowingPreview() async throws {
         let (root, _, model) = try await setup()
@@ -530,6 +533,8 @@ import LocalClipCore
         #expect(fill("#00000000").map { NSColor($0.color).alphaComponent } == 0)
         #expect(fill("rgba(52, 199, 89, 0.5)").map { abs(NSColor($0.color).alphaComponent - 0.5) < 0.01 } == true)
     }
+    // 依赖仅调试构建存在的测试钩子；release基准构建跳过，by AI.Coding。
+    #if DEBUG
     /// Space预览：从按下起超过100ms即显示等待；读取中再按Space取消；换选、隐藏面板或隐藏内容后不迟到弹出，也不残留等待或失败，by AI.Coding。
     @Test func spacePreviewFeedbackAndCancel() async throws {
         let (root, _, model) = try await setup()
@@ -567,6 +572,7 @@ import LocalClipCore
         try await Task.sleep(for: .milliseconds(700))
         #expect(settled() && model.detail == nil)
     }
+    #endif
     /// 预览跟随越过页尾：直接加载下一页与等待已有预读两种路径都保持预览并加载新卡内容，by AI.Coding。
     @Test func previewFollowsAcrossPageBoundary() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
