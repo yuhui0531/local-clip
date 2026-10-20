@@ -83,7 +83,28 @@ extension HistoryStore {
         for (index, hex) in ["AF52DE", "FFCC00", "FF3B30", "8E8E93", "AF52DE"].enumerated() { _ = try await store.createCategory(name: "c\(index)", colorHex: hex) }
         let full = makeModel(store); try await full.start(); full.capture.stop()
         #expect(full.categories.count == 7)
-        full.editCategory(); #expect(full.categoryColor == HistoryViewModel.categoryPalette[7 % 6].hex)
+        full.editCategory(); #expect(full.categoryColor == "007AFF")
+    }
+    /// T13：卡片取大小时单张图片带像素；损坏数据与多张图片只有大小，标签退化为纯大小，by AI.Coding。
+    @Test func previewImageSizeCarriesPixelsOnlyForSingleDecodableImage() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try HistoryStore(location: root), at = SystemClock().now()
+        let png = try ImageFixtures.image(width: 40, height: 30), broken = Data("broken".utf8)
+        var ids: [ClipID] = []
+        for (index, payload) in [ClipboardPayload([.init([.init(SupportedType.png, png)])]), .init([.init([.init(SupportedType.png, broken)])]),
+                                 .init([.init([.init(SupportedType.png, png)]), .init([.init(SupportedType.png, try ImageFixtures.image(width: 5, height: 5))])])].enumerated() {
+            guard case .inserted(let id) = try await store.ingest(.init(payload: payload), at: at + Int64(index)) else { throw StoreError.notFound }
+            ids.append(id)
+        }
+        let model = makeModel(store)
+        let single = try #require(try await model.previewImageSize(id: ids[0]))
+        #expect(single.items == 1 && single.pixels == PixelSize(width: 40, height: 30))
+        let damaged = try #require(try await model.previewImageSize(id: ids[1]))
+        #expect(damaged.pixels == nil)
+        #expect(ClipContentSize.stored(bytes: damaged.bytes, items: damaged.items, pixels: damaged.pixels).label == HistoryViewModel.bytes(Int64(broken.count)))
+        let multiple = try #require(try await model.previewImageSize(id: ids[2]))
+        #expect(multiple.items == 2 && multiple.pixels == nil)
     }
     /// 失败后重试期间保持失败提示，再次失败仍保留，成功后才清除，by AI.Coding。
     @Test func failedQueryRetryAndChangeKeepStatus() async throws {

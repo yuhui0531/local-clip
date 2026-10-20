@@ -721,11 +721,19 @@ struct ClipCard: View, Equatable {
         case .file: return hidden ? "文件引用" : Self.fileFooter(contentSize)
         }
     }
-    /// 单张图片/单个图片文件宽度够时显示“W × H · 大小”，不够退回只显示大小，不出现截断省略号，by AI.Coding。
-    @ViewBuilder private var footerLabel: some View {
-        if !hidden, let pixels = contentSize.pixels {
-            ViewThatFits(in: .horizontal) { Text(pixels.label + " · " + footerText).fixedSize(); Text(footerText) }
-        } else { Text(footerText) }
+    /// 宽度不够时依次退回更短的文案，窄卡片不出现截断省略号；只剩最后一项时才允许截断，by AI.Coding。
+    private var footerLabel: some View {
+        let candidates = Self.footerCandidates(footerText, pixels: hidden ? nil : contentSize.pixels)
+        return ViewThatFits(in: .horizontal) {
+            ForEach(candidates, id: \.self) { Text($0).fixedSize(horizontal: $0 != candidates.last, vertical: false) }
+        }
+    }
+    /// Footer 候选由长到短：像素在前；多项时去掉“合计”，再只留数量，by AI.Coding。
+    nonisolated static func footerCandidates(_ text: String, pixels: PixelSize?) -> [String] {
+        if let pixels { return [pixels.label + " · " + text, text] }
+        guard let range = text.range(of: " · ") else { return [text] }
+        return [text, text.replacingOccurrences(of: "合计 ", with: ""), String(text[..<range.lowerBound])]
+            .reduce(into: []) { if !$0.contains($1) { $0.append($1) } }
     }
     /// 文件卡 Footer：单文件只写大小，数量只在此处出现，文件名行不再重复，by AI.Coding。
     nonisolated static func fileFooter(_ size: ClipContentSize) -> String {
@@ -884,14 +892,14 @@ struct ClipCard: View, Equatable {
                                     if !model.selectedIDs.contains(item.id) { model.select(item.id) }
                                     model.beginContentEdit(item.id)
                                 } label: { slotIcon("square.and.pencil") }
-                                    .buttonStyle(CardSlotStyle(active: nil)).help("编辑内容 · ⌘E").accessibilityLabel("编辑内容")
+                                    .buttonStyle(CardSlotStyle(active: nil, visible: slotsVisible)).help("编辑内容 · ⌘E").accessibilityLabel("编辑内容")
                             } else { Color.clear.frame(width: 24, height: 24) }
                             Button { model.showDetail(id: item.id) } label: {
                                 if detailPending { ProgressView().controlSize(.mini).frame(width: 24, height: 24) } else { slotIcon("info.circle") }
-                            }.buttonStyle(CardSlotStyle(active: nil)).help("详情 · ⌘I").accessibilityLabel(detailPending ? "正在准备预览" : "详情")
+                            }.buttonStyle(CardSlotStyle(active: nil, visible: slotsVisible)).help("详情 · ⌘I").accessibilityLabel(detailPending ? "正在准备预览" : "详情")
                             Button { model.change(.favorites(model.selectedIDs.contains(item.id) ? model.orderedSelection : [item.id], !item.isFavorite)) } label: {
                                 slotIcon(item.isFavorite ? "star.fill" : "star")
-                            }.buttonStyle(CardSlotStyle(active: item.isFavorite ? .orange : nil)).help(item.isFavorite ? "取消收藏" : "收藏").accessibilityLabel(item.isFavorite ? "取消收藏" : "收藏")
+                            }.buttonStyle(CardSlotStyle(active: item.isFavorite ? .orange : nil, visible: slotsVisible)).help(item.isFavorite ? "取消收藏" : "收藏").accessibilityLabel(item.isFavorite ? "取消收藏" : "收藏")
                         }
                     }.opacity(slotsVisible ? 1 : 0).allowsHitTesting(slotsVisible).accessibilityHidden(!slotsVisible)
                         .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(item.id)) } action: { infoRect = $0 }
@@ -1422,10 +1430,13 @@ struct ToolbarTabStyle: ButtonStyle {
 /// 卡片槽位按钮：默认次要灰，单按钮悬停/按下才显示强调色与浅底；已收藏常驻橙色，by AI.Coding。
 private struct CardSlotStyle: ButtonStyle {
     let active: Color?
-    func makeBody(configuration: Configuration) -> some View { SlotBody(configuration: configuration, active: active) }
+    /// 槽位隐藏时关闭命中测试，可能收不到移出事件；隐藏即复位悬停态，再出现时不残留强调色。
+    let visible: Bool
+    func makeBody(configuration: Configuration) -> some View { SlotBody(configuration: configuration, active: active, visible: visible) }
     struct SlotBody: View {
         let configuration: Configuration
         let active: Color?
+        let visible: Bool
         @State private var hovering = false
         @Environment(\.accessibilityReduceMotion) private var reduceMotion
         var body: some View {
@@ -1433,6 +1444,7 @@ private struct CardSlotStyle: ButtonStyle {
                 .foregroundStyle(active ?? (hovering || configuration.isPressed ? Color.accentColor : Color.secondary))
                 .background(Color.primary.opacity(configuration.isPressed ? 0.10 : hovering ? 0.06 : 0), in: RoundedRectangle(cornerRadius: LCStyle.Radius.control, style: .continuous))
                 .onHover { hovering = $0 }
+                .onChange(of: visible) { _, shown in if !shown { hovering = false } }
                 .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: hovering)
         }
     }

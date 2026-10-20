@@ -412,6 +412,8 @@ public actor HistoryStore: HistoryRepository {
     public func imageHeaderPrefix(id: ClipID, at: Instant, limit: Int = 262_144) throws -> Data? {
         let settings = try settings()
         return try strategy.read { db in
+            // rowid 查询与 blob 读取在同一读事务快照内，中途删除复用 rowid 也不会读到别的图片。
+            try db.exec("BEGIN"); defer { try? db.exec("COMMIT") }
             guard let row = try db.rows("SELECT *, (\(protectedSQL)) AS isProtected FROM clips WHERE id=?", [.text(id)]).first,
                   visible(row, at: at, settings: settings) else { throw StoreError.notFound }
             let order = [SupportedType.png, SupportedType.tiff, SupportedType.jpeg]

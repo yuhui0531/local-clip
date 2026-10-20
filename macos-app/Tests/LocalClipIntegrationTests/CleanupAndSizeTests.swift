@@ -209,4 +209,11 @@ struct CleanupAndSizeTests {
         #expect(ClipCard.fileFooter(.unknown) == "大小未知")
         #expect(ClipCard.fileFooter(.loading) == "文件引用")
     }
+    /// 窄卡片 Footer 由长到短退回：像素→仅大小；多项去“合计”→仅数量；单段文案不变，by AI.Coding。
+    @Test func footerCandidatesShortenWithoutTruncation() {
+        #expect(ClipCard.footerCandidates("416 KB", pixels: PixelSize(width: 4078, height: 660)) == ["4078 × 660 · 416 KB", "416 KB"])
+        #expect(ClipCard.footerCandidates("3 张 · 合计 1.2 MB", pixels: nil) == ["3 张 · 合计 1.2 MB", "3 张 · 1.2 MB", "3 张"])
+        #expect(ClipCard.footerCandidates("12 项 · 大小未知", pixels: nil) == ["12 项 · 大小未知", "12 项"])
+        #expect(ClipCard.footerCandidates("926 字", pixels: nil) == ["926 字"])
+    }
 }

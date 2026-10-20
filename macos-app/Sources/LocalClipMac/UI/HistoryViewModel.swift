@@ -258,7 +258,8 @@ import LocalClipCore
     /// 图片主表示的已保存字节数；只读计数列，不加载正文。单张图片顺带读≤256KB前缀解析像素，失败只缺像素，by AI.Coding。
     func previewImageSize(id: ClipID) async throws -> (bytes: Int64, items: Int, pixels: PixelSize?)? {
         guard let size = try await store.imageByteCount(id: id, at: clock.now()) else { return nil }
-        guard size.items == 1, let header = try? await store.imageHeaderPrefix(id: id, at: clock.now()) else { return (size.bytes, size.items, nil) }
+        // 卡片离屏取消后不再排队读前缀，避免快速滚动时作废读取拖慢可见卡片。
+        guard size.items == 1, !Task.isCancelled, let header = try? await store.imageHeaderPrefix(id: id, at: clock.now()), !Task.isCancelled else { return (size.bytes, size.items, nil) }
         let pixels = await Task.detached(priority: .utility) { ThumbnailRenderer.pixelSize(header: header) }.value
         return (size.bytes, size.items, pixels)
     }
