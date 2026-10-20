@@ -17,6 +17,8 @@ if [ ! -d "$frameworks" ]; then echo "Swift Testing framework directory unavaila
   swift --version 2>&1
   printf 'Developer directory: %s\nFramework directory: %s\n' "$developer" "$frameworks"
 } > "$output/environment.txt"
+# 桌面测试共享前台焦点与CPU，并行会互相抢焦点、拖慢等待超时；开启交互测试时串行，by AI.Coding。
+if [ "${LOCALCLIP_INTERACTIVE_TESTS:-}" = "1" ]; then set -- --no-parallel "$@"; fi
 set +e
 swift test -Xswiftc -Xfrontend -Xswiftc -disable-cross-import-overlays -Xswiftc -F -Xswiftc "$frameworks" -Xlinker -rpath -Xlinker "$frameworks" --disable-xctest --enable-swift-testing --disable-sandbox --cache-path "$root/.cache/packages" --package-path "$root" "$@" 2>&1 | tee "$output/swift-test.log"
 
