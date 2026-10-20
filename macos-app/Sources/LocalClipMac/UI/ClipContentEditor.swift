@@ -72,7 +72,7 @@ struct ClipContentEditor: View {
     let save: () -> Void
     let cancel: () -> Void
     let discard: () -> Void
-    @FocusState private var focused: Bool
+    @State private var focused = false
     /// 固定编辑区容纳长文；Return换行，⌘S/⌘↩显式保存，Escape优先收起页内放弃确认。
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -137,12 +137,9 @@ struct ClipContentEditor: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: LCStyle.Radius.control))
             }
-            TextEditor(text: $state.text)
-                .font(.system(size: LCStyle.FontSize.body, design: state.monospaced ? .monospaced : .default))
-                .lineSpacing(3)
-                .scrollContentBackground(.hidden)
-                .focused($focused)
-                .disabled(state.saving)
+            // 原生文本视图：输入、选择、复制、粘贴、撤销与重做走系统实现，语法着色随输入实时刷新，by AI.Coding。
+            HighlightingTextEditor(text: $state.text, monospaced: state.monospaced, editable: !state.saving, focused: focused,
+                                   onFocus: { focused = $0 })
                 .padding(.horizontal, 8)
                 .padding(.vertical, 8)
                 .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
@@ -229,6 +226,93 @@ struct ClipContentEditor: View {
                 focused = true
             } else {
                 cancel()
+            }
+        }
+    }
+}
+
+/// 编辑区与文件预览共用CodeTextView；高亮在后台按有界前缀计算，文字未变才着色，输入法组字期间不改属性，by AI.Coding。
+struct HighlightingTextEditor: NSViewRepresentable {
+    @Binding var text: String
+    let monospaced: Bool
+    let editable: Bool
+    let focused: Bool
+    var onFocus: (Bool) -> Void = { _ in }
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+    func makeNSView(context: Context) -> NSScrollView {
+        let scroll = CodeTextView.make(text: text, editable: editable)
+        if let view = scroll.documentView as? NSTextView {
+            view.delegate = context.coordinator; view.textContainerInset = NSSize(width: 0, height: 0)
+            view.setAccessibilityLabel("卡片内容")
+            context.coordinator.view = view; context.coordinator.applyFont(monospaced); context.coordinator.scheduleHighlight(delay: .zero)
+            // 深浅色切换时重新着色，自定义配色不停留在旧外观。
+            context.coordinator.appearance = view.observe(\.effectiveAppearance) { [weak coordinator = context.coordinator] _, _ in
+                MainActor.assumeIsolated { coordinator?.scheduleHighlight(delay: .zero) }
+            }
+        }
+        return scroll
+    }
+    func updateNSView(_ scroll: NSScrollView, context: Context) {
+        let coordinator = context.coordinator; coordinator.parent = self
+        guard let view = coordinator.view else { return }
+        // 外部改写（如“还原”）走可撤销的替换，撤销栈不会指向已失效的范围。
+        if view.string != text, !view.hasMarkedText() {
+            let range = NSRange(location: 0, length: (view.string as NSString).length)
+            view.breakUndoCoalescing()
+            if view.shouldChangeText(in: range, replacementString: text) { view.replaceCharacters(in: range, with: text); view.didChangeText() }
+            coordinator.applyFont(monospaced); coordinator.scheduleHighlight(delay: .zero)
+        }
+        if view.isEditable != editable { view.isEditable = editable }
+        if coordinator.monospaced != monospaced { coordinator.applyFont(monospaced) }
+        // 只在请求聚焦的那一刻转移焦点，不和用户点击其它控件争抢。
+        if focused, !coordinator.focusRequested, let window = view.window, window.firstResponder !== view { window.makeFirstResponder(view) }
+        coordinator.focusRequested = focused
+    }
+    static func dismantleNSView(_ scroll: NSScrollView, coordinator: Coordinator) { coordinator.highlighting?.cancel(); coordinator.appearance = nil }
+
+    @MainActor final class Coordinator: NSObject, NSTextViewDelegate {
+        var parent: HighlightingTextEditor
+        weak var view: NSTextView?
+        var monospaced = false
+        var focusRequested = false
+        var appearance: NSKeyValueObservation?
+        var highlighting: Task<Void, Never>?
+        init(_ parent: HighlightingTextEditor) { self.parent = parent }
+        func applyFont(_ value: Bool) {
+            monospaced = value
+            guard let view, let storage = view.textStorage else { return }
+            let font = value ? NSFont.monospacedSystemFont(ofSize: LCStyle.FontSize.body, weight: .regular) : NSFont.systemFont(ofSize: LCStyle.FontSize.body)
+            let paragraph = NSMutableParagraphStyle(); paragraph.lineSpacing = 3
+            storage.beginEditing()
+            storage.addAttributes([.font: font, .paragraphStyle: paragraph], range: NSRange(location: 0, length: storage.length))
+            storage.endEditing()
+            view.typingAttributes = [.font: font, .paragraphStyle: paragraph, .foregroundColor: NSColor.labelColor]
+        }
+        func textDidChange(_ notification: Notification) {
+            guard let view else { return }
+            if parent.text != view.string { parent.text = view.string }
+            scheduleHighlight(delay: .milliseconds(120))
+        }
+        func textDidBeginEditing(_ notification: Notification) { parent.onFocus(true) }
+        func textDidEndEditing(_ notification: Notification) { parent.onFocus(false) }
+        /// 新输入的字符不继承相邻关键字颜色，等下一次着色再上色。
+        func textView(_ textView: NSTextView, shouldChangeTypingAttributes old: [String: Any], toAttributes new: [NSAttributedString.Key: Any]) -> [NSAttributedString.Key: Any] {
+            var value = new; value[.foregroundColor] = NSColor.labelColor; return value
+        }
+        /// 合并连续输入，只给最终文字着色；长文仅分析前缀，后续保持系统文字色。
+        func scheduleHighlight(delay: Duration) {
+            highlighting?.cancel()
+            guard let view else { return }
+            let text = view.string
+            highlighting = Task { [weak self] in
+                if delay > .zero { try? await Task.sleep(for: delay) }
+                guard !Task.isCancelled else { return }
+                let result = await SyntaxHighlighter.shared.highlight(text, limit: QuickPreview.highlightLimit)
+                guard let self, !Task.isCancelled, let view = self.view, view.string == text, !view.hasMarkedText() else { return }
+                if let result { CodeTextView.apply(result, to: view) }
+                else if let storage = view.textStorage {
+                    storage.addAttribute(.foregroundColor, value: NSColor.labelColor, range: NSRange(location: 0, length: storage.length))
+                }
             }
         }
     }

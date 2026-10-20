@@ -6,18 +6,20 @@ import SwiftUI
     static func attributed(_ text: String, highlight: SyntaxHighlight, size: CGFloat, dark: Bool) -> NSAttributedString {
         let result = NSMutableAttributedString(string: text, attributes: [.font: NSFont.monospacedSystemFont(ofSize: size, weight: .regular), .foregroundColor: NSColor.labelColor])
         for span in highlight.spans where NSMaxRange(span.range) <= result.length {
-            let color: NSColor
-            switch span.style {
-            case let s where s.contains("comment"): color = dark ? .systemGray : NSColor(srgbRed: 0.39, green: 0.45, blue: 0.50, alpha: 1)
-            case let s where s.contains("string") || s.contains("regexp"): color = dark ? .systemGreen : NSColor(srgbRed: 0.10, green: 0.43, blue: 0.28, alpha: 1)
-            case let s where s.contains("number") || s.contains("literal"): color = dark ? .systemOrange : NSColor(srgbRed: 0.69, green: 0.35, blue: 0.07, alpha: 1)
-            case let s where s.contains("keyword") || s.contains("built_in") || s.contains("type"): color = dark ? .systemPink : .systemPurple
-            case let s where s.contains("attr") || s.contains("title") || s.contains("name"): color = .systemBlue
-            default: color = .labelColor
-            }
-            result.addAttribute(.foregroundColor, value: color, range: span.range)
+            result.addAttribute(.foregroundColor, value: color(span.style, dark: dark), range: span.range)
         }
         return result
+    }
+    /// 卡片、详情、文件预览与编辑器共用同一配色，保证各处显示一致，by AI.Coding。
+    static func color(_ style: String, dark: Bool) -> NSColor {
+        switch style {
+        case let s where s.contains("comment"): dark ? .systemGray : NSColor(srgbRed: 0.39, green: 0.45, blue: 0.50, alpha: 1)
+        case let s where s.contains("string") || s.contains("regexp"): dark ? .systemGreen : NSColor(srgbRed: 0.10, green: 0.43, blue: 0.28, alpha: 1)
+        case let s where s.contains("number") || s.contains("literal"): dark ? .systemOrange : NSColor(srgbRed: 0.69, green: 0.35, blue: 0.07, alpha: 1)
+        case let s where s.contains("keyword") || s.contains("built_in") || s.contains("type"): dark ? .systemPink : .systemPurple
+        case let s where s.contains("attr") || s.contains("title") || s.contains("name"): .systemBlue
+        default: .labelColor
+        }
     }
 }
 struct SyntaxText: View {

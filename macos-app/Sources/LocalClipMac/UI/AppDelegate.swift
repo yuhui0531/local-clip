@@ -138,6 +138,7 @@ import LocalClipCore
             model.quitApplication = { [weak self] in self?.quitApplication(nil) }
             model.registerShortcut = { [weak self] in self?.hotkeys.register($0) ?? false }
             model.focusResults = { [weak self] in guard let panel = self?.panel else { return }; panel.makeFirstResponder(panel) }
+            model.previewParent = { [weak self] in self?.panel }
             model.settingsChanged = { [weak self] in self?.applyAppearanceSettings() }
             model.resizePanel = { [weak self] height, persist in self?.resizeHistory(height, persist: persist) }
             model.showPasteFeedback = { [weak self] message, failed in self?.showPasteFeedback(message, failed: failed) }

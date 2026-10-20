@@ -1009,7 +1009,7 @@ struct ClipCard: View, Equatable {
                     Menu("移动") { Button("向前移动") { model.select(item.id); model.moveSelected(-1) }; Button("向后移动") { model.select(item.id); model.moveSelected(1) } }
                 }
                 Divider()
-                Button("预览") { model.select(item.id); model.quickLook() }.keyboardShortcut(.space, modifiers: [])
+                Button("预览") { model.preview(id: item.id) }.keyboardShortcut(.space, modifiers: [])
                 // 显式详情入口同步完成选择，再开启目标详情。
                 Button("详情") { model.showDetail(id: item.id) }.keyboardShortcut("i", modifiers: .command)
                 Menu("定位") {
@@ -1063,8 +1063,10 @@ struct ClipCard: View, Equatable {
                     let result = await FileCardPreview.render(fileAt: url)
                     guard !Task.isCancelled, model.contains(item.id),
                           (try? await model.previewMetadata(id: item.id)) != nil else { return }
-                    guard await Task.detached(priority: .utility, operation: { version.isCurrent() }).value,
-                          !Task.isCancelled else { thumbnailState = .failed; return }
+                    // 离屏取消不是生成失败；只有文件在读取期间变化才退回文件样式。
+                    let current = await Task.detached(priority: .utility, operation: { version.isCurrent() }).value
+                    guard !Task.isCancelled else { return }
+                    guard current else { thumbnailState = .failed; return }
                     switch result {
                     case .text(let text):
                         fileText = text

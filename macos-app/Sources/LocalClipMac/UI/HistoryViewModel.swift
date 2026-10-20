@@ -68,7 +68,10 @@ import LocalClipCore
     @Published public var richPreview: NSAttributedString?
     private var anchorID: ClipID?
     private var dragSelection: (ids: [ClipID], index: Int)?
-    private let filePreview = FilePreview()
+    private let quickPreview = QuickPreview()
+    /// 预览窗口挂在历史面板下作为子窗口，由宿主提供面板，by AI.Coding。
+    public var previewParent: (() -> NSWindow?)?
+    var previewWindowVisible: Bool { quickPreview.isVisible }
     public var focusResults: (() -> Void)?
     public var settingsChanged: (() -> Void)?
     public var resizePanel: ((Double, Bool) -> Void)?
@@ -211,6 +214,7 @@ import LocalClipCore
     @Published public private(set) var settings = SettingsSnapshot() {
         didSet {
             // 所有设置来源共用隐藏撤销边界，不能只覆盖设置窗口入口，by AI.Coding。
+            if settings.excludeFromSharing != oldValue.excludeFromSharing { quickPreview.setSharing(excluded: settings.excludeFromSharing) }
             if settings.hideContents && !oldValue.hideContents {
                 showingDetail = false; invalidateDetail(); imageTextTask?.cancel(); imageTextGeneration = UUID()
                 if message == "正在识别图中文字…" { message = "" }
@@ -234,7 +238,8 @@ import LocalClipCore
     }
     /// Esc分级：自有弹窗 → 清空搜索词（焦点回结果）→ 返回true表示应关闭面板；输入法候选由调用方先放行，by AI.Coding。
     func handleEscape() -> Bool {
-        if showingCategoryEditor { showingCategoryEditor = false }
+        if quickPreview.isVisible { quickPreview.close(); previewFollowsSelection = false }
+        else if showingCategoryEditor { showingCategoryEditor = false }
         else if showingFilters { showingFilters = false }
         else if showingStatusDetail { showingStatusDetail = false }
         else if showingDetail { showingDetail = false }
@@ -439,6 +444,7 @@ import LocalClipCore
         if !visible {
             // 尚未打开的编辑请求与Space预览不在隐藏面板上弹出；已经输入的草稿保留到下次打开。
             contentEditRequest = UUID(); if quickLookTask != nil { endQuickLook() }
+            quickPreview.close()
             transformMenuRequest = UUID(); transformMenu?.close()
             cancelRename()
             let delay = thumbnailCleanupDelay
@@ -742,8 +748,11 @@ import LocalClipCore
         }
         // 普通选卡同步关闭旧详情，显式详情入口随后打开目标，避免视图异步回调误关闭新弹窗。
         if showingDetail && !keepDetail { showingDetail = false }
-        invalidateSelection(); selectedID = id
-        guard let id else { return }
+        // Space打开的预览窗口与Quick Look一致随方向键换选；其它换选关闭窗口，by AI.Coding。
+        let followPreview = keepDetail && previewFollowsSelection && quickPreview.isVisible
+        invalidateSelection(keepPreview: followPreview); selectedID = id
+        guard let id else { if followPreview { quickPreview.close() }; return }
+        if followPreview { quickLook() }
         let generation = selectionGeneration
         metadataTask = Task { [weak self] in
             guard let self else { return }
@@ -770,7 +779,7 @@ import LocalClipCore
         // 从详情发起的识别随详情关闭取消，不写剪贴板，by AI.Coding。
         if !showingDetail, imageTextFromDetail { imageTextTask?.cancel(); imageTextTask = nil }
         // 关闭详情只是释放预览；从详情接续的转换不应被视为记录失效而取消，by AI.Coding。
-        if showingDetail { loadDetail() } else { invalidateDetail(cancelTransformMenu: false) }
+        if showingDetail { loadDetail() } else { invalidateDetail(cancelTransformMenu: false, keepPreview: true) }
     }
     private func loadDetail() {
         guard canDisplayContents, let id = selectedID, !pendingDeletion.contains(id) else { return }
@@ -834,22 +843,23 @@ import LocalClipCore
         }
     }
     /// 存储变更/删除作废两个请求世代，不让旧详情或旧元数据重新覆盖当前选择。
-    private func invalidateSelection() {
+    private func invalidateSelection(keepPreview: Bool = false) {
         metadataTask?.cancel(); metadataTask = nil; selectionGeneration = UUID(); selectedMetadata = nil
-        invalidateDetail()
+        invalidateDetail(keepPreview: keepPreview)
     }
     /// 数据变更使派生内容与转换一起失效；单纯收起详情只释放预览，by AI.Coding。
-    private func invalidateDetail(cancelTransformMenu: Bool = true) {
+    /// keepPreview：仅收起详情弹窗时保留预览窗口与待弹出的预览，换卡或内容变化仍一并关闭，by AI.Coding。
+    private func invalidateDetail(cancelTransformMenu: Bool = true, keepPreview: Bool = false) {
         detailing?.cancel(); detailing = nil; detailID = UUID()
-        quickLookTask?.cancel(); quickLookTask = nil; contentGeneration = UUID(); filePreview.close()
+        if !keepPreview { quickLookTask?.cancel(); quickLookTask = nil; contentGeneration = UUID(); quickPreview.close() }
         // 选择/内容变更仍关闭旧转换；详情移交焦点的延迟回调不能销毁新菜单，by AI.Coding。
         if cancelTransformMenu { transformMenuRequest = UUID(); transformMenu?.close() }
         if detailEditable { detailEditable = false }
         if detail != nil { detail = nil }; if image != nil { image = nil }; if richPreview != nil { richPreview = nil }
         if detailInspection != nil { detailInspection = nil }; if detailHighlight != nil { detailHighlight = nil }
         if !previewMessage.isEmpty { previewMessage = "" }; if detailLoading { detailLoading = false }
-        detailSlowTask?.cancel(); detailSlowTask = nil
-        if detailSlow { detailSlow = false }; if detailFailed { detailFailed = false }
+        if !keepPreview || quickLookTask == nil { detailSlowTask?.cancel(); detailSlowTask = nil; if detailSlow { detailSlow = false } }
+        if detailFailed { detailFailed = false }
     }
     /// 状态槽“重试”：保持详情打开意图，重新读取当前选择，by AI.Coding。
     func retryDetail() {
@@ -1478,8 +1488,20 @@ import LocalClipCore
     /// 读取中再按Space取消待弹出的预览，by AI.Coding。
     func toggleQuickLook() {
         if quickLookTask != nil { endQuickLook(); previewFollowsSelection = false; return }
+        if quickPreview.isVisible { quickPreview.close(); previewFollowsSelection = false; return }
         if showingDetail { showingDetail = false; return }
         previewFollowsSelection = true; quickLook()
+    }
+    /// “预览”菜单与Space同一入口：先选中该卡，再按相同规则打开并让方向键跟随，by AI.Coding。
+    func preview(id: ClipID) {
+        guard canDisplayContents, contains(id) else { return }
+        select(id); previewFollowsSelection = true; quickLook()
+    }
+    /// 从跟随的详情弹窗换到预览窗口时，收起弹窗不结束方向键跟随，by AI.Coding。
+    private func closeDetailKeepingFollow() {
+        guard showingDetail else { return }
+        let follows = previewFollowsSelection
+        showingDetail = false; previewFollowsSelection = follows
     }
     /// 结束待弹出的预览请求并清掉它的等待反馈。
     private func endQuickLook() {
@@ -1500,20 +1522,35 @@ import LocalClipCore
                 let detail = try await store.detail(id: selectedID, at: clock.now())
                 let latest = try await store.metadata(id: selectedID, at: clock.now())
                 let currentSettings = try await store.settings()
+                // 纯图片在等待反馈内解码原图，Space再按仍可取消；超过40MP或损坏时不分配巨大位图。
+                // 多张图片逐项解码，与文件引用一样可在窗口内上一项/下一项切换；单项损坏不遮蔽其它图片。
+                let images = detail.payload.fileURLs == nil && detail.summary.kind == .image
+                    ? await Task.detached(priority: .userInitiated) {
+                        detail.payload.items.compactMap { item in RichContent.fullImage(.init([item])).flatMap { data in NSImage(data: data).map { QuickPreview.Item.image($0, bytes: data.count) } } }
+                    }.value : []
                 // 被取消或代次变化的旧请求不碰任何状态，等待与失败由取消方清理。
                 guard !Task.isCancelled, generation == contentGeneration else { return }
                 let slow = detailSlow
                 endQuickLook()
-                guard canDisplayContents, panelVisible, !currentSettings.hideContents, self.selectedID == selectedID, isVisible(latest.summary) else { return }
-                if let urls = detail.payload.fileURLs { previewFollowsSelection = false; filePreview.show(urls, excludeFromSharing: settings.excludeFromSharing) }
-                else {
+                // 跟随换选时窗口仍显示上一项；本项无法预览时关闭，不能把旧内容当成新选择。
+                guard canDisplayContents, panelVisible, !currentSettings.hideContents, self.selectedID == selectedID, isVisible(latest.summary) else { quickPreview.close(); return }
+                // 文件与纯图片打开预览窗口（文件按内容选择正文/系统预览，图片可缩放）；其余内容沿用详情弹窗。
+                if let urls = detail.payload.fileURLs {
+                    closeDetailKeepingFollow()
+                    quickPreview.show(urls.map(QuickPreview.Item.file), parent: previewParent?(), excludeFromSharing: settings.excludeFromSharing)
+                } else if detail.summary.kind == .image {
+                    closeDetailKeepingFollow()
+                    guard !images.isEmpty else { quickPreview.close(); message = "图片预览不可用：数据无法解码或超过40MP，原始数据已保留"; return }
+                    quickPreview.show(images, parent: previewParent?(), excludeFromSharing: settings.excludeFromSharing)
+                } else {
+                    quickPreview.close()
                     showingDetail = true; detailVisibilityChanged()
                     // 已经显示等待时接续到详情读取，不在两段读取之间熄灭。
                     if slow, detailLoading { detailSlow = true }
                 }
             } catch {
                 guard !Task.isCancelled, generation == contentGeneration else { return }
-                endQuickLook(); message = "预览不可用，记录已变化"
+                endQuickLook(); quickPreview.close(); message = "预览不可用，记录已变化"
             }
         }
         detailSlowTask = Task { [weak self] in

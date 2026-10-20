@@ -85,6 +85,8 @@ public actor DerivedContentService {
         requests[id] = (generation, task)
         let value = await task.value
         if requests[id]?.0 == generation { requests[id] = nil }
+        // 离屏卡片的取消是异步发出的，可能晚于同一卡片重新可见后的新请求；调用方自身未取消时重新生成，不把别人的取消显示成失败，by AI.Coding。
+        if case .unavailable = value, task.isCancelled, !Task.isCancelled { return await thumbnail(id: id) }
         return value
     }
     /// 不可见/删除时取消派生；提交端仍有独立版本验证。

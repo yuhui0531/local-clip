@@ -30,8 +30,9 @@ public actor SyntaxHighlighter {
     private var order: [String] = []
     /// 独立于任何设置；仅分析有界前缀，详情仍保留完整文字。缓存只保存摘要键与范围，by AI.Coding。
     /// 显式提示只授权着色；无提示时由共用判定决定语言，前缀截断时结论只用于展示。
-    public func highlight(_ text: String, languageHint: String? = nil) -> SyntaxHighlight? {
-        guard let prefix = Self.bounded(text) else { return nil }
+    /// limit仅供文件预览与编辑器放宽着色范围；卡片与详情沿用默认上限，by AI.Coding。
+    public func highlight(_ text: String, languageHint: String? = nil, limit: Int = characterLimit) -> SyntaxHighlight? {
+        guard let prefix = Self.bounded(text, limit: limit) else { return nil }
         let truncated = prefix.utf16.count < text.utf16.count
         let key = (languageHint ?? "auto:\(truncated)") + ":" + ContentFingerprint.hash(Data(prefix.utf8))
         if let result = cache[key] { return result }
@@ -66,12 +67,28 @@ public actor SyntaxHighlighter {
         return result
     }
     /// 有界前缀不截断代理对；URL、路径与正文的保护由共用判定负责。
-    private static func bounded(_ text: String) -> String? {
-        var units = Array(text.utf16.prefix(characterLimit))
+    private static func bounded(_ text: String, limit: Int) -> String? {
+        var units = Array(text.utf16.prefix(limit))
         if let last = units.last, (0xD800...0xDBFF).contains(last) { units.removeLast() }
         let prefix = String(decoding: units, as: UTF16.self)
         return prefix.isEmpty ? nil : prefix
     }
+    /// 文件扩展名到内置highlight.js语言；未知扩展名返回nil，交给内容判定，by AI.Coding。
+    public static func language(forFile url: URL) -> String? {
+        let name = url.lastPathComponent.lowercased()
+        if name == "makefile" || name == "gnumakefile" { return "makefile" }
+        if name == "dockerfile" || name.hasPrefix("dockerfile.") { return "bash" }
+        return fileLanguages[url.pathExtension.lowercased()]
+    }
+    private static let fileLanguages: [String: String] = [
+        "json": "json", "jsonc": "json", "xml": "xml", "html": "xml", "htm": "xml", "svg": "xml", "plist": "xml", "vue": "xml", "svelte": "xml",
+        "yaml": "yaml", "yml": "yaml", "py": "python", "pyw": "python", "java": "java", "js": "javascript", "mjs": "javascript", "cjs": "javascript",
+        "jsx": "javascript", "ts": "typescript", "tsx": "typescript", "mts": "typescript", "cts": "typescript", "sql": "sql",
+        "sh": "bash", "bash": "bash", "zsh": "bash", "swift": "swift", "c": "c", "h": "c", "cc": "cpp", "cpp": "cpp", "hpp": "cpp", "cxx": "cpp",
+        "cs": "csharp", "go": "go", "rs": "rust", "rb": "ruby", "php": "php", "kt": "kotlin", "kts": "kotlin", "gradle": "kotlin",
+        "m": "objectivec", "mm": "objectivec", "lua": "lua", "pl": "perl", "r": "r", "css": "css", "scss": "scss", "less": "less",
+        "md": "markdown", "markdown": "markdown", "ini": "ini", "toml": "ini", "cfg": "ini", "conf": "ini", "properties": "ini",
+        "graphql": "graphql", "gql": "graphql", "diff": "diff", "patch": "diff"]
     /// 引擎仅载入一次，只使用官方指定语言高亮接口，by AI.Coding。
     private func engine() -> JSContext? {
         if attemptedLoad { return context }
