@@ -34,6 +34,16 @@ import LocalClipCore
     }
 }
 
+/// 只给空状态订阅：换范围查询未返回时不显示旧提示，失败时不冒充空历史，by AI.Coding。
+@MainActor final class HistoryQueryStatus: ObservableObject {
+    @Published private(set) var switching = false
+    @Published private(set) var failed = false
+    func update(switching: Bool? = nil, failed: Bool? = nil) {
+        if let switching, switching != self.switching { self.switching = switching }
+        if let failed, failed != self.failed { self.failed = failed }
+    }
+}
+
 @MainActor final class HistoryListState: ObservableObject {
     struct Snapshot: Equatable {
         var items: [ClipSummary] = []
@@ -47,6 +57,7 @@ import LocalClipCore
     }
     @Published private(set) var snapshot = Snapshot()
     let footerState = HistoryFooterState()
+    let queryStatus = HistoryQueryStatus()
     private var pending: Snapshot?
     /// 选择元数据只有底栏消费，不让异步元数据结果重新计算整条历史，by AI.Coding。
     var selectedMetadata: ClipMetadata? {

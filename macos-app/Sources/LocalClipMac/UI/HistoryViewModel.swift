@@ -588,10 +588,12 @@ import LocalClipCore
         searching?.cancel(); paging?.cancel(); paging = nil; pendingPageNavigation = nil; queryID = UUID(); let id = queryID
         if !preserveWindow { scrollAnchor = nil; historyOffset = 0 }
         activeSearchSignature = currentSearchSignature; beginQueryLoading(id)
+        if !preserveWindow { listState.queryStatus.update(switching: true) }
         searching = Task { [weak self] in
             guard let self else { return }
             defer {
-                if id == queryID { queryPending = false; delayedLoading?.cancel(); delayedLoading = nil }
+                // 范围切换标记只由接管查询结束时清除；变更作废查询不提前露出新范围空提示，by AI.Coding。
+                if id == queryID { queryPending = false; delayedLoading?.cancel(); delayedLoading = nil; listState.queryStatus.update(switching: false) }
             }
             do {
                 // 服务P95约57ms；输入防抖缩至20ms，避免单防抖就耗尽100ms预算。
@@ -648,7 +650,7 @@ import LocalClipCore
                         scrollRestoration = .init(offset: 0)
                         listState[\.scrollEpoch] += 1
                     }
-                    items = visible; cursor = window.cursor; loading = false
+                    items = visible; cursor = window.cursor; loading = false; listState.queryStatus.update(failed: false)
                     if preserveWindow {
                         selectedIDs.formIntersection(Set(items.map(\.id)))
                         if let selectedID, contains(selectedID) { select(selectedID, preserveSelection: true) }
@@ -665,7 +667,7 @@ import LocalClipCore
             catch is CancellationError { /* 旧输入取消无需报错。 */ }
             catch {
                 guard id == queryID else { return }
-                listState.update { loading = false; items = []; cursor = nil; select(nil) }; message = "历史查询失败，请重试"
+                listState.update { loading = false; items = []; cursor = nil; select(nil) }; listState.queryStatus.update(failed: true); message = "历史查询失败，请重试"
             }
         }
     }
@@ -1454,11 +1456,11 @@ import LocalClipCore
         searching?.cancel(); paging?.cancel(); paging = nil; pendingPageNavigation = nil
         queryID = UUID(); let generation = queryID
         let targetCategories = Set(category.map { [$0] } ?? [])
-        activeSearchSignature = currentSearchSignature; beginQueryLoading(generation)
+        activeSearchSignature = currentSearchSignature; beginQueryLoading(generation); listState.queryStatus.update(switching: true)
         // 定位也拥有完整查询生命周期；取消、失败和空结果都释放逻辑忙碌状态，by AI.Coding。
         searching = Task {
             defer {
-                if generation == queryID { queryPending = false; delayedLoading?.cancel(); delayedLoading = nil; loading = false }
+                if generation == queryID { queryPending = false; delayedLoading?.cancel(); delayedLoading = nil; loading = false; listState.queryStatus.update(switching: false) }
             }
             do {
                 _ = try await store.metadata(id: wanted, at: clock.now())
@@ -1476,7 +1478,7 @@ import LocalClipCore
                 queryConditions = []; queryProblems = []
                 activeSearchSignature = currentSearchSignature; locatedSearchSignature = currentSearchSignature
                 listState.update {
-                    items = visible; cursor = next; loading = false; select(wanted)
+                    items = visible; cursor = next; loading = false; listState.queryStatus.update(failed: false); select(wanted)
                     scrollRestoration = .init(offset: max(0, HistoryView.cardInset + CGFloat(index) * historyStride))
                 }
                 focusResults?()

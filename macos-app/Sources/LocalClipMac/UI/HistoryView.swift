@@ -207,7 +207,6 @@ private struct HistorySearchInput: View {
 }
 private struct HistoryStrip: View {
     let model: HistoryViewModel
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var list: HistoryListState
     let cardHeight: CGFloat
     let categoryID: String?
@@ -223,16 +222,14 @@ private struct HistoryStrip: View {
     var body: some View {
         ZStack {
             if model.items.isEmpty {
-                HistoryEmptyState(model: model, input: model.queryState, loading: list.snapshot.loading)
+                HistoryEmptyState(model: model, input: model.queryState, status: list.queryStatus, loading: list.snapshot.loading)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 // 换筛选整组重建滚动区，新列表首帧就在最左侧，不先按旧偏移绘制再跳回，by AI.Coding。
+                // 新结果直接替换，不与退出中的空提示交叉淡入，by AI.Coding。
                 HistoryScroller(strip: self, list: list, epoch: list.snapshot.scrollEpoch).id(list.snapshot.scrollEpoch)
-                    // 换筛选只淡入新列表，不给卡片重排加动画，by AI.Coding。
-                    .transition(.opacity)
             }
         }.frame(maxWidth: .infinity).frame(height: cardHeight + 20).clipped()
-        .animation(reduceMotion ? nil : .easeIn(duration: 0.12), value: list.snapshot.scrollEpoch)
         // 隐藏状态用明确占位替代整层模糊，避免正文轮廓泄露及持续模糊合成，by AI.Coding。
         .opacity(hideContents ? 0 : 1).allowsHitTesting(!hideContents).accessibilityHidden(hideContents)
         .overlay {
@@ -314,10 +311,20 @@ private struct HistoryScroller: View {
 private struct HistoryEmptyState: View {
     @ObservedObject var model: HistoryViewModel
     @ObservedObject var input: HistoryQueryState
+    @ObservedObject var status: HistoryQueryStatus
     let loading: Bool
     var body: some View {
         let searched = !input.literal.isEmpty
         let filtered = model.sourceFilter != nil || model.dateFilterEnabled || model.kind != nil || model.activeCategories.count > 1 || !model.queryConditions.isEmpty
+        // 换范围的结果未到时留空，避免先显示新范围的空提示；慢查询仍按延迟显示转圈，by AI.Coding。
+        if status.switching && !loading { Color.clear }
+        else if status.failed && !loading {
+            VStack(spacing: 10) {
+                Image(systemName: "exclamationmark.triangle").font(.system(size: 28, weight: .light)).foregroundStyle(.secondary)
+                Text("历史读取失败").font(.system(size: 16, weight: .semibold))
+                Button("重试") { model.refresh() }.buttonStyle(.bordered).controlSize(.small)
+            }.padding(.horizontal, 24)
+        } else {
         VStack(spacing: 10) {
             if loading { ProgressView().controlSize(.small) }
             else { Image(systemName: searched || filtered ? "magnifyingglass" : model.favorites ? "star" : "square.on.square")
@@ -339,6 +346,7 @@ private struct HistoryEmptyState: View {
                 }.buttonStyle(.bordered).controlSize(.small)
             }
         }.padding(.horizontal, 24)
+        }
     }
 }
 /// 状态槽与多选操作条交叉淡入，同一位置、固定宽度，工具栏其余控件不位移，by AI.Coding。

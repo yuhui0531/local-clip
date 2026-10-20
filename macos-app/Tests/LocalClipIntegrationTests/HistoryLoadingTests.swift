@@ -1,8 +1,13 @@
 // 视口分页、稳定滚动锚点和原生分类接收的回归；数据与剪贴板均隔离，by AI.Coding。
 import AppKit
 import Testing
-import LocalClipCore
+@testable import LocalClipCore
 @testable import LocalClipMac
+
+extension HistoryStore {
+    /// 测试切换既有不可用状态，模拟查询失败而不损坏数据库。
+    func setUnavailableForTesting(_ value: Bool) { unavailable = value }
+}
 
 @MainActor struct HistoryLoadingTests {
     private func makeModel(_ store: HistoryStore) -> HistoryViewModel {
@@ -42,6 +47,49 @@ import LocalClipCore
         model.sourceFilter = nil; model.kind = nil; model.query = "app:nothing"; model.searchChanged(debounce: false)
         try await until { !model.historyBusy && model.queryProblems == ["未找到来源 nothing"] }
         #expect(model.items.count == 3)
+    }
+    /// 换分类结果未到时空状态留空，不先显示新范围的空提示；连续切换只发布最后一次，后台刷新不清空提示，by AI.Coding。
+    @Test func categorySwitchHoldsEmptyStateUntilResult() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try HistoryStore(location: root); try await seed(store, count: 3)
+        let category = try await store.createCategory(name: "空分类", colorHex: "34C759")
+        let model = makeModel(store); try await model.start(); model.capture.stop()
+        try await until { !model.historyBusy && model.items.count == 3 }
+        let status = model.listState.queryStatus
+        model.selectCategories([category.id]); model.searchChanged(debounce: false)
+        #expect(status.switching && model.items.count == 3)
+        try await until { !model.historyBusy && model.items.isEmpty }
+        #expect(!status.switching && !status.failed)
+        model.refresh(); #expect(!status.switching)
+        try await until { !model.historyBusy }
+        model.selectKind(nil); model.searchChanged(debounce: false)
+        #expect(status.switching && model.items.isEmpty)
+        model.selectCategories([category.id]); model.searchChanged(debounce: false)
+        model.selectKind(nil); model.searchChanged(debounce: false)
+        try await until { !model.historyBusy && model.items.count == 3 }
+        #expect(!status.switching)
+    }
+    /// 失败后重试期间保持失败提示，再次失败仍保留，成功后才清除，by AI.Coding。
+    @Test func failedQueryRetryAndChangeKeepStatus() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try HistoryStore(location: root); try await seed(store, count: 3)
+        let category = try await store.createCategory(name: "空分类", colorHex: "34C759")
+        let model = makeModel(store); try await model.start(); model.capture.stop()
+        try await until { !model.historyBusy && model.items.count == 3 }
+        let status = model.listState.queryStatus
+        await store.setUnavailableForTesting(true)
+        model.selectCategories([category.id]); model.searchChanged(debounce: false)
+        try await until { !model.historyBusy && status.failed }
+        #expect(!status.switching && model.items.isEmpty)
+        model.refresh(); #expect(status.failed)
+        try await until { !model.historyBusy }
+        #expect(status.failed)
+        await store.setUnavailableForTesting(false)
+        model.refresh(); #expect(status.failed)
+        try await until { !model.historyBusy && !status.failed }
+        #expect(!status.switching && model.items.isEmpty)
     }
     /// 首屏、合并预读、键盘越页和乱序筛选验证真实模型/SQLite，不依赖GUI输入工具，by AI.Coding。
     @Test func viewportPagingAndQueryCancellation() async throws {
