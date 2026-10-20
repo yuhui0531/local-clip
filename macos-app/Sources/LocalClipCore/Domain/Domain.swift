@@ -215,6 +215,8 @@ public struct SettingsSnapshot: Codable, Equatable, Sendable {
         set { moveUsedToFrontValue = newValue }
     }
     public var captureSounds = false
+    /// 图片文字搜索开启时间；nil为关闭（默认）。开启后自动识别此后复制的图片，已有图片需用户明确触发；缺失字段按关闭处理，by AI.Coding。
+    public var imageTextSearchSince: Instant?
     public var showMenuIcon = true
     public var hideContents = false
     public var excludeFromSharing = false
@@ -364,6 +366,13 @@ public struct StorageUsage: Equatable, Sendable {
     public var temporary: Int64
 }
 public struct RecoveryReport: Sendable { public var revision: Int64; public var pendingBytes: Int64 }
+/// 一项待识别图片：记录与图片项序号；识别所用原图表示的摘要随结果一并提交，by AI.Coding。
+public struct ImageTextJob: Hashable, Sendable {
+    public let clipID: ClipID
+    public let itemIndex: Int
+    public static let imageTypes = [SupportedType.png, SupportedType.tiff, SupportedType.jpeg]
+    public init(clipID: ClipID, itemIndex: Int) { self.clipID = clipID; self.itemIndex = itemIndex }
+}
 public enum HistoryEvent: Sendable { case changed(Int64), settings(Int64), derived(ClipID), unavailable(StoreError) }
 public enum FaultPoint: String, Sendable, CaseIterable { case candidateCreated, candidateWritten, candidateValidated, beforeReplace, afterReplace, reopen }
 public protocol StorageFaultInjector: Sendable { func check(_ point: FaultPoint) throws }

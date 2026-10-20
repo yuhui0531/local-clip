@@ -9,13 +9,14 @@ public enum ImageTextRecognizer {
     static let pixelLimit = 40_000_000
     public struct Failure: Error, Equatable { public let message: String }
     /// 尝试所有原始表示与图片文件引用；识别结果按Vision阅读顺序逐行连接。
-    public static func recognize(_ payload: ClipboardPayload) async throws -> [String] {
+    /// 手动识别为userInitiated；后台图片文字索引传utility，不与前台操作争抢。
+    public static func recognize(_ payload: ClipboardPayload, qos: DispatchQoS.QoSClass = .userInitiated) async throws -> [String] {
         let image = try decode(payload)
         let box = RequestBox()
         try await withTaskCancellationHandler {
             // Vision 的同步 perform 内部会等待自身队列；放在 GCD 而不是协作线程池，并发识别占满线程池时不会互相等死，by AI.Coding。
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                DispatchQueue.global(qos: .userInitiated).async {
+                DispatchQueue.global(qos: qos).async {
                     continuation.resume(with: Result { try VNImageRequestHandler(cgImage: image.image, orientation: image.orientation).perform([box.request]) })
                 }
             }

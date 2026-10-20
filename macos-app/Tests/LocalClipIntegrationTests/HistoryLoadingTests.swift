@@ -48,6 +48,32 @@ extension HistoryStore {
         try await until { !model.historyBusy && model.queryProblems == ["未找到来源 nothing"] }
         #expect(model.items.count == 3)
     }
+    /// A1-1/2：临时库中 in:"带空格分类" 与点击该分类得到同一集合，并与普通词同时生效；未闭合引号不应用分类、按普通文字搜索并提示，by AI.Coding。
+    @Test func quotedCategoryPrefixMatchesCategoryClick() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try HistoryStore(location: root); try await seed(store, count: 4)
+        let alpha = try await store.createCategory(name: "UI7319 Project Alpha", colorHex: "34C759")
+        _ = try await store.createCategory(name: "UI7319", colorHex: "007AFF")
+        let members = try await store.search(.init()).items.prefix(2).map(\.id)
+        _ = try await store.apply(try await store.preview(.category(members, alpha.id, true)).token)
+        let model = makeModel(store); try await model.start(); model.capture.stop()
+        try await until { !model.historyBusy && model.items.count == 4 }
+        model.selectCategories([alpha.id]); model.searchChanged(debounce: false)
+        try await until { !model.historyBusy && model.items.count == 2 }
+        let viaClick = model.items.map(\.id)
+        model.selectCategories([]); model.query = "in:\"UI7319 Project Alpha\""; model.searchChanged(debounce: false)
+        try await until { !model.historyBusy && model.items.count == 2 }
+        #expect(model.items.map(\.id) == viaClick && Set(viaClick) == Set(members))
+        #expect(model.queryConditions == ["分类 UI7319 Project Alpha"] && model.queryProblems.isEmpty)
+        let memberText = try await store.search(.init()).items.first { $0.id == members[0] }!.preview
+        model.query = "in:\"UI7319 Project Alpha\" \(memberText)"; model.searchChanged(debounce: false)
+        try await until { !model.historyBusy && model.items.count == 1 }
+        #expect(model.items.map(\.id) == [members[0]] && model.queryConditions == ["分类 UI7319 Project Alpha"])
+        model.query = "in:\"UI7319 Project"; model.searchChanged(debounce: false)
+        try await until { !model.historyBusy && model.queryProblems == ["in: 的引号未闭合，按普通文字搜索"] }
+        #expect(model.queryConditions.isEmpty && model.items.isEmpty)
+    }
     /// 换分类结果未到时空状态留空，不先显示新范围的空提示；连续切换只发布最后一次，后台刷新不清空提示，by AI.Coding。
     @Test func categorySwitchHoldsEmptyStateUntilResult() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

@@ -168,6 +168,25 @@ public struct SettingsView: View {
                         Text("排除只对声明来源的应用生效；要停止记录某个应用，请开启“前台时停止监控”。新增排除不会删除已有历史；数据保存在本机，未宣称加密，不上传剪贴板内容。").settingsFootnote()
                         settingsLimits("排除仅按 org.nspasteboard.source 声明的 bundleID 匹配；前台推断与未知来源不参与应用排除，需要停止记录时请停止监控。开启“前台时停止监控”后，排除应用处于前台的整个区间都不记录，退出区间不补采。敏感/临时标记在正文读取前整次过滤，不能识别所有密码。共享限制使用公开 NSWindow 属性，不能保证所有录屏方式隐藏本窗口。")
                     }
+                    // A2：图片文字搜索默认关闭；识别在本机进行，识别文字保存用于搜索，可独立清除，by AI.Coding。
+                    Section {
+                        Toggle("图片文字搜索", isOn: Binding(get: { model.settings.imageTextSearchSince != nil }, set: { model.setImageTextSearch($0) }))
+                            .disabled(!model.imageTextSearchAvailable)
+                        HStack {
+                            if model.imageTextIndexing { Button("停止索引") { model.stopImageTextIndexing() } }
+                            else {
+                                Button("为已有图片建立索引") { model.indexExistingImages() }
+                                    .disabled(model.settings.imageTextSearchSince == nil || model.settings.hideContents)
+                            }
+                            Spacer()
+                            Button("清除图片文字索引") { model.clearImageTextIndex() }.disabled(!model.imageTextSearchAvailable)
+                        }
+                        if !model.imageTextSearchAvailable { Text("图片文字索引暂不可用，下次启动时会重试；历史不受影响").font(.caption).foregroundStyle(.secondary) }
+                        else if let status = model.imageTextStatus { Text(status).font(.caption).foregroundStyle(.secondary) }
+                    } footer: {
+                        Text("开启后，本机用系统文字识别读取之后复制的图片，识别出的文字保存在本机历史库中用于搜索，不上传。已有图片需点“为已有图片建立索引”，可随时停止、下次继续。关闭后不再识别、不再按图片文字命中；索引保留以便再次开启，可单独清除，开启状态下清除后只为之后复制的图片自动识别。“复制图中文字”不受此开关影响。").settingsFootnote()
+                        settingsLimits("目前只识别历史中保存的图片数据，不读取文件引用、PDF 或多页文档；开启“隐藏历史内容”时停止识别，取消隐藏后自动继续识别新图片，已有图片需再点一次建立索引。识别索引计入容量，空间不足时停止索引，不为此删除历史；新内容需要空间时会先清空图片文字索引。")
+                    }
                 }
                 if section == .storage {
                     Section {

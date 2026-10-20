@@ -1,4 +1,4 @@
-// 唯一历史模型；仅创建当前结构，其他版本拒绝打开，不做旧库升级，by AI.Coding。
+// 唯一历史模型；其他版本拒绝打开；同版本旧库只补建可重建的派生表（image_text），不改已有结构，by AI.Coding。
 import Foundation
 enum Schema {
     static let version: Int64 = 5
@@ -37,8 +37,15 @@ enum Schema {
         PRAGMA user_version=\(version);
         """)
         try createCategories(db)
+        try db.exec(imageTextSQL)
         try writeSettings(db, settings)
     }
+    /// 图片文字索引是可重建的派生数据：按记录与图片项保存，blobDigest绑定识别所用的原图表示，表示被替换后旧结果自动失效。
+    /// 只增不改，版本号仍为5：旧库打开时补建，旧版程序可忽略此表；normalizedText为空表示无文字或无法识别，不再重试，by AI.Coding。
+    static let imageTextSQL = """
+    CREATE TABLE IF NOT EXISTS image_text(clipID TEXT NOT NULL,itemIndex INTEGER NOT NULL,blobDigest TEXT NOT NULL,normalizedText TEXT NOT NULL,
+      PRIMARY KEY(clipID,itemIndex),FOREIGN KEY(clipID,itemIndex) REFERENCES items(clipID,itemIndex) ON DELETE CASCADE);
+    """
     /// 分类与归属同库保存，删除历史会级联移除归属，原始表示不重复存储。
     private static func createCategories(_ db: SQLiteConnection) throws {
         try db.exec("""

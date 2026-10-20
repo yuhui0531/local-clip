@@ -219,6 +219,7 @@ import LocalClipCore
                 showingDetail = false; invalidateDetail(); imageTextTask?.cancel(); imageTextGeneration = UUID()
                 if message == "正在识别图中文字…" { message = "" }
             }
+            if settings.imageTextSearchSince != oldValue.imageTextSearchSince || settings.hideContents != oldValue.hideContents { syncImageTextIndex() }
         }
     }
     @Published public private(set) var usage: StorageUsage?
@@ -397,6 +398,8 @@ import LocalClipCore
         subscription = Task { [weak self] in
             for await event in stream {
                 guard let self, !Task.isCancelled else { return }
+                // 新图片提交后在后台识别，不阻塞采集与查询；索引自身的写入只会命中运行中的任务而不重启。
+                if case .changed = event { self.syncImageTextIndex() }
                 if case .derived = event {
                     if self.settingsVisible { await self.refreshUsage() }
                     continue
@@ -428,6 +431,7 @@ import LocalClipCore
         }
         refresh()
         if showingFilters { requestSourceSuggestions() }
+        syncImageTextIndex()
         // 旧版缺索引只在后台有界修复；空间不足仍从原格式检索，不删除历史。
         indexRepair = Task { [weak self] in
             while let self, !Task.isCancelled {
@@ -641,7 +645,9 @@ import LocalClipCore
                 guard !Task.isCancelled, queryID == page.queryID else { return }
                 // 只发布原窗口及锚点需要的精确范围；下一页从截断位置续读，不跳过超取行。
                 let window = planHistoryWindow(pages: pages, windowSize: max(windowSize, viewportPageSize), anchors: anchors)
-                let visible = window.items.filter(isVisible)
+                // 图片文字是派生数据、写入不改修订号，翻页之间新命中会把后续结果后移一位；按ID去重避免重复卡片。
+                var seen = Set<ClipID>()
+                let visible = window.items.filter { isVisible($0) && seen.insert($0.id).inserted }
                 // 新记录插入头部时保留正在浏览的卡片与卡内偏移，不用旧像素位置显示别的记录，by AI.Coding。
                 if preserveWindow, historyOffset > 0,
                    let anchor = scrollAnchor, let index = visible.firstIndex(where: { $0.id == anchor.id }) {
@@ -723,7 +729,8 @@ import LocalClipCore
                 let page = try await store.search(request)
                 if settings.timingEnabled { StageTiming.record("history_query", since: started, count: page.items.count) }
                 guard !Task.isCancelled, id == queryID else { return }
-                items += page.items.filter(isVisible); self.cursor = page.next; loading = false
+                var seen = Set(items.map(\.id))
+                items += page.items.filter { isVisible($0) && seen.insert($0.id).inserted }; self.cursor = page.next; loading = false
                 let queued = pendingPageNavigation; pendingPageNavigation = nil; paging = nil
                 let advance = (advanceSelection && selectedID == previousSelection) || (queued != nil && queued?.selection == selectedID)
                 if advance, items.count > previousCount { if queued?.extend ?? extend { choose(items[previousCount].id, modifiers: .shift) } else { select(items[previousCount].id, keepDetail: previewFollowsSelection) } }
@@ -1104,6 +1111,7 @@ import LocalClipCore
                 let result = try await store.apply(preview.token)
                 // 提交前查询已作废；提交事件拥有刷新，不能在返回时取消新版本查询，by AI.Coding。
                 pendingDeletion.removeAll()
+                switch change { case .delete, .clearOrdinary: capture.discardPendingRetries(); default: break }
                 await capture.refreshCapacity()
                 // 删除和容量/期限操作后更新计量，其他变更只在设置窗口可见时读取，by AI.Coding。
                 switch change {
@@ -1579,13 +1587,20 @@ import LocalClipCore
     // MARK: F19 连续粘贴队列：只存在内存里，按选择顺序每按一次快捷键粘贴下一项，by AI.Coding。
     @Published public private(set) var pasteQueue: [ClipID] = []
     @Published public private(set) var pasteQueuePosition = 0
-    private var pasteQueueBusy = false
+    /// 发布处理中状态，浮窗在重试在途时禁用确认/重试按钮，不静默吞掉点击。
+    @Published private(set) var pasteQueueBusy = false
     private var pasteQueueGeneration = UUID()
     private var pasteQueueTask: Task<Void, Never>?
     private var activeQueueShortcut: Shortcut?
     private var pendingQueueShortcut: Shortcut?
     private var pasteQueueIdle: Task<Void, Never>?
     public var pasteQueueActive: Bool { pasteQueuePosition < pasteQueue.count }
+    /// 意图直接粘贴却只完成复制（修饰键降级或权限/目标回退）：停在当前项，等用户手动粘贴后确认或重试；再按快捷键不覆盖剪贴板，by AI.Coding。
+    @Published public private(set) var pasteQueueAwaiting = false
+    /// 当前项已记过一次使用；重试或确认不重复增加复制次数。
+    private var pasteQueueRecordedPosition: Int?
+    /// 进入等待时的原因；再按快捷键的提醒保留它，用户仍知道重试前该先处理什么。
+    private var pasteQueueAwaitingMessage = ""
     /// 宿主显示队列浮窗时，开始与每步成功只更新浮窗，失败与回退写入浮窗警告，不另弹提示，by AI.Coding。
     public var showsQueuePanel = false
     @Published private(set) var pasteQueueWarning: String?
@@ -1602,8 +1617,11 @@ import LocalClipCore
         pasteQueueWarning = failed ? text : note; pasteQueueChanged?()
     }
     public var pasteQueueStatus: String? {
-        pasteQueueActive ? "粘贴队列 \(pasteQueuePosition)/\(pasteQueue.count) · \(HotKeyService.label(activeQueueShortcut ?? settings.queueShortcut)) 粘贴下一项" : nil
+        guard pasteQueueActive else { return nil }
+        if pasteQueueAwaiting { return "粘贴队列 \(pasteQueuePosition)/\(pasteQueue.count) · 当前项已复制，等待手动粘贴后确认" }
+        return "粘贴队列 \(pasteQueuePosition)/\(pasteQueue.count) · \(HotKeyService.label(activeQueueShortcut ?? settings.queueShortcut)) 粘贴下一项"
     }
+    static let pasteQueueAwaitingReminder = "快捷键不会覆盖当前项：请手动粘贴后点“已手动粘贴，继续”，或点“重试当前项”"
     /// 新队列替换旧队列；快捷键注册失败（冲突）则不启动，by AI.Coding。
     public func startPasteQueue(_ ids: [ClipID]) {
         guard ids.count >= 2 else { return }
@@ -1616,7 +1634,7 @@ import LocalClipCore
         pasteQueueSummaries = ids.map { id in
             items.first { $0.id == id }.map { $0.title ?? $0.preview.split(whereSeparator: \.isNewline).first.map(String.init) ?? HistoryView.kindName($0.kind) } ?? "—"
         }
-        pasteQueue = ids; pasteQueuePosition = 0; pasteQueueWarning = nil; touchPasteQueue()
+        pasteQueue = ids; pasteQueuePosition = 0; pasteQueueWarning = nil; pasteQueueAwaiting = false; pasteQueueRecordedPosition = nil; touchPasteQueue()
         closePanel?(false)
         queueFeedback("已加入粘贴队列 0/\(ids.count) · \(HotKeyService.label(shortcut)) 粘贴下一项", failed: false)
         pasteQueueChanged?()
@@ -1626,7 +1644,8 @@ import LocalClipCore
         pasteQueueTask?.cancel(); pasteQueueTask = nil; pasteQueueGeneration = UUID(); pasteQueueBusy = false
         activeQueueShortcut = nil
         guard !pasteQueue.isEmpty else { return }
-        pasteQueue = []; pasteQueuePosition = 0; pasteQueueSummaries = []; pasteQueueWarning = nil; pasteQueueIdle?.cancel(); pasteQueueIdle = nil
+        pasteQueue = []; pasteQueuePosition = 0; pasteQueueSummaries = []; pasteQueueWarning = nil; pasteQueueAwaiting = false; pasteQueueRecordedPosition = nil
+        pasteQueueIdle?.cancel(); pasteQueueIdle = nil
         unregisterQueueShortcut?(); pasteQueueChanged?()
     }
     /// 10分钟没有按键自动结束，避免快捷键长期占用。
@@ -1639,12 +1658,15 @@ import LocalClipCore
         }
     }
     /// 宿主在按键时已记住当前前台应用与焦点；处理中再按忽略，不排队。
-    /// 物理修饰键（如队列快捷键的⌃⌥）未松开时最多等500ms，超时只复制并提示，指针照常前进，by AI.Coding。
-    public func pasteQueueNext(target: TargetToken?, modifiersHeld: @escaping () -> Bool) {
+    /// 物理修饰键（如队列快捷键的⌃⌥）未松开时最多等500ms，超时只复制并停在当前项等待确认，by AI.Coding。
+    /// retry：用户点“重试当前项”，重新输出等待确认的那一项；当前项已失效时只跳过并说明，不顺带粘贴下一项。
+    public func pasteQueueNext(target: TargetToken?, retry: Bool = false, modifiersHeld: @escaping () -> Bool) {
         guard pasteQueueActive, !pasteQueueBusy else { return }
+        if pasteQueueAwaiting, !retry { touchPasteQueue(); queueFeedback(pasteQueueAwaitingMessage + "；" + Self.pasteQueueAwaitingReminder, failed: true); return }
         guard let target else { queueFeedback("请先切换到要粘贴的应用", failed: true); return }
         pasteQueueBusy = true; touchPasteQueue()
-        let generation = pasteQueueGeneration, ids = pasteQueue
+        // 请求开始时固定用户原始动作与格式，等待修饰键期间改设置不改变本次判定。
+        let generation = pasteQueueGeneration, ids = pasteQueue, intended = settings.defaultAction, format = settings.defaultFormat
         pasteQueueTask = Task { [weak self] in
             guard let self else { return }
             defer { if generation == pasteQueueGeneration { pasteQueueBusy = false; pasteQueueTask = nil } }
@@ -1654,23 +1676,44 @@ import LocalClipCore
                 guard generation == pasteQueueGeneration else { return }
             }
             guard !Task.isCancelled, generation == pasteQueueGeneration else { return }
-            let held = modifiersHeld()
+            let degraded = intended == .directPaste && modifiersHeld()
             var skipped: [Int] = [], shown = false
             while pasteQueuePosition < ids.count {
                 let index = pasteQueuePosition, id = ids[index]
-                let result = await paste.perform(.init(ids: [id], format: settings.defaultFormat, action: held ? .copy : settings.defaultAction, target: target))
+                let result = await paste.perform(.init(ids: [id], format: format, action: degraded ? .copy : intended, target: target))
                 guard !Task.isCancelled, generation == pasteQueueGeneration else { return }
-                if result == .failed("内容已删除或到期，请重新选择") { pasteQueuePosition += 1; skipped.append(index + 1); continue }
-                // 明确失败可重试；复制回退已有完整剪贴板，沿用推进语义。
-                if case .failed = result { } else { pasteQueuePosition += 1 }
-                await recordUse([id], result)
+                if result == .failed("内容已删除或到期，请重新选择") {
+                    pasteQueuePosition += 1; pasteQueueAwaiting = false; skipped.append(index + 1)
+                    if retry { break } else { continue }
+                }
+                // 只有已发送粘贴指令或用户本就选择仅复制才推进；本该粘贴却只复制时停在当前项等待确认；明确失败留在当前项，快捷键可直接重试。
+                let awaiting: Bool
+                switch result {
+                case .copied: awaiting = degraded
+                case .fallback: awaiting = true
+                case .commandSent, .filesCopied, .failed: awaiting = false
+                }
+                if case .failed = result { } else if !awaiting { pasteQueuePosition += 1 }
+                if case .failed = result { } else if pasteQueueRecordedPosition != index {
+                    pasteQueueRecordedPosition = index; await recordUse([id], result)
+                }
                 guard !Task.isCancelled, generation == pasteQueueGeneration else { return }
+                // 记录使用后再显示确认按钮，按钮出现时请求已可确认。
+                pasteQueueAwaiting = awaiting
                 let progress = "\(pasteQueuePosition)/\(ids.count)"
                 let skippedNote = skipped.isEmpty ? nil : "第 \(skipped.map(String.init).joined(separator: "、")) 项已不存在，已跳过"
                 let skippedText = skippedNote.map { "（\($0)）" } ?? ""
                 switch result {
                 case .commandSent: queueFeedback(result.message + " \(progress)" + skippedText, failed: false, note: skippedNote)
-                case .copied: queueFeedback((held ? "修饰键未松开，已复制 \(progress)，请手动粘贴" : "已复制 \(progress)") + skippedText, failed: held, note: skippedNote)
+                case .copied where awaiting:
+                    pasteQueueAwaitingMessage = "修饰键未松开，当前项已复制，请手动粘贴（\(progress)）"
+                    queueFeedback(pasteQueueAwaitingMessage + skippedText, failed: true)
+                case .copied: queueFeedback("已复制 \(progress)" + skippedText, failed: false, note: skippedNote)
+                case .fallback(let reason):
+                    // 权限回退的通用说明是“重新打开历史”；队列里改为指向重试按钮。
+                    let next = reason == PasteCoordinator.permissionFallbackReason ? "请授予当前LocalClip辅助功能权限后点“重试当前项”" : reason
+                    pasteQueueAwaitingMessage = "当前项已复制，\(next)（\(progress)）"
+                    queueFeedback(pasteQueueAwaitingMessage + skippedText, failed: true)
                 default: queueFeedback(result.message + "（\(progress)）" + skippedText, failed: true)
                 }
                 shown = true; break
@@ -1678,6 +1721,54 @@ import LocalClipCore
             if !shown, !skipped.isEmpty { queueFeedback("第 \(skipped.map(String.init).joined(separator: "、")) 项已不存在，已跳过", failed: true) }
             if !pasteQueueActive { stopPasteQueue() } else { pasteQueueChanged?() }
         }
+    }
+    /// 用户确认已手动粘贴等待中的当前项：只推进一次，不再写剪贴板或记使用，by AI.Coding。
+    public func confirmPasteQueueManualPaste() {
+        guard pasteQueueActive, pasteQueueAwaiting, !pasteQueueBusy else { return }
+        pasteQueueAwaiting = false; pasteQueuePosition += 1; touchPasteQueue()
+        queueFeedback("已确认手动粘贴 \(pasteQueuePosition)/\(pasteQueue.count)", failed: false)
+        if !pasteQueueActive { stopPasteQueue() } else { pasteQueueChanged?() }
+    }
+    // MARK: A2 图片文字搜索：后台索引与手动“复制图中文字”分开控制，关闭本功能不影响手动识别，by AI.Coding。
+    private(set) lazy var imageTextIndexer: ImageTextIndexer = {
+        let indexer = ImageTextIndexer(store: store); indexer.clock = clock
+        indexer.onStatus = { [weak self] status in
+            guard let self else { return }
+            imageTextStatus = status; imageTextIndexing = imageTextIndexer.backfilling
+        }
+        return indexer
+    }()
+    @Published public private(set) var imageTextStatus: String?
+    /// 只反映用户触发的补建；自动处理新图片在后台进行，不让按钮闪烁。
+    @Published public private(set) var imageTextIndexing = false
+    public var imageTextSearchAvailable: Bool { store.imageTextReady }
+    /// 开启时记下时间：之后复制的图片自动识别；已有图片只在用户点“为已有图片建立索引”时处理。
+    public func setImageTextSearch(_ enabled: Bool) {
+        let now = clock.now(); imageTextIndexer.halted = false
+        updateSettings { $0.imageTextSearchSince = enabled ? ($0.imageTextSearchSince ?? now) : nil }
+    }
+    public func indexExistingImages() {
+        guard store.imageTextReady, let since = settings.imageTextSearchSince, !settings.hideContents else { return }
+        imageTextIndexer.start(since: since, backfill: true); imageTextIndexing = true
+    }
+    public func stopImageTextIndexing() { imageTextIndexer.stop(); imageTextIndexing = false }
+    public func clearImageTextIndex() {
+        imageTextIndexer.stop(status: nil); imageTextIndexing = false; imageTextIndexer.halted = false
+        // 开启状态下清除：先把起点移到现在，已清除的图片不会被自动重新识别；需要时再点“为已有图片建立索引”。
+        // 闭包作用于最新设置：用户同时关闭功能时保持关闭，不会被清除操作重新打开。
+        let now = clock.now()
+        updateSettings { if $0.imageTextSearchSince != nil { $0.imageTextSearchSince = now } }
+        Task {
+            do { try await store.clearImageText(); imageTextStatus = "已清除图片文字索引" }
+            catch { imageTextStatus = "图片文字索引清除未完成" }
+        }
+    }
+    /// 关闭、隐藏内容或派生表不可用时停止并丢弃在途结果；开启时只自动处理开启后的新图片，运行中重复调用不重启。
+    func syncImageTextIndex() {
+        guard store.imageTextReady, let since = settings.imageTextSearchSince, !settings.hideContents else {
+            imageTextIndexer.stop(status: nil); imageTextIndexing = false; return
+        }
+        imageTextIndexer.start(since: since, backfill: false); imageTextIndexing = imageTextIndexer.backfilling
     }
     // 内部只读任务句柄让并发回归等待真实完成，不用固定sleep猜测识别时序。
     private(set) var imageTextTask: Task<Void, Never>?

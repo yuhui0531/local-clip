@@ -6,7 +6,8 @@ import Testing
 struct SearchQueryParserTests {
     private let sources = [SourceAttribution(bundleID: "com.apple.dt.Xcode", name: "Xcode"), SourceAttribution(bundleID: "com.apple.Safari", name: "Safari"),
                            SourceAttribution(bundleID: "com.apple.SafariTechnologyPreview", name: "Safari Technology Preview"), SourceAttribution(bundleID: nil, name: "未知", basis: "unknown")]
-    private let categories = [ClipCategory(id: "c1", name: "工作"), ClipCategory(id: "c2", name: "脚本")]
+    private let categories = [ClipCategory(id: "c1", name: "工作"), ClipCategory(id: "c2", name: "脚本"), ClipCategory(id: "c3", name: "Project Alpha"),
+                              ClipCategory(id: "c4", name: "项目 甲"), ClipCategory(id: "c5", name: "a\"b\\c")]
     private let now: Instant = 1_760_313_600_000
     private func parse(_ text: String) -> ParsedQuery { SearchQueryParser.parse(text, sources: sources, categories: categories, now: now) }
 
@@ -50,5 +51,40 @@ struct SearchQueryParserTests {
         #expect(parse("app:nothing").problems == ["未找到来源 nothing"])
         #expect(parse("in:不存在").problems == ["未找到分类 不存在"] && parse("in:不存在").categoryIDs.isEmpty)
         #expect(parse("app:未知").sourceBundleID == "")
+    }
+
+    /// A1-1/2/3：英文双引号值可含空格，与其他条件和普通词同时生效；来源取完整名不误配前缀，by AI.Coding。
+    @Test func quotedValuesAllowSpaces() {
+        let combined = parse("in:\"Project Alpha\" type:text hello")
+        #expect(combined.categoryIDs == ["c3"] && combined.kind == .text && combined.literal == "hello" && combined.problems.isEmpty)
+        #expect(combined.labels == ["类型 文本", "分类 Project Alpha"])
+        #expect(parse("IN:\"project alpha\"").categoryIDs == ["c3"] && parse("IN:\"project alpha\"").literal == "")
+        #expect(parse("in:\"Project Alpha\" in:工作 in:\"项目 甲\"").categoryIDs == ["c1", "c3", "c4"])
+        #expect(parse("app:\"Safari Technology Preview\"").sourceBundleID == "com.apple.SafariTechnologyPreview")
+        #expect(parse("app:\"Safari\"").sourceBundleID == "com.apple.Safari")
+        #expect(parse("note after:\"2026-10-01\" x").literal == "note x" && parse("after:\"2026-10-01\"").from != nil)
+        #expect(parse("in:\"不存在 分类\" foo").problems == ["未找到分类 不存在 分类"] && parse("in:\"不存在 分类\" foo").literal == "foo")
+    }
+
+    /// A1-5：引号未闭合不应用该条件及其后的内部前缀，剩余全文保留为普通词并提示未生效，by AI.Coding。
+    @Test func unclosedQuoteStaysLiteral() {
+        let value = parse("in:\"Project Alpha type:text")
+        #expect(value.literal == "in:\"Project Alpha type:text" && value.categoryIDs.isEmpty && value.kind == nil && value.labels.isEmpty)
+        #expect(value.problems == ["in: 的引号未闭合，按普通文字搜索"])
+        let partial = parse("type:image in:\"Project Alpha is:fav")
+        #expect(partial.kind == .image && !partial.favorites && partial.literal == "in:\"Project Alpha is:fav")
+        #expect(parse("in:\"").literal == "in:\"" && parse("in:\"").categoryIDs.isEmpty)
+    }
+
+    /// A1-4/6：空值、不支持值、引号后粘连字符、转义与路径反斜杠均按规则保留，不悄悄应用错误条件，by AI.Coding。
+    @Test func quotedEdgeCases() {
+        for text in ["in:\"\"", "in:\" \"", "type:\"no such\"", "in:\"Project Alpha\"x", "is:\"fav later\"", "path \"C:\\dir\" a::b"] {
+            let value = parse(text)
+            #expect(value.literal == text && value.labels.isEmpty && value.problems.isEmpty && value.categoryIDs.isEmpty, "\(text)")
+        }
+        #expect(parse("in:\"a\\\"b\\\\c\"").categoryIDs == ["c5"])
+        #expect(parse("in:\"a\\nb\"").problems == ["未找到分类 a\\nb"])
+        #expect(parse("in:\"C:\\Users\\x\"").problems == ["未找到分类 C:\\Users\\x"])
+        #expect(parse("\"in:工作\" std::vector https://a.b/?q=\"x y\"").literal == "in:工作 std::vector https://a.b/?q=\"x y\"")
     }
 }

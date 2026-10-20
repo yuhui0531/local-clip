@@ -385,11 +385,12 @@ import LocalClipCore
         item.image = NSImage(systemSymbolName: paused ? "play.circle" : "pause.circle", accessibilityDescription: nil)
     }
     /// 队列快捷键在其他应用中按下：以当前前台应用为目标，先记住其焦点再粘贴；面板在前台时不粘贴到自身，by AI.Coding。
-    private func pasteQueueNext() {
+    /// retry：浮窗“重试当前项”；浮窗不激活，前台仍是用户的目标应用。
+    private func pasteQueueNext(retry: Bool = false) {
         guard let model else { return }
         let target = applications.target()
         if let target { lastExternal = target; applications.rememberFocus(for: target) }
-        model.pasteQueueNext(target: target) {
+        model.pasteQueueNext(target: target, retry: retry) {
             !CGEventSource.flagsState(.hidSystemState).intersection([.maskCommand, .maskControl, .maskAlternate, .maskShift]).isEmpty
         }
     }
@@ -697,7 +698,7 @@ import LocalClipCore
             panel.isOpaque = false; panel.backgroundColor = .clear; panel.hasShadow = true
             panel.isReleasedWhenClosed = false; panel.hidesOnDeactivate = false; panel.becomesKeyOnlyIfNeeded = true
             panel.level = .statusBar; panel.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
-            let host = NSHostingView(rootView: PasteQueueView(model: model)); host.sizingOptions = []
+            let host = NSHostingView(rootView: PasteQueueView(model: model) { [weak self] in self?.pasteQueueNext(retry: true) }); host.sizingOptions = []
             panel.contentView = host; queuePanel = panel
         }
         guard let panel = queuePanel, let host = panel.contentView else { return }
@@ -998,6 +999,7 @@ extension AppDelegate: NSMenuDelegate {
 /// 队列浮窗内容：进度、下一项一行摘要（隐藏内容时不显示正文）、快捷键与失败原因，by AI.Coding。
 struct PasteQueueView: View {
     @ObservedObject var model: HistoryViewModel
+    var retry: () -> Void = {}
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(spacing: 6) {
@@ -1006,8 +1008,16 @@ struct PasteQueueView: View {
                 Spacer(minLength: 4)
                 Button("结束") { model.stopPasteQueue() }.controlSize(.small).accessibilityLabel("结束粘贴队列")
             }
-            Text("下一项：" + model.pasteQueueNextSummary).font(.system(size: 12)).lineLimit(1).truncationMode(.tail)
-            Text("\(model.pasteQueueShortcutLabel) 粘贴下一项").font(.system(size: 11)).foregroundStyle(.secondary)
+            Text((model.pasteQueueAwaiting ? "当前项：" : "下一项：") + model.pasteQueueNextSummary).font(.system(size: 12)).lineLimit(1).truncationMode(.tail)
+            if model.pasteQueueAwaiting {
+                // 等待确认：快捷键不再覆盖剪贴板，由用户选择重试或确认已手动粘贴，by AI.Coding。
+                HStack(spacing: 6) {
+                    Button("重试当前项", action: retry)
+                    Button("已手动粘贴，继续") { model.confirmPasteQueueManualPaste() }
+                }.controlSize(.small).disabled(model.pasteQueueBusy)
+            } else {
+                Text("\(model.pasteQueueShortcutLabel) 粘贴下一项").font(.system(size: 11)).foregroundStyle(.secondary)
+            }
             if let warning = model.pasteQueueWarning {
                 Label(warning, systemImage: "exclamationmark.triangle.fill").font(.system(size: 11)).foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)

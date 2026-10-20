@@ -17,7 +17,8 @@ struct SettingsUpgradeTests {
          "excludedBundleIDs": ["local.fixture.private", "local.fixture.secret"],
          "autoCheckUpdatesValue": enabled,
          "smartPasteEditorBundleIDsValue": ["local.fixture.editor", "local.fixture.editor2"],
-         "shortcut": ["keyCode": 8, "modifiers": 6400], "queueShortcutValue": ["keyCode": 11, "modifiers": 6144], "revision": 23]
+         "shortcut": ["keyCode": 8, "modifiers": 6400], "queueShortcutValue": ["keyCode": 11, "modifiers": 6144], "revision": 23,
+         "imageTextSearchSince": Int64(1_700_000_000_000)]
     }
 
     /// 期望通过公开设置接口独立构造；整份快照比较包含可选字段的显式false与缺失差异。
@@ -35,6 +36,7 @@ struct SettingsUpgradeTests {
         value.autoCheckUpdates = enabled
         value.smartPasteEditorBundleIDs = ["local.fixture.editor", "local.fixture.editor2"]
         value.shortcut = .init(keyCode: 8, modifiers: 6400); value.queueShortcut = .init(keyCode: 11, modifiers: 6144); value.revision = 23
+        value.imageTextSearchSince = 1_700_000_000_000
         return value
     }
 
@@ -76,13 +78,13 @@ struct SettingsUpgradeTests {
         defer { try? FileManager.default.removeItem(at: root) }
         var old = document(enabled: true)
         for key in ["appearanceValue", "compactLayoutValue", "pauseUntil", "codeFilePasteEnabled",
-                    "moveUsedToFrontValue", "autoCheckUpdatesValue", "smartPasteEditorBundleIDsValue", "queueShortcutValue"] {
+                    "moveUsedToFrontValue", "autoCheckUpdatesValue", "smartPasteEditorBundleIDsValue", "queueShortcutValue", "imageTextSearchSince"] {
             old.removeValue(forKey: key)
         }
         try seed(root, document: old)
         let store = try HistoryStore(location: root)
         var value = try await store.settings()
-        #expect(value.appearance == .system && !value.compactLayout && value.pauseUntil == nil)
+        #expect(value.appearance == .system && !value.compactLayout && value.pauseUntil == nil && value.imageTextSearchSince == nil)
         #expect(!value.smartCodeFilePaste && value.smartPasteEditorBundleIDs.isEmpty)
         #expect(value.moveUsedToFront && value.autoCheckUpdates)
         // 比对旧文档全部字段，避免只断言新增默认值而漏掉已存在设置被覆盖。

@@ -25,6 +25,8 @@ public actor HistoryStore: HistoryRepository {
     }
     let strategy: CommitStrategy
     let databaseURL: URL
+    /// 图片文字派生表可用；旧库补建失败时为false，历史照常使用，只是不提供图片文字搜索，下次打开再补建，by AI.Coding。
+    public nonisolated let imageTextReady: Bool
     let clock: any ClipClock
     let extractor: @Sendable (Representation) -> String?
     var listeners: [UUID: AsyncStream<HistoryEvent>.Continuation] = [:]
@@ -53,8 +55,15 @@ public actor HistoryStore: HistoryRepository {
             // 仅支持v5；版本不兼容保留原库，按迁移/恢复契约使用匹配版本或完整快照，by AI.Coding。
             guard try db.scalarInt("PRAGMA user_version") == Schema.version else { try db.close(); throw StoreError.incompatibleSchema }
             guard try db.scalarText("PRAGMA quick_check") == "ok", try db.rows("PRAGMA foreign_key_check").isEmpty else { throw StoreError.corruptPayload }
+            let hasImageText = try db.scalarInt("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='image_text'") == 1
             try db.close()
-        } else { try strategy.initialize { try Schema.create($0, settings: initialSettings) } }
+            // 同版本旧库只在单一事务内补建空派生表，不改动已有表与数据；失败回滚，原库保持可用。
+            if hasImageText { imageTextReady = true }
+            else {
+                do { try strategy.commit(quota: .max, allowOverQuota: true) { try $0.exec(Schema.imageTextSQL) }; imageTextReady = true }
+                catch { imageTextReady = false }
+            }
+        } else { try strategy.initialize { try Schema.create($0, settings: initialSettings) }; imageTextReady = true }
         self.strategy = strategy; databaseURL = strategy.databaseURL
     }
     /// 读取不可用状态不重放已提交写入。
@@ -170,6 +179,8 @@ public actor HistoryStore: HistoryRepository {
         // 只丢可重建缩略图；存活记录的检索文字始终保留，避免永久全文退化。
         // 处于提交事务内，以非空闲页估算提交截断后的占用，by AI.Coding。
         if try CommitStrategy.pageBytes(db) + pending > quota { try db.exec("DELETE FROM thumbnails") }
+        // 图片文字索引同样可重建，先于任何历史记录让出空间。
+        if imageTextReady, try CommitStrategy.pageBytes(db) + pending > quota { try db.exec("DELETE FROM image_text") }
         while try CommitStrategy.pageBytes(db) + pending > quota {
             let candidate = try db.scalarText("SELECT id FROM clips WHERE \(ordinarySQL) AND id<>? ORDER BY lastCopiedAtMs,firstCopiedAtMs,id LIMIT 1", [.text(protectedID ?? "")])
             if candidate.isEmpty {
@@ -254,12 +265,17 @@ public actor HistoryStore: HistoryRepository {
             return .deduplicated(existing.text("id"))
         }
         try mutate(operation: snapshot.captureID, quota: settings.quotaBytes, growth: payload.byteCount + Int64(payload.items.count) * 8192 + 64 * 1024, trim: true, protectedID: id) { db in
-            if existing != nil {
-                try db.run("UPDATE clips SET lastCopiedAtMs=?,copyCount=copyCount+1,sourceBundleID=?,sourceName=?,sourceBasis=? WHERE id=?", [
-                    .integer(at), snapshot.source.bundleID.map(SQLValue.text) ?? .null, .text(snapshot.source.name), .text(snapshot.source.basis), .text(id)])
-                // 有效用户再次复制在每个归属分类置前；分类排序不能遮住最新复制，by AI.Coding。
-                for row in try db.rows("SELECT categoryID FROM clip_categories WHERE clipID=?", [.text(id)]) {
-                    try prependCategoryItems([id], categoryID: row.text("categoryID"), db: db)
+            if let existing {
+                // 补存的旧快照晚于同内容的新复制落库：只计这一次复制，不把时间、来源和分类次序回退到更早状态，by AI.Coding。
+                if at < existing.int("lastCopiedAtMs") {
+                    try db.run("UPDATE clips SET copyCount=copyCount+1 WHERE id=?", [.text(id)])
+                } else {
+                    try db.run("UPDATE clips SET lastCopiedAtMs=?,copyCount=copyCount+1,sourceBundleID=?,sourceName=?,sourceBasis=? WHERE id=?", [
+                        .integer(at), snapshot.source.bundleID.map(SQLValue.text) ?? .null, .text(snapshot.source.name), .text(snapshot.source.basis), .text(id)])
+                    // 有效用户再次复制在每个归属分类置前；分类排序不能遮住最新复制，by AI.Coding。
+                    for row in try db.rows("SELECT categoryID FROM clip_categories WHERE clipID=?", [.text(id)]) {
+                        try prependCategoryItems([id], categoryID: row.text("categoryID"), db: db)
+                    }
                 }
                 if let thumbnail = snapshot.thumbnail, thumbnail.count <= 16 * MiB {
                     try db.run("INSERT OR IGNORE INTO thumbnails VALUES(?,?,?,?)", [.text(id), .integer(0), .blob(thumbnail), .integer(Int64(thumbnail.count))])
@@ -576,6 +592,11 @@ public actor HistoryStore: HistoryRepository {
             // BLOB instr保持NUL及UTF-8字节字面语义，不使用LIKE/FTS通配规则。
             let indexIsComplete = repair.repaired == 0
             let indexed = repair.indexedSQL
+            // 图片文字只在开启时参与匹配；仅用仍与当前原图表示一致的结果，空结果不参与，by AI.Coding。
+            let imageText = imageTextReady && settings.imageTextSearchSince != nil ? """
+                 UNION ALL SELECT o.itemIndex,o.normalizedText FROM image_text o WHERE o.clipID=clips.id AND o.normalizedText<>''
+                   AND EXISTS(SELECT 1 FROM representations x WHERE x.clipID=o.clipID AND x.itemIndex=o.itemIndex AND x.blobDigest=o.blobDigest)
+                """ : ""
             // 仅第一页需要候选缓存；候选JSON只随首行返回，by AI.Coding。
             let collectCandidates = request.cursor == nil && includeMatchContext
             let candidateProjection = collectCandidates ? "CASE WHEN page.id IS (SELECT id FROM page ORDER BY matchRank,lastCopiedAtMs DESC,id LIMIT 1) THEN (SELECT candidateIDs FROM candidate_ids) END" : "NULL"
@@ -586,7 +607,7 @@ public actor HistoryStore: HistoryRepository {
                 -- 自定义名称命中与正文开头同级；正文排名规则不变，by AI.Coding。
                 MIN(CASE WHEN instr(normalizedTitle,?1)>0 THEN 1 ELSE 4 END, clip_literal_rank(
                     (SELECT CAST(group_concat(normalizedText,char(10)) AS BLOB)
-                     FROM (SELECT normalizedText FROM \(indexed) WHERE clipID=clips.id ORDER BY itemIndex)),
+                     FROM (SELECT itemIndex,normalizedText FROM \(indexed) WHERE clipID=clips.id\(imageText) ORDER BY itemIndex)),
                     CAST(?1 AS BLOB),sourceName)) AS matchRank
                 FROM clips WHERE \(condition)
             ), matching AS MATERIALIZED (
@@ -637,6 +658,79 @@ public actor HistoryStore: HistoryRepository {
                 next: pageRows.count > size ? .init(revision: revision, offset: offset + size, signature: request.signature) : nil)
             return .init(page: resultPage, candidateIDs: candidateIDs, indexIsComplete: indexIsComplete)
         }()
+    }
+    /// 待识别的图片项：仍可见、内嵌图片（不含文件引用）、尚无与当前原图表示一致的结果；同一项多种图片表示只算一项。
+    /// since为nil时包含全部已有图片（用户明确触发），否则只取此后复制的图片，by AI.Coding。
+    public func pendingImageText(since: Instant?, limit: Int = 8) throws -> [ImageTextJob] {
+        guard imageTextReady else { return [] }
+        let settings = try settings(), at = clock.now()
+        var condition = "1", values: [SQLValue] = []
+        if let cutoff = retentionCutoff(settings: settings, at: at) { condition = "((\(protectedSQL)) OR clips.lastCopiedAtMs>?)"; values.append(.integer(cutoff)) }
+        if let since { condition += " AND clips.lastCopiedAtMs>=?"; values.append(.integer(since)) }
+        let images = ImageTextJob.imageTypes.map { "'\($0)'" }.joined(separator: ",")
+        return try strategy.read { db in
+            try db.rows("""
+            SELECT DISTINCT r.clipID,r.itemIndex,clips.lastCopiedAtMs FROM representations r JOIN clips ON clips.id=r.clipID
+            WHERE r.type IN(\(images)) AND \(condition)
+              AND NOT EXISTS(SELECT 1 FROM representations f WHERE f.clipID=r.clipID AND f.itemIndex=r.itemIndex AND f.type='\(SupportedType.fileURL)')
+              AND NOT EXISTS(SELECT 1 FROM image_text o WHERE o.clipID=r.clipID AND o.itemIndex=r.itemIndex
+                AND EXISTS(SELECT 1 FROM representations x WHERE x.clipID=o.clipID AND x.itemIndex=o.itemIndex AND x.blobDigest=o.blobDigest))
+            ORDER BY clips.lastCopiedAtMs DESC,r.clipID,r.itemIndex LIMIT ?
+            """, values + [.integer(Int64(max(1, limit)))]).map { ImageTextJob(clipID: $0.text("clipID"), itemIndex: Int($0.int("itemIndex"))) }
+        }
+    }
+    /// 后台识别结果只写派生索引，不改原payload、指纹、次数、收藏、分类与排序时间；受容量预算约束且不淘汰历史。
+    /// 功能已关闭、内容已隐藏、记录已删除或到期、原图表示已变化时不写入并返回false，by AI.Coding。
+    @discardableResult public func saveImageText(_ job: ImageTextJob, digest: String, text: String) throws -> Bool {
+        guard imageTextReady else { return false }
+        let settings = try settings(), at = clock.now()
+        guard settings.imageTextSearchSince != nil, !settings.hideContents else { return false }
+        let images = ImageTextJob.imageTypes.map { "'\($0)'" }.joined(separator: ",")
+        let current = try strategy.read { db -> Bool in
+            guard let row = try db.rows("SELECT *, (\(protectedSQL)) AS isProtected FROM clips WHERE id=?", [.text(job.clipID)]).first,
+                  visible(row, at: at, settings: settings) else { return false }
+            return try db.scalarInt("SELECT COUNT(*) FROM representations WHERE clipID=? AND itemIndex=? AND blobDigest=? AND type IN(\(images))",
+                                    [.text(job.clipID), .integer(Int64(job.itemIndex)), .text(digest)]) > 0
+        }
+        guard current else { return false }
+        let normalized = SearchNormalizer.normalize(text)
+        try commitImageText(quota: settings.quotaBytes, growth: Int64(normalized.utf8.count) + 4096) { db in
+            try db.run("INSERT OR REPLACE INTO image_text VALUES(?,?,?,?)", [.text(job.clipID), .integer(Int64(job.itemIndex)), .text(digest), .text(normalized)])
+        }
+        return true
+    }
+    /// 设置中的独立清除入口：只删派生索引，不影响历史与手动识别。
+    public func clearImageText() throws {
+        guard imageTextReady else { return }
+        let settings = try settings()
+        try commitImageText(quota: settings.quotaBytes, allowOverQuota: true) { try $0.exec("DELETE FROM image_text") }
+    }
+    /// 图片文字是派生数据：与缩略图一样不递增storeRevision、不发布事件，后台索引不会让用户的预览、分页游标失效，
+    /// 也不会挤掉事件缓冲里的采集变更；只清空本进程搜索缓存，让下一次查询看到新文字；超额抛quotaExceeded且不淘汰历史，by AI.Coding。
+    private func commitImageText(quota: Int64, allowOverQuota: Bool = false, growth: Int64 = 0, _ body: (SQLiteConnection) throws -> Void) throws {
+        try requireAvailable()
+        do { try strategy.commit(quota: quota, allowOverQuota: allowOverQuota, estimatedGrowth: growth, body) }
+        catch StoreError.postCommitUnavailable {
+            unavailable = true; publish(.unavailable(.postCommitUnavailable)); throw StoreError.postCommitUnavailable
+        }
+        searchCandidateCache = nil; searchContexts.removeAll(keepingCapacity: true)
+    }
+    /// 只读取待识别图片项的图片表示，按PNG > TIFF > JPEG顺序并逐个校验摘要；不读整条记录的其它项，by AI.Coding。
+    public func imageTextSource(_ job: ImageTextJob, at: Instant) throws -> [Representation] {
+        let settings = try settings()
+        return try strategy.read { db in
+            guard let row = try db.rows("SELECT *, (\(protectedSQL)) AS isProtected FROM clips WHERE id=?", [.text(job.clipID)]).first,
+                  visible(row, at: at, settings: settings) else { throw StoreError.notFound }
+            let rows = try db.rows("SELECT type,blobDigest,payload,byteCount FROM representations JOIN blobs ON digest=blobDigest WHERE clipID=? AND itemIndex=?",
+                                   [.text(job.clipID), .integer(Int64(job.itemIndex))])
+            return try ImageTextJob.imageTypes.flatMap { type in
+                try rows.filter { $0.text("type") == type }.map { row in
+                    let data = row.data("payload")
+                    guard Int64(data.count) == row.int("byteCount"), ContentFingerprint.hash(data) == row.text("blobDigest") else { throw StoreError.corruptPayload }
+                    return Representation(type, data)
+                }
+            }
+        }
     }
     /// 旧库曾回收的全文索引以最多200条候选批次补齐；失败不淘汰任何历史。
     public func rebuildSearchIndex(limit: Int = 200) throws -> Int {
@@ -836,6 +930,7 @@ public actor HistoryStore: HistoryRepository {
         try strategy.commit(quota: settings.quotaBytes, allowOverQuota: true, dryRun: true) { db in
             try trackBlobRemovals(db)
             try db.exec("DELETE FROM clips WHERE \(ordinarySQL); DELETE FROM thumbnails")
+            if imageTextReady { try db.exec("DELETE FROM image_text") }
             try garbageCollect(db)
         }
         return strategy.lastCandidateBytes + (try CommitStrategy.bytes(strategy.staging)) + (try CommitStrategy.bytes(strategy.root.appendingPathComponent("Exports"))) < settings.quotaBytes
@@ -1024,7 +1119,7 @@ public actor HistoryStore: HistoryRepository {
             let blobCondition = "digest IN(SELECT blobDigest FROM representations WHERE clipID IN(" + placeholders + "))"
             var tables: [String: [[String: SQLValue]]] = [:]
             tables["clips"] = try db.rows("SELECT * FROM clips WHERE id IN(" + placeholders + ")", values)
-            for table in ["items", "representations", "text_content", "clip_categories"] {
+            for table in ["items", "representations", "text_content", "clip_categories"] + (imageTextReady ? ["image_text"] : []) {
                 tables[table] = try db.rows("SELECT * FROM " + table + " WHERE clipID IN(" + placeholders + ")", values)
             }
             tables["blobs"] = try db.rows("SELECT * FROM blobs WHERE " + blobCondition, values)
@@ -1050,7 +1145,7 @@ public actor HistoryStore: HistoryRepository {
                 let withinRetention = retentionCutoff(settings: settings, at: at).map { row.int("lastCopiedAtMs") > $0 } ?? true
                 guard row.int("isFavorite") == 1 || protected || withinRetention else { throw StoreError.notFound }
             }
-            for table in ["clips", "items", "blobs", "representations", "text_content", "clip_categories"] {
+            for table in ["clips", "items", "blobs", "representations", "text_content", "clip_categories", "image_text"] {
                 for row in packet.tables[table] ?? [] {
                     if table == "clip_categories", try db.scalarInt("SELECT COUNT(*) FROM categories WHERE id=?", [.text(row.text("categoryID"))]) == 0 { continue }
                     let columns = row.keys.sorted()
