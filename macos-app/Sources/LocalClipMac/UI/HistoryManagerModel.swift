@@ -234,7 +234,7 @@ import LocalClipCore
     /// 读取失败后重试：无内容时进入加载，有同条件旧内容时保留并显示刷新中，by AI.Coding。
     func retry() { failed = false; reload(background: !rows.isEmpty) }
     private func loadFailed() { failed = true; loading = false; refreshing = false }
-    private func read<T>(_ kind: Read, _ request: SearchRequest?, _ body: () async throws -> T) async throws -> T {
+    private func read<T: Sendable>(_ kind: Read, _ request: SearchRequest?, _ body: () async throws -> T) async throws -> T {
         #if DEBUG
         try await readHook?(kind, request)
         #endif
