@@ -40,6 +40,7 @@ import LocalClipCore
 }
 
 @MainActor enum ChangeConfirmation {
+    /// 只承载设置窗口发起的确认；底栏历史面板贴屏幕底边且覆盖Dock，附页会抬起或撑高面板，改由面板内浮层确认，by AI.Coding。
     /// 异步等待真实用户选择，保留预览版本校验；不阻塞采集任务，不跳过确认策略，by AI.Coding。
     static func confirm(_ preview: ChangePreview) async -> Bool {
         await withCheckedContinuation { continuation in
@@ -90,7 +91,8 @@ import LocalClipCore
         func windowWillClose(_ notification: Notification) { finish(false) }
     }
 
-    private struct Content: View {
+    /// 附页与面板内浮层共用同一确认内容，by AI.Coding。
+    struct Content: View {
         let copy: ChangeConfirmationCopy
         let answer: (Bool) -> Void
         var body: some View {

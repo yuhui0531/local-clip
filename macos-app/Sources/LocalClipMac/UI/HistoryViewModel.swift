@@ -201,6 +201,9 @@ import LocalClipCore
     }
     public private(set) var loading: Bool { get { listState[\.loading] } set { listState[\.loading] = newValue } }
     @Published public private(set) var confirmingChange = false
+    /// 非nil时历史面板显示确认浮层；回答只经answerPanelConfirmation一次，by AI.Coding。
+    @Published private(set) var panelConfirmation: ChangeConfirmationCopy?
+    private var panelConfirmationAnswer: CheckedContinuation<Bool, Never>?
     struct ScrollRestoration: Equatable { var generation = UUID(); var offset: CGFloat }
     private(set) var scrollRestoration: ScrollRestoration? { get { listState[\.scrollRestoration] } set { listState[\.scrollRestoration] = newValue } }
     private var viewportPageSize = 50
@@ -237,9 +240,10 @@ import LocalClipCore
         guard let field = searchField, let window = field.window else { return false }
         return window.makeFirstResponder(field)
     }
-    /// Esc分级：自有弹窗 → 清空搜索词（焦点回结果）→ 返回true表示应关闭面板；输入法候选由调用方先放行，by AI.Coding。
+    /// Esc分级：面板内确认 → 自有弹窗 → 清空搜索词（焦点回结果）→ 返回true表示应关闭面板；输入法候选由调用方先放行，by AI.Coding。
     func handleEscape() -> Bool {
-        if quickPreview.isVisible { quickPreview.close(); previewFollowsSelection = false }
+        if panelConfirmation != nil { answerPanelConfirmation(false) }
+        else if quickPreview.isVisible { quickPreview.close(); previewFollowsSelection = false }
         else if showingCategoryEditor { showingCategoryEditor = false }
         else if showingFilters { showingFilters = false }
         else if showingStatusDetail { showingStatusDetail = false }
@@ -454,6 +458,7 @@ import LocalClipCore
         if !visible {
             // 尚未打开的编辑请求与Space预览不在隐藏面板上弹出；已经输入的草稿保留到下次打开。
             contentEditRequest = UUID(); if quickLookTask != nil { endQuickLook() }
+            answerPanelConfirmation(false)
             quickPreview.close()
             transformMenuRequest = UUID(); transformMenu?.close()
             cancelRename()
@@ -1086,7 +1091,8 @@ import LocalClipCore
         }
     }
     /// 破坏性操作只能经预览和用户确认；过期token要求再次预览。
-    public func change(_ change: HistoryChange) {
+    /// 确认位置按调用来源在发起时确定，不在预览返回后读取当时的key窗口，by AI.Coding。
+    public func change(_ change: HistoryChange, fromSettings: Bool = false) {
         guard !changingHistory else { return }
         changingHistory = true
         Task {
@@ -1095,7 +1101,7 @@ import LocalClipCore
                 let preview = try await store.preview(change)
                 if preview.requiresConfirmation {
                     confirmingChange = true; panelInteractionChanged?()
-                    let accepted = await ChangeConfirmation.confirm(preview)
+                    let accepted = fromSettings ? await ChangeConfirmation.confirm(preview) : await confirmInPanel(preview)
                     confirmingChange = false; panelInteractionChanged?()
                     guard accepted else { return }
                 }
@@ -1134,6 +1140,28 @@ import LocalClipCore
             } catch StoreError.stalePreview { pendingDeletion.removeAll(); message = "历史已变化，请重新预览并确认"; refresh() }
             catch { pendingDeletion.removeAll(); message = "变更未完成，旧内容保持或存储不可用，请检查状态"; refresh() }
         }
+    }
+    /// 面板内确认不新建窗口，面板frame与焦点保持不变；保留预览版本校验，by AI.Coding。
+    /// 预览返回前面板已收起则视为取消，不在隐藏面板上留下确认；浮层不压在详情等自有弹窗之下。
+    func confirmInPanel(_ preview: ChangePreview) async -> Bool {
+        guard panelVisible else { return false }
+        answerPanelConfirmation(false)
+        // 与隐藏面板相同地作废在途的编辑、转换菜单与Space预览，避免晚到的弹窗压在浮层上。
+        contentEditRequest = UUID(); transformMenuRequest = UUID(); transformMenu?.close()
+        if quickLookTask != nil { endQuickLook() }
+        if quickPreview.isVisible { quickPreview.close(); previewFollowsSelection = false }
+        showingDetail = false; showingCategoryEditor = false; showingFilters = false; showingStatusDetail = false
+        return await withCheckedContinuation { continuation in
+            panelConfirmationAnswer = continuation
+            withAnimation(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? nil : .snappy(duration: 0.18)) { panelConfirmation = ChangeConfirmationCopy(preview) }
+        }
+    }
+    /// 按钮、Return/Esc或面板隐藏只响应一次，取消不改变持久化数据，by AI.Coding。
+    func answerPanelConfirmation(_ accepted: Bool) {
+        guard let continuation = panelConfirmationAnswer else { return }
+        panelConfirmationAnswer = nil
+        withAnimation(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? nil : .snappy(duration: 0.18)) { panelConfirmation = nil }
+        continuation.resume(returning: accepted)
     }
     /// 键盘删除沿用同一预览/确认/事务流程，不另造直接删库入口。
     public func deleteSelected() {

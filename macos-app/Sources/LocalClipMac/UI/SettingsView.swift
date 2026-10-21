@@ -201,7 +201,7 @@ public struct SettingsView: View {
                             Text(model.settings.retentionDays == 0 ? "当前永不过期" : "当前 \(model.settings.retentionDays) 天").foregroundStyle(.secondary)
                             TextField("1–365", text: $retention).labelsHidden().frame(width: 70).multilineTextAlignment(.trailing).onSubmit(applyRetention)
                             Button("应用", action: applyRetention).disabled(retention == String(model.settings.retentionDays))
-                            Button("永不过期") { model.change(.retention(0)) }.help("永不过期（仍有容量限制）")
+                            Button("永不过期") { model.change(.retention(0), fromSettings: true) }.help("永不过期（仍有容量限制）")
                         }
                         LabeledContent("容量上限（MiB）") {
                             TextField("100–4096", text: $quota).labelsHidden().frame(width: 70).multilineTextAlignment(.trailing).onSubmit(applyQuota)
@@ -220,7 +220,7 @@ public struct SettingsView: View {
                         HStack {
                             Button("清理已到期内容") { Task { await model.maintenance() } }
                             Spacer()
-                            Button("清空普通历史…", role: .destructive) { model.change(.clearOrdinary) }
+                            Button("清空普通历史…", role: .destructive) { model.change(.clearOrdinary, fromSettings: true) }
                         }
                     } footer: {
                         Text("收藏或加入自定义分类的记录不会因期限或自动淘汰被删除，但计入容量；容量满时保留旧历史、跳过新增。降低设置前会预览确认。").settingsFootnote()
@@ -291,8 +291,8 @@ public struct SettingsView: View {
         Binding(get: { model.settings[keyPath: key] }, set: { value in model.updateSettings { $0[keyPath: key] = value } })
     }
     private var windowHeight: CGFloat { headerHeight + min(max(formHeight, 160), 600) + footerHeight }
-    private func applyRetention() { if let days = Int(retention), (1...365).contains(days) { model.change(.retention(days)) } else { feedback = "保留天数需为1–365"; model.message = feedback } }
-    private func applyQuota() { if let value = Int64(quota), (100...4096).contains(value) { model.change(.quota(value * MiB)) } else { feedback = "容量需为100–4096MiB"; model.message = feedback } }
+    private func applyRetention() { if let days = Int(retention), (1...365).contains(days) { model.change(.retention(days), fromSettings: true) } else { feedback = "保留天数需为1–365"; model.message = feedback } }
+    private func applyQuota() { if let value = Int64(quota), (100...4096).contains(value) { model.change(.quota(value * MiB), fromSettings: true) } else { feedback = "容量需为100–4096MiB"; model.message = feedback } }
     /// 应用选择器读取 bundleID，不将名称作为唯一键。
     private func chooseApplication() {
         guard let bundle = chooseBundleID(title: "选择要排除的应用") else { return }

@@ -887,6 +887,16 @@ import LocalClipCore
                       showingDetail: model.showingDetail, showingCategoryEditor: model.showingCategoryEditor,
                       showingFilters: model.showingFilters || model.showingStatusDetail, showingContentEditor: model.contentEditorPresented, queue: self.queuePanel) || (event.window == nil && panel.isKeyWindow) else { return event }
             self.focusState.ownedInteraction(at: event.timestamp)
+            // 面板内确认期间按键只作答：Return确认、Esc取消，其余不进入搜索或历史操作；输入法组字时先交给候选，by AI.Coding。
+            if model.panelConfirmation != nil {
+                if (panel.firstResponder as? NSTextView)?.hasMarkedText() == true { return event }
+                switch event.keyCode {
+                case 36, 76: model.answerPanelConfirmation(true)
+                case 53: model.answerPanelConfirmation(false)
+                default: break
+                }
+                return nil
+            }
             // 弹窗归属只用于保留交互，不能把详情文字或确认按钮按键当作历史操作，by AI.Coding。
             guard Self.routesHistoryShortcuts(event.window, panel: panel,
                 confirming: model.confirmingChange, hasModal: NSApp.modalWindow != nil) else { return event }

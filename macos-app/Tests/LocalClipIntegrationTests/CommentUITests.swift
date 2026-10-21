@@ -369,6 +369,57 @@ import LocalClipCore
         panel.cancelOperation(nil); #expect(dismissed == 1)
         model.query = "row"; panel.performClose(nil); #expect(closed == 1 && model.query == "row")
     }
+    /// 底栏面板上的确认改为面板内浮层，不挂系统附页；按钮、Esc与隐藏各只作答一次。隐藏窗口，不上屏，by AI.Coding。
+    @Test func panelConfirmationStaysInsidePanel() async throws {
+        _ = NSApplication.shared
+        let (root, store, model) = try await setup()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let category = try await store.createCategory(name: "UI7319 Project Alpha", colorHex: "007AFF")
+        // 面板发起的变更不读key窗口，直接走面板内浮层；设置来源走附页会上屏，不在此运行。
+        model.panelVisibilityChanged(true)
+        model.change(.deleteCategory(category.id))
+        try await wait { model.panelConfirmation?.title == "删除这个分类？" }
+        // 浮层期间卡片整段左键交还SwiftUI按钮与遮罩：不选择、不双击粘贴。
+        let bridge = HistoryDragBridge.DragView(frame: .init(x: 0, y: 0, width: 200, height: 200))
+        bridge.model = model; bridge.id = model.items[1].id
+        let selected = model.selectedID
+        for (index, count) in [1, 2].enumerated() {
+            for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                let event = try #require(NSEvent.mouseEvent(with: type, location: .init(x: 20, y: 100), modifierFlags: [], timestamp: TimeInterval(index + 1), windowNumber: 0, context: nil, eventNumber: 0, clickCount: count, pressure: 1))
+                #expect(bridge.handle(event) === event)
+            }
+        }
+        #expect(model.selectedID == selected)
+        model.answerPanelConfirmation(false)
+        // 面板已收起：面板发起的变更直接取消；之后的变更仍能弹出确认，未被锁住，取消不改数据。
+        model.panelVisibilityChanged(false)
+        model.change(.deleteCategory(category.id))
+        model.panelVisibilityChanged(true)
+        try await wait { model.change(.deleteCategory(category.id)); return model.panelConfirmation != nil }
+        model.answerPanelConfirmation(false)
+        try await wait { !model.confirmingChange }
+        #expect(try await store.categories().contains { $0.id == category.id })
+        let preview = try await store.preview(.deleteCategory(category.id))
+        // 预览返回前面板已收起：立即取消，不留下确认。
+        model.panelVisibilityChanged(false)
+        #expect(await model.confirmInPanel(preview) == false && model.panelConfirmation == nil)
+        func ask(_ respond: () -> Void) async throws -> Bool {
+            model.panelVisibilityChanged(true); model.showingDetail = true; model.showingFilters = true
+            let answer = Task { await model.confirmInPanel(preview) }
+            try await wait { model.panelConfirmation?.title == "删除这个分类？" && model.panelConfirmation?.action == "删除分类" }
+            #expect(!model.showingDetail && !model.showingFilters)
+            respond(); model.answerPanelConfirmation(true) // 已作答后再次回答为空操作
+            let accepted = await answer.value
+            #expect(model.panelConfirmation == nil)
+            return accepted
+        }
+        #expect(try await ask { model.answerPanelConfirmation(true) })
+        #expect(try await ask { model.answerPanelConfirmation(false) } == false)
+        var closes = false
+        let escaped = try await ask { closes = model.handleEscape() }
+        #expect(!escaped && !closes)
+        #expect(try await ask { model.panelVisibilityChanged(false) } == false)
+    }
     /// 每次打开发放的focusRequest推动文件卡片重新校验；非文件卡片不因此重绘，by AI.Coding。
     @Test func focusRequestRevalidatesFileCards() async throws {
         let (root, _, model) = try await setup()

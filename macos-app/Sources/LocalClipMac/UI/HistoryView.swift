@@ -57,7 +57,22 @@ public struct HistoryView: View {
                     target: model.target, draggedIDs: model.draggedIDs, hideContents: model.settings.hideContents, focusRequest: model.focusRequest, renamingID: model.renamingID, showingDetail: model.showingDetail && model.detail != nil, detailPending: model.detailSlow, quickBadges: model.quickBadgesVisible)
             // 顶部保留圆角，底边与屏幕贴合，不留可拖动的悬浮窗口边距。
             }.frame(width: viewport.size.width, height: viewport.size.height, alignment: .top)
+                // 确认期间底层控件对辅助功能隐藏，VoiceOver不能越过遮罩操作，by AI.Coding。
+                .accessibilityHidden(model.panelConfirmation != nil)
                 .background { ZStack { HistoryBackdrop(); Color(nsColor: .windowBackgroundColor).opacity(0.76) } }
+                // 变更确认在面板内遮罩弹出，不用系统附页抬起或撑高底栏面板，by AI.Coding。
+                .overlay {
+                    if let copy = model.panelConfirmation {
+                        ZStack {
+                            Color.black.opacity(0.16).contentShape(Rectangle()).onTapGesture {}.accessibilityHidden(true)
+                            ChangeConfirmation.Content(copy: copy, answer: model.answerPanelConfirmation)
+                                .background(Color(nsColor: .windowBackgroundColor), in: RoundedRectangle(cornerRadius: 14))
+                                .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(.primary.opacity(0.08)))
+                                .shadow(color: .black.opacity(0.18), radius: 18, y: 6)
+                                .accessibilityAddTraits(.isModal)
+                        }.transition(.opacity)
+                    }
+                }
                 .clipShape(UnevenRoundedRectangle(topLeadingRadius: LCStyle.Radius.panel, topTrailingRadius: LCStyle.Radius.panel))
                 .overlay(UnevenRoundedRectangle(topLeadingRadius: LCStyle.Radius.panel, topTrailingRadius: LCStyle.Radius.panel).strokeBorder(.white.opacity(0.30), lineWidth: 1))
                 .clipped()

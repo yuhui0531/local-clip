@@ -411,6 +411,8 @@ struct HistoryDragBridge: NSViewRepresentable {
         func handle(_ event: NSEvent) -> NSEvent? {
             if nativeSessionActive { return event }
             guard let model else { return event }
+            // 面板内确认浮层在最上层：整段左键交还SwiftUI按钮与遮罩，不选择、不拖动、不双击粘贴，by AI.Coding。
+            if model.panelConfirmation != nil { down = nil; pressedID = nil; dragged = false; return event }
             // 在卡片选择/改名前消费浮层关闭手势，包括紧随其后的双击第二下。
             if event.type == .leftMouseDown, model.dismissPopoverForBackdropClick(count: event.clickCount, timestamp: event.timestamp) {
                 down = nil; pressedID = nil; dragged = false
