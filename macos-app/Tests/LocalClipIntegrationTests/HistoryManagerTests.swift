@@ -30,7 +30,7 @@ import LocalClipCore
     }
     /// 写入发出的存储事件异步送达；负载下可能晚于随后的“选择全部”，被当成历史变化作废全选。
     /// 等模型处理完事件（事件触发后台刷新，读到刷新查询即已处理）再继续，不按固定时长等待。
-    private func afterChange<T>(_ model: HistoryManagerModel, _ write: () async throws -> T) async throws -> T {
+    private func afterChange<T: Sendable>(_ model: HistoryManagerModel, _ write: () async throws -> T) async throws -> T {
         var searched = false
         let hook = model.readHook
         model.readHook = { kind, request in if kind == .search { searched = true }; try await hook?(kind, request) }
