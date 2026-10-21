@@ -69,6 +69,23 @@ struct HistoryPagingTests {
         try await store.undoDelete()
         #expect(try await store.search(.init()).items.count == 2)
     }
+    /// 续页身份：插入使游标失效；图片文字索引不推进revision，但派生代次变化可被识别。
+    @Test func cursorAndDerivedGenerationDetectChanges() async throws {
+        let (store, clock, _, root) = try await makeStore(60)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let head = try await store.search(.init("page-"))
+        _ = try await store.ingest(fixture("page-new"), at: clock.now())
+        await #expect(throws: StoreError.self) { try await store.search(.init("page-", cursor: head.next)) }
+        let png = Data(repeating: 7, count: 64)
+        let picture = insertedID(try await store.ingest(.init(payload: .init([.init([.init(SupportedType.png, png)])])), at: clock.now()))
+        // 采集快照绑定策略版本，开启图片文字搜索放在采集之后。
+        var settings = try await store.settings(); settings.imageTextSearchSince = 1
+        _ = try await store.updateCaptureSettings(settings)
+        let before = try await store.search(.init("page-"))
+        #expect(try await store.saveImageText(.init(clipID: picture, itemIndex: 0), digest: ContentFingerprint.hash(png), text: "page-ocr"))
+        let after = try await store.search(.init("page-", cursor: before.next))
+        #expect(after.revision == before.revision && after.derivedGeneration != before.derivedGeneration)
+    }
     @Test func sortOrdersApplyToBothPaths() async throws {
         let (store, clock, ids, root) = try await makeStore(5)
         defer { try? FileManager.default.removeItem(at: root) }

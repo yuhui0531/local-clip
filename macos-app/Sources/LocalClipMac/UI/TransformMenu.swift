@@ -195,7 +195,6 @@ import LocalClipCore
                 .onChange(of: menu.highlighted) { _, selected in if let selected { proxy.scrollTo(selected) } }
             }
         }
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.primary.opacity(0.12)))
+        .floatingSurface()
     }
 }

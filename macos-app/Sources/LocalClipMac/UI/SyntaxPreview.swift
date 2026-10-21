@@ -133,10 +133,12 @@ struct SyntaxCardPreview: NSViewRepresentable {
 struct SyntaxDetailPreview: View {
     let content: NSAttributedString
     var highlight: SyntaxHighlight? = nil
+    /// 填满父视图高度，不测量；只有历史管理检查器使用，by AI.Coding。
+    var fills = false
     @Environment(\.colorScheme) private var scheme
     var body: some View {
         let shown = highlight.map { SyntaxStyle.attributed(content.string, highlight: $0, size: 13, dark: scheme == .dark) } ?? content
         // 按实际显示的等宽字体测量高度，避免按原文测量后多出滚动条。
-        RichTextPreview(content: shown).frame(height: InspectorPreviewLayout.height(for: shown))
+        RichTextPreview(content: shown).frame(height: fills ? nil : InspectorPreviewLayout.height(for: shown)).frame(maxHeight: fills ? .infinity : nil)
     }
 }

@@ -697,7 +697,7 @@ public actor HistoryStore: HistoryRepository {
             // 匹配集合已物化，总数在同一条SQL内取得，不再额外扫描正文，by AI.Coding。
             let resultPage = SearchPage(queryID: request.queryID, revision: revision, items: page,
                 next: pageRows.count > size ? .init(revision: revision, offset: offset + size, signature: request.signature) : nil,
-                total: countsTotal ? Int(rows.first?.int("totalMatches") ?? 0) : nil)
+                total: countsTotal ? Int(rows.first?.int("totalMatches") ?? 0) : nil, derivedGeneration: imageText.isEmpty ? 0 : imageTextGeneration)
             return .init(page: resultPage, candidateIDs: candidateIDs, indexIsComplete: indexIsComplete)
         }()
     }
@@ -747,6 +747,7 @@ public actor HistoryStore: HistoryRepository {
         let settings = try settings()
         try commitImageText(quota: settings.quotaBytes, allowOverQuota: true) { try $0.exec("DELETE FROM image_text") }
     }
+    private var imageTextGeneration: Int64 = 0
     /// 图片文字是派生数据：与缩略图一样不递增storeRevision、不发布事件，后台索引不会让用户的预览、分页游标失效，
     /// 也不会挤掉事件缓冲里的采集变更；只清空本进程搜索缓存，让下一次查询看到新文字；超额抛quotaExceeded且不淘汰历史，by AI.Coding。
     private func commitImageText(quota: Int64, allowOverQuota: Bool = false, growth: Int64 = 0, _ body: (SQLiteConnection) throws -> Void) throws {
@@ -755,6 +756,7 @@ public actor HistoryStore: HistoryRepository {
         catch StoreError.postCommitUnavailable {
             unavailable = true; publish(.unavailable(.postCommitUnavailable)); throw StoreError.postCommitUnavailable
         }
+        imageTextGeneration += 1
         searchCandidateCache = nil; searchContexts.removeAll(keepingCapacity: true)
     }
     /// 只读取待识别图片项的图片表示，按PNG > TIFF > JPEG顺序并逐个校验摘要；不读整条记录的其它项，by AI.Coding。

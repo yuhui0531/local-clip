@@ -1,6 +1,7 @@
 // 历史管理三栏：侧栏范围、分页表格、检查器；只复制不直接粘贴，by AI.Coding。
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 import LocalClipCore
 
 struct HistoryManagerView: View {
@@ -20,7 +21,10 @@ struct HistoryManagerView: View {
                 ManagerPager(model: model)
             }
             .inspector(isPresented: $inspectorShown) {
-                ManagerInspector(model: model, history: history).inspectorColumnWidth(min: 280, ideal: 320, max: 440)
+                // 检查器不向窗口报最小尺寸：文件说明纵向固定，测最小尺寸时按极窄宽度排版会高过窗口，整页被居中上移、侧栏钻到标题栏下，by AI.Coding。
+                ManagerInspector(model: model, history: history)
+                    .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .top)
+                    .inspectorColumnWidth(min: 300, ideal: 400, max: 640)
             }
         }
         .searchable(text: $model.literal, placement: .toolbar, prompt: "搜索历史")
@@ -39,11 +43,12 @@ struct HistoryManagerView: View {
         }
         // 提示条在隐藏遮罩之上，撤销入口始终可见，by AI.Coding。
         .overlay(alignment: .bottom) { ManagerToast(model: model) }
-        // 隐藏内容时放弃选择并关闭编辑器，不在遮罩下保留可操作对象，by AI.Coding。
-        .onChange(of: history.canDisplayContents) { _, visible in if !visible { model.clearSelection(); model.editor = nil } }
-        .sheet(isPresented: Binding(get: { model.editor != nil }, set: { if !$0 { model.editor = nil } })) {
+        // 隐藏内容时放弃选择，不在遮罩下保留可操作对象，by AI.Coding。
+        .onChange(of: history.canDisplayContents) { _, visible in if !visible { model.clearSelection() } }
+        // 内容隐藏时附页收起而草稿保留；只有内容可见时的关闭才放弃草稿，by AI.Coding。
+        .sheet(isPresented: Binding(get: { model.editorPresented }, set: { if !$0, history.canDisplayContents { model.discardEdit() } })) {
             if let editor = model.editor {
-                ClipContentEditor(state: editor, save: model.saveEdit, cancel: model.cancelEdit, discard: { model.editor = nil })
+                ClipContentEditor(state: editor, save: model.saveEdit, cancel: model.cancelEdit, discard: model.discardEdit)
                     .padding(ClipContentLayout.padding)
                     .frame(width: ClipContentLayout.size.width, height: ClipContentLayout.size.height)
                     .interactiveDismissDisabled()
@@ -58,9 +63,7 @@ struct HistoryManagerView: View {
 private struct ManagerSidebar: View {
     @ObservedObject var model: HistoryManagerModel
     @ObservedObject var history: HistoryViewModel
-    @State private var creating = false
-    @State private var draft = ""
-    @FocusState private var draftFocused: Bool
+    @State private var dropTarget: String?
     var body: some View {
         List(selection: Binding(get: { model.scope }, set: { if let value = $0 { model.scope = value } })) {
             Section("资料库") {
@@ -74,28 +77,48 @@ private struct ManagerSidebar: View {
             }
             Section {
                 ForEach(history.categories) { category in
+                    let tint = Color(nsColor: RichContent.colorValue(category.colorHex))
                     Label { Text(category.name) } icon: { CategoryDot(category: category, size: 9) }
+                        .frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+                        // 拖入只加入分类，不切换浏览范围；悬停时按分类色高亮，与面板分类标签一致，by AI.Coding。
+                        .background { if dropTarget == category.id { RoundedRectangle(cornerRadius: 5).fill(tint.opacity(0.18)).strokeBorder(tint, lineWidth: 1.5).padding(-3) } }
+                        .dropDestination(for: ManagerDragToken.self) { items, _ in model.drop(items.map(\.value), into: category.id) }
+                            isTargeted: { if $0 { dropTarget = category.id } else if dropTarget == category.id { dropTarget = nil } }
                         .tag(HistoryManagerModel.Scope.category(category.id))
-                }
-                if creating {
-                    TextField("分类名称", text: $draft).focused($draftFocused)
-                        .onSubmit(commit).onExitCommand { creating = false; draft = "" }
-                        .onChange(of: draftFocused) { _, focused in if !focused && creating { commit() } }
                 }
             } header: {
                 HStack {
                     Text("分类"); Spacer()
-                    Button { creating = true; draft = ""; draftFocused = true } label: { Image(systemName: "plus") }
-                        .buttonStyle(.borderless).help("新建分类").accessibilityLabel("新建分类")
+                    NewCategoryButton(model: model, history: history)
                 }
             }
         }
         .listStyle(.sidebar)
     }
-    private func commit() {
-        let name = draft
-        guard !name.trimmingCharacters(in: .whitespaces).isEmpty else { creating = false; return }
-        Task { if await model.createCategory(name) { creating = false; draft = "" } else { draftFocused = true } }
+}
+/// 新建分类沿用面板的分类编辑弹窗：弹窗自带焦点与取消，不在侧栏列表里嵌输入框，by AI.Coding。
+private struct NewCategoryButton: View {
+    @ObservedObject var model: HistoryManagerModel
+    @ObservedObject var history: HistoryViewModel
+    @State private var shown = false
+    @State private var name = ""
+    @State private var color = ""
+    @State private var error = ""
+    @State private var saving = false
+    var body: some View {
+        Button { name = ""; color = history.nextCategoryColor; error = ""; shown = true } label: { Image(systemName: "plus") }
+            .buttonStyle(.borderless).help("新建分类").accessibilityLabel("新建分类")
+            .popover(isPresented: $shown, arrowEdge: .trailing) {
+                CategoryEditor(creating: true, name: $name, color: $color, error: error, saving: saving, cancel: { shown = false }, save: save)
+            }
+    }
+    private func save() {
+        guard !saving else { return }
+        saving = true; error = ""
+        Task {
+            defer { saving = false }
+            if let failure = await model.createCategory(name, color: color) { error = failure } else { shown = false }
+        }
     }
 }
 
@@ -104,6 +127,7 @@ private struct ManagerFilterBar: View {
     @ObservedObject var model: HistoryManagerModel
     var body: some View {
         HStack(spacing: 10) {
+            PageCheckbox(model: model)
             Picker("时间", selection: $model.time) { ForEach(HistoryManagerModel.TimeRange.allCases) { Text($0.rawValue).tag($0) } }
                 .pickerStyle(.segmented).labelsHidden().fixedSize()
             Picker("来源", selection: $model.source) {
@@ -121,17 +145,30 @@ private struct ManagerBatchBar: View {
     @ObservedObject var model: HistoryManagerModel
     @ObservedObject var history: HistoryViewModel
     var body: some View {
-        let ids = model.targetIDs
+        let ids = model.targetIDs, all = model.selectAllID
         HStack(spacing: 10) {
+            PageCheckbox(model: model)
             Text("已选择 \(ids.count) 条").font(.system(size: LCStyle.FontSize.body, weight: .semibold))
             if model.selectingAll { ProgressView().controlSize(.small); Text("正在选择全部…").foregroundStyle(.secondary) }
             else if model.allMatching == nil, model.total > ids.count { Button("选择全部 \(model.total) 条", action: model.selectAllMatching).buttonStyle(.link) }
             Spacer()
-            Button("收藏") { model.setFavorite(ids, true) }
-            Menu("分类…") { CategoryItems(model: model, history: history, ids: ids) }.fixedSize()
-            Button("删除", role: .destructive) { model.delete(ids) }
+            // 收集完成前目标集合未定，写入按钮禁用，只保留取消，by AI.Coding。
+            Group {
+                Button("收藏") { model.setFavorite(ids, true, selectAll: all) }
+                Menu("分类…") { CategoryItems(model: model, history: history, ids: ids, selectAll: all) }.fixedSize()
+                Button("删除", role: .destructive) { model.delete(ids, selectAll: all) }
+            }.disabled(model.selectingAll)
             Button("取消", action: model.clearSelection)
         }.padding(.horizontal, 12).frame(height: 40).background(Color.accentColor.opacity(0.08))
+    }
+}
+/// 表头只能放文字，“选择本页全部”放在表格上方条的首位，与行勾选框对齐，by AI.Coding。
+private struct PageCheckbox: View {
+    @ObservedObject var model: HistoryManagerModel
+    var body: some View {
+        Toggle("选择本页全部", isOn: Binding(get: { model.pageChecked }, set: { model.setPageChecked($0) }))
+            .toggleStyle(.checkbox).labelsHidden().help("选择本页全部").accessibilityLabel("选择本页全部")
+            .disabled(model.rows.isEmpty || model.selectingAll)
     }
 }
 /// 勾选表示所选记录全部已在该分类，点按整体加入或移出。
@@ -139,10 +176,11 @@ private struct CategoryItems: View {
     @ObservedObject var model: HistoryManagerModel
     @ObservedObject var history: HistoryViewModel
     let ids: [ClipID]
+    var selectAll: UUID?
     var body: some View {
         ForEach(history.categories) { category in
-            let included = !ids.isEmpty && ids.allSatisfy { model.memberships[$0]?.contains(category.id) == true }
-            Toggle(category.name, isOn: Binding(get: { included }, set: { model.setCategory(ids, category.id, $0) }))
+            let included = !ids.isEmpty && ids.allSatisfy { model.categoryIDs(of: $0).contains(category.id) }
+            Toggle(category.name, isOn: Binding(get: { included }, set: { model.setCategory(ids, category.id, $0, selectAll: selectAll) }))
         }
         if history.categories.isEmpty { Text("尚无分类，可在侧栏新建").foregroundStyle(.secondary) }
     }
@@ -155,18 +193,32 @@ private struct ManagerTable: View {
     @State private var hovered: ClipID?
     @State private var order = [KeyPathComparator(\ClipSummary.lastCopiedAt, order: .reverse)]
     var body: some View {
-        Table(model.rows, selection: $model.selection, sortOrder: $order) {
+        VStack(spacing: 0) {
+            // 有内容时的刷新失败不能静默：保留旧内容并给出重试，by AI.Coding。
+            if model.failed, !model.rows.isEmpty {
+                HStack {
+                    Label("刷新失败，显示的是上次结果", systemImage: "exclamationmark.triangle").foregroundStyle(.red)
+                    Spacer()
+                    Button("重试", action: model.retry)
+                }.padding(.horizontal, 12).padding(.vertical, 6).background(Color.red.opacity(0.08))
+            }
+            table
+        }
+    }
+    private var table: some View {
+        Table(of: ClipSummary.self, selection: Binding(get: { model.selection }, set: { model.tableSelected($0, checkboxClick: Self.checkboxDoubleClick()) }), sortOrder: $order) {
             TableColumn("") { row in
-                Toggle("", isOn: Binding(get: { model.selection.contains(row.id) }, set: { on in if on { model.selection.insert(row.id) } else { model.selection.remove(row.id) } }))
+                Toggle("", isOn: Binding(get: { model.isChecked(row.id) }, set: { model.setChecked(row.id, $0) }))
                     .toggleStyle(.checkbox).labelsHidden()
-            }.width(22)
-            TableColumn("") { row in Image(systemName: HistoryView.kindSymbol(row.kind)).foregroundStyle(.secondary) }.width(22)
-            TableColumn("名称") { row in NameCell(row: row, categories: history.categories, memberships: model.memberships[row.id] ?? []) }
-            TableColumn("来源") { row in Text(row.source.name).foregroundStyle(.secondary).lineLimit(1) }.width(min: 70, ideal: 110, max: 180)
+            }.width(min: 22, ideal: 22, max: 22)
+            // 名称是唯一伸缩列；类型图标并入名称，其余列窄而锁定。理想宽度之和不超过默认窗口（1180，检查器400）下的表格宽度，首次打开不溢出，by AI.Coding。
+            TableColumn("名称") { row in NameCell(row: row, categories: history.categories, memberships: model.memberships[row.id] ?? [], showsContent: history.canDisplayContents, history: history) }
+                .width(min: 220, ideal: 240)
+            TableColumn("来源") { row in Text(row.source.name).foregroundStyle(.secondary).lineLimit(1) }.width(min: 88, ideal: 88, max: 88)
             TableColumn("最近复制", value: \.lastCopiedAt) { row in
                 CopyAge(copiedAt: row.lastCopiedAt).foregroundStyle(.secondary)
                     .help(Date(timeIntervalSince1970: Double(row.lastCopiedAt) / 1000).formatted(date: .abbreviated, time: .standard))
-            }.width(min: 70, ideal: 90, max: 130)
+            }.width(min: 84, ideal: 84, max: 84)
             TableColumn("") { row in
                 let visible = hovered == row.id || model.selection.contains(row.id)
                 HStack(spacing: 6) {
@@ -175,64 +227,166 @@ private struct ManagerTable: View {
                     Button { model.delete([row.id]) } label: { Image(systemName: "trash") }.help("删除 · ⌫").accessibilityLabel("删除")
                 }.buttonStyle(.borderless).opacity(visible ? 1 : 0)
                     .onHover { if $0 { hovered = row.id } else if hovered == row.id { hovered = nil } }
-            }.width(48)
+            }.width(min: 48, ideal: 48, max: 48)
+        } rows: {
+            // 行可拖到侧栏分类；载荷只是本窗口令牌，目标在拖动开始时按选择解析，by AI.Coding。
+            ForEach(model.rows) { row in TableRow(row).draggable(ManagerDragToken(value: model.dragToken(for: row.id))) }
         }
         .onChange(of: order) { _, value in model.sort = value.first?.order == .forward ? .recentAsc : .recentDesc }
         .onChange(of: model.sort) { _, sort in
             if sort == .recentAsc || sort == .recentDesc { order = [KeyPathComparator(\ClipSummary.lastCopiedAt, order: sort == .recentAsc ? .forward : .reverse)] }
         }
+        // 不设双击动作：双击会让间隔内连点两行勾选框被表格当成双击，改选该行并弹出编辑；编辑走 ⌘E、铅笔与右键，by AI.Coding。
         .contextMenu(forSelectionType: ClipID.self) { ids in
-            ManagerRowMenu(model: model, history: history, ids: model.rows.map(\.id).filter(ids.contains))
-        } primaryAction: { ids in
-            if ids.count == 1, let id = ids.first { model.beginEdit(id) }
+            // 右键已选记录时作用于完整目标（含跨页全选），不静默降级为本页，by AI.Coding。
+            let clicked = model.rows.map(\.id).filter(ids.contains)
+            let selected = !clicked.isEmpty && Set(clicked).isSubset(of: model.selection)
+            ManagerRowMenu(model: model, history: history, ids: selected ? model.targetIDs : clicked, selectAll: selected ? model.selectAllID : nil)
         }
         .overlay {
             if model.rows.isEmpty {
-                if model.failed { ContentUnavailableView { Label("读取失败", systemImage: "exclamationmark.triangle") } actions: { Button("重试") { model.reload() } } }
+                if model.loading { ProgressView() }
+                else if !model.queryProblems.isEmpty {
+                    ContentUnavailableView("条件未生效", systemImage: "exclamationmark.magnifyingglass", description: Text(model.queryProblems.joined(separator: "\n")))
+                }
+                else if model.failed { ContentUnavailableView { Label("读取失败", systemImage: "exclamationmark.triangle") } actions: { Button("重试", action: model.retry) } }
                 else if !model.literal.isEmpty || model.hasFilters || model.scope != .all { ContentUnavailableView.search }
                 else { ContentUnavailableView("暂无历史", systemImage: "tray") }
             }
         }
     }
 }
+extension ManagerTable {
+    /// 当前事件是落在勾选列（第0列）上的连击：表格据此改选整行，勾选框收不到这次点击，by AI.Coding。
+    static func checkboxDoubleClick() -> Bool {
+        guard let event = NSApp.currentEvent, [.leftMouseDown, .leftMouseUp].contains(event.type), event.clickCount > 1,
+              let frame = event.window?.contentView?.superview, let hit = frame.hitTest(event.locationInWindow) else { return false }
+        var view: NSView? = hit
+        while let current = view, !(current is NSTableView) { view = current.superview }
+        guard let table = view as? NSTableView else { return false }
+        return table.column(at: table.convert(event.locationInWindow, from: nil)) == 0
+    }
+}
 private struct NameCell: View {
     let row: ClipSummary
     let categories: [ClipCategory]
     let memberships: Set<String>
+    let showsContent: Bool
+    let history: HistoryViewModel
+    @State private var preview: RowPreview?
     var body: some View {
-        HStack(spacing: 6) {
-            if row.isFavorite { Image(systemName: "star.fill").foregroundStyle(.yellow).font(.caption) }
-            Text(HistoryView.displayTitle(row)).lineLimit(1)
-            if row.title != nil { Text(row.preview).foregroundStyle(.secondary).lineLimit(1) }
-            Spacer(minLength: 4)
-            HStack(spacing: 3) {
-                ForEach(categories.filter { memberships.contains($0.id) }) { category in
-                    CategoryDot(category: category).help(category.name)
+        HStack(spacing: 8) {
+            RowPreviewTile(row: row, preview: showsContent ? preview : nil)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    if row.isFavorite { Image(systemName: "star.fill").foregroundStyle(.yellow).font(.caption) }
+                    Text(title).lineLimit(1)
+                    Spacer(minLength: 4)
+                    HStack(spacing: 3) {
+                        ForEach(categories.filter { memberships.contains($0.id) }) { category in
+                            CategoryDot(category: category).help(category.name)
+                        }
+                    }
+                }
+                if showsContent, let snippet {
+                    Text(snippet).font(preview?.text != nil ? .system(size: 11, design: .monospaced) : .system(size: 11))
+                        .foregroundStyle(.secondary).lineLimit(2).truncationMode(.tail)
                 }
             }
         }
+        // 悬停显示较长的摘要预览，不读正文；内容隐藏时不提示，by AI.Coding。
+        .help(showsContent ? (row.preview.isEmpty ? HistoryView.displayTitle(row) : row.preview) : "")
+        .task(id: showsContent ? row.id + "|" + (row.contentFingerprint ?? "") : "") {
+            guard showsContent else { preview = nil; return }
+            preview = await RowPreview.load(row, history: history)
+        }
+    }
+    private var title: String { Self.title(row) }
+    /// 文件只显示文件名，完整路径留在悬停提示里；检查器名称占位同用，by AI.Coding。
+    static func title(_ row: ClipSummary) -> String {
+        guard row.kind == .file, row.title == nil, let first = row.preview.split(whereSeparator: \.isNewline).first else { return HistoryView.displayTitle(row) }
+        return (String(first) as NSString).lastPathComponent
+    }
+    /// 文本/代码文件取开头几行；文字记录取首行之后的摘要；有标题时摘要是正文开头。
+    private var snippet: String? {
+        if let text = preview?.text { return Self.lines(text, dropFirst: false) }
+        guard [.text, .url].contains(row.kind) else { return nil }
+        return Self.lines(row.preview, dropFirst: row.title == nil)
+    }
+    private static func lines(_ text: String, dropFirst: Bool) -> String? {
+        let lines = text.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        let value = (dropFirst ? Array(lines.dropFirst()) : lines).prefix(2).joined(separator: "\n")
+        return value.isEmpty ? nil : value
+    }
+}
+/// 名称列预览数据：图片与卡片共用缩略图服务和缓存；文件与卡片同用 FileCardPreview 按内容决定显示图像还是开头文字，by AI.Coding。
+private struct RowPreview {
+    var image: NSImage?
+    var text: String?
+    var icon: NSImage?
+    @MainActor static func load(_ row: ClipSummary, history: HistoryViewModel) async -> RowPreview? {
+        switch row.kind {
+        case .image, .mixed:
+            if let cached = history.thumbnails.object(forKey: row.id as NSString) { return .init(image: cached) }
+            let result = await history.derived.thumbnail(id: row.id)
+            guard !Task.isCancelled, let image = ThumbnailPreviewState(result).image else { return nil }
+            if case .image(let data) = result { history.thumbnails.setObject(image, forKey: row.id as NSString, encodedBytes: data.count) }
+            return .init(image: image)
+        case .file:
+            guard let url = try? await history.previewDetail(id: row.id).payload.fileURLs?.first, !Task.isCancelled else { return nil }
+            let icon = NSWorkspace.shared.icon(forFile: url.path)
+            switch await FileCardPreview.render(fileAt: url) {
+            case .image(let data): return .init(image: NSImage(data: data), icon: icon)
+            case .text(let text): return .init(text: text, icon: icon)
+            case .unavailable: return .init(icon: icon)
+            }
+        default: return nil
+        }
+    }
+}
+/// 固定 72×48，行高一致又看得清；图片按比例完整显示，加载前和不能预览时显示类型图标，by AI.Coding。
+private struct RowPreviewTile: View {
+    let row: ClipSummary
+    let preview: RowPreview?
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 5, style: .continuous).fill(Color.primary.opacity(0.05))
+            if let image = preview?.image {
+                Image(nsImage: image).resizable().scaledToFit()
+                    .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 3, style: .continuous).strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5))
+                    .padding(3)
+            } else if let icon = preview?.icon {
+                Image(nsImage: icon).resizable().scaledToFit().padding(8)
+            } else {
+                Image(systemName: HistoryView.kindSymbol(row.kind)).font(.system(size: 20, weight: .light)).foregroundStyle(.secondary)
+            }
+        }
+        .frame(width: 72, height: 48)
+        .help(HistoryView.kindName(row.kind))
     }
 }
 private struct ManagerRowMenu: View {
     @ObservedObject var model: HistoryManagerModel
     @ObservedObject var history: HistoryViewModel
     let ids: [ClipID]
+    let selectAll: UUID?
     var body: some View {
         let rows = model.rows.filter { ids.contains($0.id) }
-        let single = rows.count == 1 ? rows.first : nil
-        if !rows.isEmpty {
+        let single = ids.count == 1 ? rows.first : nil
+        if !ids.isEmpty {
             Button("复制") { model.copy(ids) }.keyboardShortcut("c")
             Button("纯文本复制") { model.copy(ids, plain: true) }
             Divider()
             Button("编辑…") { if let single { model.beginEdit(single.id) } }.keyboardShortcut("e")
                 .disabled(single.map { ![ClipKind.text, .url].contains($0.kind) } ?? true)
-            let favorite = rows.allSatisfy(\.isFavorite)
-            Button(favorite ? "取消收藏" : "收藏") { model.setFavorite(ids, !favorite) }.keyboardShortcut("d")
-            Menu("分类") { CategoryItems(model: model, history: history, ids: ids) }
+            let favorite = model.allFavorite(ids)
+            Button(favorite ? "取消收藏" : "收藏") { model.setFavorite(ids, !favorite, selectAll: selectAll) }.keyboardShortcut("d")
+            Menu("分类") { CategoryItems(model: model, history: history, ids: ids, selectAll: selectAll) }
             Divider()
             Button("在历史面板中定位") { if let single { model.locate?(single.id) } }.keyboardShortcut("g").disabled(single == nil)
             Divider()
-            Button("删除", role: .destructive) { model.delete(ids) }.keyboardShortcut(.delete, modifiers: [])
+            Button("删除", role: .destructive) { model.delete(ids, selectAll: selectAll) }.keyboardShortcut(.delete, modifiers: [])
         }
     }
 }
@@ -244,6 +398,7 @@ private struct ManagerPager: View {
     var body: some View {
         HStack(spacing: 8) {
             Text(model.rangeText).foregroundStyle(.secondary).monospacedDigit()
+            if model.refreshing { ProgressView().controlSize(.mini) }
             Spacer()
             Picker("每页", selection: $model.pageSize) { ForEach(HistoryManagerModel.pageSizes, id: \.self) { Text("\($0)").tag($0) } }.fixedSize()
             Button { model.go(toPage: model.page - 1) } label: { Image(systemName: "chevron.left") }.disabled(model.page == 0).help("上一页 · Page Up")
@@ -253,6 +408,7 @@ private struct ManagerPager: View {
             Button { model.go(toPage: model.page + 1) } label: { Image(systemName: "chevron.right") }.disabled(model.page + 1 >= model.pageCount).help("下一页 · Page Down")
         }
         .buttonStyle(.borderless).controlSize(.small).padding(.horizontal, 12).frame(height: 32)
+        .disabled(model.loading)
         .onChange(of: model.page) { _, page in input = "\(page + 1)" }
     }
 }
@@ -262,12 +418,10 @@ private struct ManagerInspector: View {
     @ObservedObject var model: HistoryManagerModel
     @ObservedObject var history: HistoryViewModel
     var body: some View {
-        if model.selection.count > 1 || model.allMatching != nil {
-            let names = model.rows.filter { model.selection.contains($0.id) }.map(HistoryView.displayTitle)
-            VStack(alignment: .leading, spacing: 8) {
-                Text("已选择 \(model.targetIDs.count) 条").font(.headline)
-                List(Array(names.enumerated()), id: \.offset) { Text($0.element).lineLimit(1) }.listStyle(.plain)
-            }.padding(12)
+        if model.selectingAll {
+            VStack(spacing: 8) { ProgressView(); Text("正在选择全部…").foregroundStyle(.secondary) }.frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if model.selection.count > 1 || model.allMatching != nil {
+            ManagerSelectionSummary(summary: model.selectionSummary, categories: history.categories)
         } else if let row = model.selectedRow {
             if let content = model.detail, content.detail.summary.id == row.id { ManagerDetail(model: model, history: history, row: row, content: content).id(row.id) }
             else if model.detailFailed { ContentUnavailableView("内容读取失败", systemImage: "exclamationmark.triangle", description: Text("记录可能已删除或过期。")) }
@@ -282,26 +436,30 @@ private struct ManagerDetail: View {
     @ObservedObject var history: HistoryViewModel
     let row: ClipSummary
     let content: ClipDetailContent
-    @State private var name = ""
+    @State private var draft = HistoryManagerModel.NameDraft(nil)
     var body: some View {
         let detail = content.detail
         let urls = row.kind == .file ? detail.payload.fileURLs ?? [] : []
         let hasOCR = row.kind == .image || row.kind == .mixed || urls.contains { ClipboardPayload.isImageFile($0.path) }
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 6) {
-                TextField(row.preview.split(whereSeparator: \.isNewline).first.map(String.init) ?? HistoryView.kindName(row.kind), text: $name)
+                TextField(NameCell.title(row), text: $draft.text)
                     .textFieldStyle(.plain).font(.system(size: LCStyle.FontSize.heading, weight: .semibold))
-                    .onSubmit { if name != (row.title ?? "") { model.rename(row.id, name) } }
+                    .onSubmit {
+                        guard let name = draft.submit(current: row.title) else { return }
+                        Task { await model.rename(row.id, name); draft.finished(name) }
+                    }
                 Button { model.setFavorite([row.id], !row.isFavorite) } label: { Image(systemName: row.isFavorite ? "star.fill" : "star").foregroundStyle(row.isFavorite ? .yellow : .secondary) }
                     .buttonStyle(.borderless).help(row.isFavorite ? "取消收藏 · ⌘D" : "收藏 · ⌘D")
             }
-            Text(HistoryView.sourceDescription(row.source))
-                .font(.caption).foregroundStyle(.secondary)
-            ScrollView {
-                ClipDetailPreview(detail: detail, image: content.image, text: content.richPreview, highlight: content.highlight, interactive: history.canDisplayContents)
-            }.frame(maxHeight: .infinity)
+            // 记录信息常显为一行，格式与来源依据放悬停提示；说明文字直接显示，by AI.Coding。
+            Text(ClipRecordInfo.line(detail)).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                .help("\(HistoryView.sourceDescription(row.source))\n\(detail.payload.items.count) 项 · 格式：\(ClipRecordInfo.formats(detail))")
+            ClipRecordInfo.Notes(detail: detail)
+            // 预览占满名称、来源行与底部分类、按钮之外的高度，长文在区内滚动，by AI.Coding。
+            ClipDetailPreview(detail: detail, image: content.image, text: content.richPreview, highlight: content.highlight, interactive: history.canDisplayContents, fills: true)
+                .frame(maxHeight: .infinity, alignment: .top)
             ManagerCategoryChips(model: model, history: history, row: row, included: detail.categoryIDs)
-            ClipRecordInfo(detail: detail)
             HStack {
                 if hasOCR { Button("复制图中文字") { history.copyImageText(id: row.id) } }
                 if !urls.isEmpty { Button("在访达中显示") { NSWorkspace.shared.activateFileViewerSelecting(urls.filter { FileManager.default.fileExists(atPath: $0.path) }) } }
@@ -311,9 +469,39 @@ private struct ManagerDetail: View {
             }
         }
         .padding(12)
-        .onAppear { name = row.title ?? "" }
-        .onChange(of: row.title) { _, title in name = title ?? "" }
+        .onAppear { draft = .init(row.title) }
+        .onChange(of: row.title) { old, title in draft.titleChanged(from: old, to: title) }
     }
+}
+/// 多选只显示汇总；数量在批量栏，不在此重复，逐条名称见表格勾选行，by AI.Coding。
+private struct ManagerSelectionSummary: View {
+    let summary: HistoryManagerModel.SelectionSummary
+    let categories: [ClipCategory]
+    var body: some View {
+        let used = categories.filter { summary.categories[$0.id] != nil }
+        Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 10) {
+            GridRow {
+                label("类型")
+                Text(ClipKind.allCases.compactMap { kind in summary.kinds[kind].map { "\(HistoryView.kindName(kind)) \($0)" } }.joined(separator: " · "))
+            }
+            GridRow { label("已收藏"); Text("\(summary.favorites) 条") }
+            if !used.isEmpty {
+                GridRow {
+                    label("分类")
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(used) { category in
+                            HStack(spacing: 6) { CategoryDot(category: category); Text(category.name).lineLimit(1); Text("\(summary.categories[category.id] ?? 0) 条").foregroundStyle(.secondary) }
+                        }
+                    }
+                }
+            }
+            if let earliest = summary.earliest, let latest = summary.latest {
+                GridRow { label("复制时间"); Text(earliest == latest ? ClipRecordInfo.time(latest) : "\(ClipRecordInfo.time(earliest)) – \(ClipRecordInfo.time(latest))") }
+            }
+        }
+        .padding(12).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+    private func label(_ text: String) -> some View { Text(text).foregroundStyle(.secondary).gridColumnAlignment(.trailing) }
 }
 private struct ManagerCategoryChips: View {
     @ObservedObject var model: HistoryManagerModel
@@ -350,6 +538,14 @@ private struct ManagerToast: View {
             .background(.regularMaterial, in: Capsule()).shadow(radius: 6, y: 2)
             .padding(.bottom, 44).transition(.opacity).id(toast.id)
         }
+    }
+}
+/// 管理窗口内部拖动载荷：沿用已声明的内部历史类型，只带令牌；其他应用与 Finder 不认该类型，by AI.Coding。
+struct ManagerDragToken: Transferable {
+    let value: String
+    static var transferRepresentation: some TransferRepresentation {
+        DataRepresentation(contentType: UTType(exportedAs: HistoryViewModel.categoryDragType)) { Data($0.value.utf8) }
+            importing: { ManagerDragToken(value: String(decoding: $0, as: UTF8.self)) }
     }
 }
 private struct CategoryDot: View {

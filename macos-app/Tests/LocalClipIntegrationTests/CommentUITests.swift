@@ -701,8 +701,9 @@ import LocalClipCore
         #expect(model.pasteQueueNextSummary == model.items[0].preview.split(whereSeparator: \.isNewline).first.map(String.init))
         model.pasteQueueNext(target: nil, modifiersHeld: { false })
         #expect(popups.isEmpty && model.pasteQueueWarning == "请先切换到要粘贴的应用")
-        let host = NSHostingView(rootView: PasteQueueView(model: model))
-        #expect(host.fittingSize.width <= 262 && host.fittingSize.height > 40)
+        // 用浮窗实际使用的宿主测量：曾清空全部尺寸选项，fittingSize 为 0，浮窗 0×0 看不见。
+        let host = AppDelegate.queueHost(model: model) {}
+        #expect(host.fittingSize.width >= 200 && host.fittingSize.width <= 262 && host.fittingSize.height > 40)
         model.updateSettings { $0.hideContents = true }
         try await wait { model.settings.hideContents }
         #expect(model.pasteQueueNextSummary == "内容已隐藏")

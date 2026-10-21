@@ -72,8 +72,45 @@ import LocalClipCore
         while !completed.contains(token), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(2)) }
         guard completed.remove(token) != nil else { throw StoreError.ioFailure }
     }
+    /// 主线程卡顿采样：后台每 8ms 投递一次，主线程回应间隔超过 30ms 记一条（系统运行时间），供动画录屏对照，by AI.Coding。
+    nonisolated(unsafe) private static var stalls: [[String: Double]] = []
+    private static func monitorMainThread() {
+        Thread.detachNewThread {
+            while true {
+                let sent = ProcessInfo.processInfo.systemUptime
+                let done = DispatchSemaphore(value: 0)
+                DispatchQueue.main.async { done.signal() }
+                done.wait()
+                let gap = ProcessInfo.processInfo.systemUptime - sent
+                if gap > 0.03 {
+                    DispatchQueue.main.async { stalls.append(["at": sent, "ms": (gap * 1000).rounded()]); write(stalls, "main-stalls.json") }
+                }
+                Thread.sleep(forTimeInterval: 0.008)
+            }
+        }
+    }
+    /// 面板背后铺一块彩色带文字的普通窗口，对比磨砂透明度用；只在隔离验收包里出现，by AI.Coding。
+    private static var backdrop: NSWindow?
+    static func showBackdrop() {
+        guard backdrop == nil, let screen = NSScreen.main else { return }
+        let frame = NSRect(x: screen.frame.minX, y: screen.frame.minY, width: screen.frame.width, height: 460)
+        let window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false; window.ignoresMouseEvents = true
+        let words = Array(repeating: "LocalClip 磨砂对比 · The quick brown fox jumps over the lazy dog · 0123456789", count: 14).joined(separator: "\n")
+        window.contentView = NSHostingView(rootView: ZStack {
+            LinearGradient(colors: [.orange, .pink, .purple, .blue, .teal, .green], startPoint: .leading, endPoint: .trailing)
+            HStack(spacing: 0) { ForEach(0..<12) { index in Rectangle().fill(index.isMultiple(of: 2) ? Color.black.opacity(0.35) : Color.white.opacity(0.35)).frame(width: 60); Spacer() } }
+            Text(words).font(.system(size: 22, weight: .bold)).foregroundStyle(.white).shadow(radius: 1)
+        })
+        window.orderFrontRegardless(); backdrop = window
+    }
+    /// 文件命令 run-<名称> 触发的额外动作，只在隔离验收包里用于复核动画，by AI.Coding。
+    static var commands: [String: () -> Void] = [:]
+    /// 测量动画时停写 state.json，避免探针自身占用主线程干扰计时。
+    static var quiet = false
     static func attach(model: HistoryViewModel, board: NativePasteboardAccess, show: @escaping () -> Void, hide: @escaping () -> Void) {
         guard configuration != nil else { return }
+        monitorMainThread()
         self.show = show; self.hide = hide
         // 验收包独立激活，避免自动化工具在非激活面板刚出现时把它立即切走。
         NSApp.activate(ignoringOtherApps: true)
@@ -82,7 +119,7 @@ import LocalClipCore
         task = Task {
             while !Task.isCancelled {
                 let window = NSApp.windows.first { $0.title == "LocalClip" }
-                write(["visible":window?.isVisible ?? false,"key":window?.isKeyWindow ?? false,"loading":model.loading,"query":model.query,"selectedID":model.selectedID ?? "", "selectedIDs":model.selectedIDs.sorted(), "draggedIDs":model.draggedIDs.sorted(),"dragActive":model.dragActive,"items":model.items.prefix(50).map { ["id":$0.id,"preview":$0.preview] },"frame":NSStringFromRect(window?.frame ?? .zero),"message":model.message], "state.json")
+                if !quiet { write(["visible":window?.isVisible ?? false,"key":window?.isKeyWindow ?? false,"loading":model.loading,"query":model.query,"selectedID":model.selectedID ?? "", "selectedIDs":model.selectedIDs.sorted(), "draggedIDs":model.draggedIDs.sorted(),"dragActive":model.dragActive,"items":model.items.prefix(50).map { ["id":$0.id,"preview":$0.preview] },"frame":NSStringFromRect(window?.frame ?? .zero),"message":model.message], "state.json") }
                 // 明确的隔离验收命令，仅向私有命名剪贴板写合成文本，by AI.Coding。
                 if !usesExternalPasteboard, let output, FileManager.default.fileExists(atPath: output.appendingPathComponent("run-seed" ).path) {
                     try? FileManager.default.removeItem(at: output.appendingPathComponent("run-seed"))
@@ -99,6 +136,9 @@ import LocalClipCore
                 if let output, FileManager.default.fileExists(atPath: output.appendingPathComponent("run-show").path) {
                     try? FileManager.default.removeItem(at: output.appendingPathComponent("run-show"))
                     NSApp.activate(ignoringOtherApps: true); show()
+                }
+                for (name, action) in commands where output.map({ FileManager.default.fileExists(atPath: $0.appendingPathComponent("run-\(name)").path) }) == true {
+                    try? FileManager.default.removeItem(at: output!.appendingPathComponent("run-\(name)")); action()
                 }
                 if let output, FileManager.default.fileExists(atPath: output.appendingPathComponent("run-idle").path) {
                     try? FileManager.default.removeItem(at: output.appendingPathComponent("run-idle"))

@@ -14,10 +14,10 @@ extension HistoryStore {
         let board = MacPasteboardClient(access: RawBoard()), capture = CaptureCoordinator(board: board, store: store)
         return HistoryViewModel(store: store, capture: capture, paste: PasteCoordinator(board: board, applications: FakeApplications(), store: store, capture: capture), derived: DerivedContentService(store: store))
     }
-    private func until(_ predicate: () -> Bool) async throws {
+    private func until(_ predicate: () -> Bool, line: Int = #line) async throws {
         let deadline = ContinuousClock.now + .seconds(5)
         while !predicate(), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(5)) }
-        #expect(predicate())
+        #expect(predicate(), "line \(line)")
     }
     private func seed(_ store: HistoryStore, count: Int) async throws {
         let at = SystemClock().now()
@@ -206,6 +206,28 @@ extension HistoryStore {
         model.historyScrolled(offset: 30, epoch: model.listState.snapshot.scrollEpoch)
         try await until { !model.historyBusy && model.items.count == 15 }
         #expect(Array(model.items.prefix(5)).map(\.id) == expected)
+    }
+    /// 打开面板显示第一张卡片：回到最左、只选首项；隐藏期间来了新记录，刷新后选中新的首项，by AI.Coding。
+    @Test func reopenShowsFirstCard() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try HistoryStore(location: root); try await seed(store, count: 80)
+        let model = makeModel(store); model.configureHistoryViewport(width: 1300, cardWidth: HistoryView.cardSide(height: 340))
+        try await model.start(); model.capture.stop(); model.panelVisibilityChanged(true)
+        try await until { !model.historyBusy && model.items.count == 5 }
+        model.configureHistoryViewport(width: 1000, cardWidth: 200)
+        model.historyScrolled(offset: 500, epoch: model.listState.snapshot.scrollEpoch); try await until { !model.historyBusy && model.items.count >= 15 }
+        model.choose(model.items[3].id, modifiers: []); model.choose(model.items[4].id, modifiers: .command)
+        model.panelVisibilityChanged(false); model.showFirstCard(); model.panelVisibilityChanged(true)
+        #expect(model.selectedID == model.items.first?.id && model.selectedIDs.count == 1)
+        #expect(model.scrollRestoration?.offset == 0)
+
+        model.choose(model.items[2].id, modifiers: []); model.panelVisibilityChanged(false)
+        _ = try await store.ingest(.init(payload: .init([.init([.init(SupportedType.string, Data("hidden-head".utf8))])])), at: SystemClock().now() + 1000)
+        try await until { model.hiddenChanges }
+        model.showFirstCard(); model.panelVisibilityChanged(true)
+        try await until { !model.historyBusy && model.items.first?.preview == "hidden-head" }
+        #expect(model.selectedID == model.items.first?.id && model.selectedIDs.count == 1)
     }
     /// 捕获插入不能移动正在浏览的卡片；详情和多选仍以原ID保存，by AI.Coding。
     @Test func viewportRefreshPreservesScrollAndSelection() async throws {

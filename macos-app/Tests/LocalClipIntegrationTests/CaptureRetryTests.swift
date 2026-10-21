@@ -20,6 +20,18 @@ private final class StoreFault: StorageFaultInjector, @unchecked Sendable {
     }
 }
 
+/// 重试屏障：到达计数，打开前挂起。
+@MainActor private final class RetryGate {
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    private(set) var arrivals = 0, passed = 0
+    private var isOpen = false
+    func wait() async {
+        arrivals += 1
+        if !isOpen { await withCheckedContinuation { waiters.append($0) } }
+        passed += 1
+    }
+    func open() { isOpen = true; waiters.forEach { $0.resume() }; waiters = [] }
+}
 @MainActor struct CaptureRetryTests {
     private struct Harness { let root: URL, store: HistoryStore, fault: StoreFault, raw: RawBoard, capture: CaptureCoordinator, states: Box }
     private final class Box { var states: [String] = []; var source = SourceAttribution(bundleID: "local.a4.old", name: "OldSource") }
@@ -40,6 +52,16 @@ private final class StoreFault: StorageFaultInjector, @unchecked Sendable {
     }
     private func items(_ store: HistoryStore, _ text: String) async throws -> [ClipSummary] { try await store.search(.init(text)).items }
 
+    /// 复现造数据漏条：轮询落在 clearContents 与写入之间时看到空板，写入后计数不变；30 条须全部入库，by AI.Coding。
+    @Test func pollBetweenClearAndWriteKeepsCopy() async throws {
+        let h = try await harness(); defer { h.capture.stop(); try? FileManager.default.removeItem(at: h.root) }
+        for index in 1...30 {
+            h.raw.count += 1; h.raw.items = []; h.capture.tick()
+            h.raw.items = [[SupportedType.string: Data("SEED-\(index)".utf8)]]; h.capture.tick()
+            // 每条等入库再写下一条，排除有界队列 .busy 丢弃的干扰。
+            try await until { try await items(h.store, "SEED").count == index }
+        }
+    }
     /// 隔离证明：注入点在COMMIT之前，失败后库内无记录、修订号不变；之后同一快照（原captureID）补存一次，复制次数为1。
     @Test func diskFullBeforeCommitIsRetriedOnce() async throws {
         let h = try await harness(); defer { h.capture.stop(); try? FileManager.default.removeItem(at: h.root) }
@@ -71,29 +93,37 @@ private final class StoreFault: StorageFaultInjector, @unchecked Sendable {
     }
 
     /// 等待重试期间暂停：快照作废不再落库；添加排除来源：重试前用最新策略复核后拒绝。
+    /// 重试由屏障放行，不依赖退避计时与测试步骤之间的时间窗口。
     @Test func pauseOrExclusionCancelsPendingRetry() async throws {
-        let h = try await harness(delay: .milliseconds(200)); defer { h.capture.stop(); try? FileManager.default.removeItem(at: h.root) }
+        let h = try await harness(); defer { h.capture.stop(); try? FileManager.default.removeItem(at: h.root) }
+        var gate = RetryGate(); h.capture.retryBarrier = { [g = gate] in await g.wait() }
         h.fault.arm(1)
         h.raw.user("A4-PAUSED"); h.capture.tick()
-        try await until { h.capture.state == "磁盘空间不足，稍后重试保存" }
+        // 等重试任务真正停在屏障上再暂停；负载下任务启动晚于状态文字，先暂停会让它根本到不了屏障。
+        try await until { h.capture.state == "磁盘空间不足，稍后重试保存" && gate.arrivals == 1 }
         h.capture.requestPause()
-        try await Task.sleep(for: .milliseconds(500))
+        gate.open()
+        try await until { gate.passed == 1 }
+        try await Task.sleep(for: .milliseconds(100))
         #expect(try await items(h.store, "A4-PAUSED").isEmpty && h.fault.failures == 1)
 
         var settings = try await h.store.settings(); settings.captureEnabled = true
         settings = try await h.store.updateCaptureSettings(settings); h.capture.updatePolicy(settings)
+        gate = RetryGate(); h.capture.retryBarrier = { [g = gate] in await g.wait() }
         h.fault.arm(1)
         h.raw.user("A4-EXCLUDED"); h.capture.tick()
         try await until { h.capture.state == "磁盘空间不足，稍后重试保存" }
         settings.excludedBundleIDs.insert("local.a4.old")
         settings = try await h.store.updateCaptureSettings(settings); h.capture.updatePolicy(settings)
+        gate.open()
         try await until { h.capture.lastIgnored?.0 == .excluded }
         #expect(try await items(h.store, "A4-EXCLUDED").isEmpty && h.fault.failures == 1)
     }
 
     /// 重试等待期间用户再次复制相同内容：新复制正常记录；旧快照补存只计一次，不回退时间、来源与分类次序。
     @Test func sameContentCopiedDuringRetryKeepsNewestFacts() async throws {
-        let h = try await harness(delay: .milliseconds(600)); defer { h.capture.stop(); try? FileManager.default.removeItem(at: h.root) }
+        let h = try await harness(); defer { h.capture.stop(); try? FileManager.default.removeItem(at: h.root) }
+        let gate = RetryGate(); h.capture.retryBarrier = { await gate.wait() }
         let other = try await h.store.ingest(.init(payload: .init([.init([.init(SupportedType.string, Data("A4-OTHER".utf8))])])), at: SystemClock().now())
         guard case .inserted(let otherID) = other else { throw StoreError.notFound }
         h.fault.arm(1)
@@ -104,11 +134,12 @@ private final class StoreFault: StorageFaultInjector, @unchecked Sendable {
         h.raw.user("A4-SAME"); h.capture.tick()
         try await until { try await items(h.store, "A4-SAME").count == 1 }
         let fresh = try #require(try await items(h.store, "A4-SAME").first)
-        #expect(fresh.copyCount == 1)
+        #expect(fresh.copyCount == 1 && gate.arrivals == 1 && gate.passed == 0)
         // 分类内先放入该条，再放入另一条：另一条在前。
         let category = try await h.store.createCategory(name: "A4", colorHex: "34C759")
         for id in [fresh.id, otherID] { _ = try await h.store.apply(try await h.store.preview(.category([id], category.id, true)).token) }
         #expect(try await h.store.search(.init(categoryIDs: [category.id])).items.map(\.id) == [otherID, fresh.id])
+        gate.open()
         try await until { try await items(h.store, "A4-SAME").first?.copyCount == 2 }
         let merged = try #require(try await items(h.store, "A4-SAME").first)
         #expect(merged.lastCopiedAt == fresh.lastCopiedAt && merged.firstCopiedAt == fresh.firstCopiedAt)
@@ -116,6 +147,25 @@ private final class StoreFault: StorageFaultInjector, @unchecked Sendable {
         #expect(try await h.store.search(.init(categoryIDs: [category.id])).items.map(\.id) == [otherID, fresh.id])
         try await Task.sleep(for: .milliseconds(100))
         #expect(try await items(h.store, "A4-SAME").first?.copyCount == 2 && h.fault.failures == 1)
+    }
+    /// 补存先于第二次复制落库的顺序：第二次复制时复制次数已是2，与全量套件中原第107行失败所见一致；
+    /// 旧日志只说明时间窗口不可靠，不能确定当时的唯一顺序。此顺序下最终事实仍正确：只计两次、时间与来源取最新复制。
+    @Test func retryBeforeSecondCopyStillKeepsNewestFacts() async throws {
+        let h = try await harness(); defer { h.capture.stop(); try? FileManager.default.removeItem(at: h.root) }
+        let gate = RetryGate(); h.capture.retryBarrier = { await gate.wait() }
+        h.fault.arm(1)
+        h.raw.user("A4-ORDER"); h.capture.tick()
+        try await until { h.capture.state == "磁盘空间不足，稍后重试保存" }
+        gate.open()
+        try await until { try await items(h.store, "A4-ORDER").count == 1 }
+        let retried = try #require(try await items(h.store, "A4-ORDER").first)
+        h.states.source = SourceAttribution(bundleID: "local.a4.new", name: "NewSource")
+        try await Task.sleep(for: .milliseconds(5))
+        h.raw.user("A4-ORDER"); h.capture.tick()
+        try await until { try await items(h.store, "A4-ORDER").first?.copyCount == 2 }
+        let merged = try #require(try await items(h.store, "A4-ORDER").first)
+        #expect(retried.copyCount == 1 && merged.lastCopiedAt > retried.lastCopiedAt && merged.firstCopiedAt == retried.firstCopiedAt)
+        #expect(try await h.store.detail(id: merged.id, at: SystemClock().now()).summary.source.name == "NewSource" && h.fault.failures == 1)
     }
 
     /// COMMIT之后才失败：存储进入不可用态，采集如实报告结果未确认，不自动重放；重开后只有一条且只计一次。
@@ -136,7 +186,8 @@ private final class StoreFault: StorageFaultInjector, @unchecked Sendable {
 
     /// 等待补存期间用户删除历史：丢弃待补存快照，不把刚删除的内容写回；状态不残留“稍后重试”。
     @Test func deleteDuringRetryDiscardsSnapshot() async throws {
-        let h = try await harness(delay: .milliseconds(200)); defer { h.capture.stop(); try? FileManager.default.removeItem(at: h.root) }
+        let h = try await harness(); defer { h.capture.stop(); try? FileManager.default.removeItem(at: h.root) }
+        let gate = RetryGate(); h.capture.retryBarrier = { await gate.wait() }
         h.fault.arm(1)
         h.raw.user("A4-DELETED"); h.capture.tick()
         try await until { h.capture.state == CaptureCoordinator.retryingState }
@@ -144,7 +195,9 @@ private final class StoreFault: StorageFaultInjector, @unchecked Sendable {
         #expect(h.capture.state == CaptureCoordinator.retryingState)
         h.capture.discardPendingRetries()
         #expect(h.capture.state == "正常")
-        try await Task.sleep(for: .milliseconds(400))
+        gate.open()
+        try await until { gate.passed == 1 }
+        try await Task.sleep(for: .milliseconds(100))
         #expect(try await items(h.store, "A4-DELETED").isEmpty && h.fault.failures == 1)
     }
 }

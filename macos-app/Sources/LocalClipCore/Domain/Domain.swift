@@ -361,6 +361,8 @@ public struct SearchPage: Sendable {
     public var queryID: UUID; public var revision: Int64; public var items: [ClipSummary]; public var next: SearchCursor?
     /// 仅countTotal且无游标的请求返回，与本页同一快照，by AI.Coding。
     public var total: Int? = nil
+    /// 图片文字派生索引代次，仅图片文字参与匹配的字面检索返回，其余为0；它不推进revision，同一游标两次读取代次不同即可能混合新旧命中，by AI.Coding。
+    public var derivedGeneration: Int64 = 0
 }
 public enum HistoryChange: Sendable, Equatable {
     case favorite(ClipID, Bool), favorites([ClipID], Bool), delete([ClipID]), clearOrdinary, retention(Int), quota(Int64)

@@ -37,6 +37,8 @@ import LocalClipCore
     @Published public var pinned = false
     /// 置顶期间用户可能已切换应用；由宿主在粘贴前重取当前前台应用与焦点。
     public var refreshPinnedTarget: (() -> Void)?
+    /// 采集到来源时通知历史管理窗口，未知来源才重读来源列表，by AI.Coding。
+    var onCaptureSource: ((SourceAttribution) -> Void)?
     /// 未置顶沿用打开面板时记住的目标；置顶时以粘贴这一刻的前台应用为准。
     private func pasteTarget() -> TargetToken? {
         if pinned { refreshPinnedTarget?() }
@@ -348,7 +350,7 @@ import LocalClipCore
     private var pendingSettingsEdits: [(inout SettingsSnapshot) -> Void] = []
     // 编辑sheet跟随父面板显示，隐藏期间仅保留草稿，不留下独立可见窗口，by AI.Coding。
     @Published public private(set) var panelVisible = true
-    private var hiddenChanges = false
+    private(set) var hiddenChanges = false
     private var settingsVisible = false
     private var sourcesNeeded = false
     private var sourcesTask: Task<Void, Never>?
@@ -395,6 +397,7 @@ import LocalClipCore
         categories = try await store.categories()
         capture.onState = { [weak self] state in self?.acceptCaptureState(state) }
         capture.onSourcePending = { [weak self] source in
+            self?.onCaptureSource?(source)
             guard let self, !self.sourceSuggestions.contains(where: { $0.bundleID == source.bundleID }) else { return }
             self.sourcesNeeded = true
         }
@@ -415,6 +418,8 @@ import LocalClipCore
                 self.assignIfChanged(\.canUndoDeletion, await self.store.undoAvailable())
                 if !self.panelVisible {
                     self.hiddenChanges = true
+                    // 历史管理窗口可在面板隐藏时增删分类；只刷新共享分类，不改面板筛选与选择，by AI.Coding。
+                    await self.reloadCategories()
                     do { self.acceptSettings(try await self.store.settings()) }
                     catch { self.message = "存储状态读取失败" }
                     if self.settingsVisible { await self.refreshUsage() }
@@ -455,11 +460,18 @@ import LocalClipCore
         if visible { visibleThumbnailIDs.insert(id) } else { visibleThumbnailIDs.remove(id) }
     }
     /// 隐藏期间只记失效，30秒后回收离屏图片；快速重开取消清理，by AI.Coding。
+    /// 打开面板显示第一张卡片：回到最左并选中首项；隐藏期间有新记录时，随后的刷新也选中新的首项，by AI.Coding。
+    func showFirstCard() {
+        scrollAnchor = nil; historyOffset = 0; firstCardPending = hiddenChanges
+        listState.update { scrollRestoration = .init(offset: 0); select(items.first?.id) }
+    }
+    private var firstCardPending = false
     public func panelVisibilityChanged(_ visible: Bool) {
         panelVisible = visible
         refreshPastePermissionNotice()
         thumbnailCleanup?.cancel(); thumbnailCleanup = nil
         if !visible {
+            firstCardPending = false
             // 尚未打开的编辑请求与Space预览不在隐藏面板上弹出；已经输入的草稿保留到下次打开。
             contentEditRequest = UUID(); if quickLookTask != nil { endQuickLook() }
             answerPanelConfirmation(false)
@@ -674,7 +686,8 @@ import LocalClipCore
                     items = visible; cursor = window.cursor; loading = false; listState.queryStatus.update(failed: false)
                     if preserveWindow {
                         selectedIDs.formIntersection(Set(items.map(\.id)))
-                        if let selectedID, contains(selectedID) { select(selectedID, preserveSelection: true) }
+                        if firstCardPending { firstCardPending = false; select(items.first?.id) }
+                        else if let selectedID, contains(selectedID) { select(selectedID, preserveSelection: true) }
                         else { select(items.isEmpty ? nil : items[min(previousIndex, items.count - 1)].id) }
                     } else {
                         select(items.first?.id)
@@ -981,9 +994,9 @@ import LocalClipCore
     }
     /// 保存失败保留草稿和错误；只在原子提交成功后关闭编辑器，by AI.Coding。
     func saveContentEdit() {
-        guard let editor = contentEditor, editor.canSave else { return }
+        guard let editor = contentEditor, let saving = editor.save(to: store) else { return }
         Task {
-            guard await editor.save(to: store) else { return }
+            guard await saving.value else { return }
             if contentEditor === editor { contentEditor = nil }
             notice("内容已保存"); panelInteractionChanged?()
         }
@@ -1092,11 +1105,16 @@ import LocalClipCore
     }
     /// 预览→确认→提交→容量/计量/撤销收尾；面板与历史管理窗口共用，确认方式与界面反馈由调用方决定。
     /// 用户取消返回nil；willApply在提交前、didApply在提交成功后立即执行，by AI.Coding。
-    func commit(_ change: HistoryChange, confirm: (ChangePreview) async -> Bool, willApply: () -> Void = {}, didApply: () -> Void = {}) async throws -> ChangeResult? {
+    func commit(_ change: HistoryChange, isCurrent: (ChangePreview) -> Bool = { _ in true }, confirm: (ChangePreview) async -> Bool,
+                willApply: () -> Void = {}, didApply: () -> Void = {}) async throws -> ChangeResult? {
         let preview = try await store.preview(change)
+        // 调用方的目标集合基于旧版本时不提交，by AI.Coding。
+        guard isCurrent(preview) else { throw StoreError.stalePreview }
         if preview.requiresConfirmation, !(await confirm(preview)) { return nil }
         willApply()
         let result = try await store.apply(preview.token)
+        // 新删除替换全局撤销包，旧的搜索框撤销资格随之失效；面板删除在返回后重新绑定，by AI.Coding。
+        if case .delete = change { recordUndoQuery = nil }
         didApply()
         switch change { case .delete, .clearOrdinary: capture.discardPendingRetries(); default: break }
         await capture.refreshCapacity()
@@ -1159,6 +1177,10 @@ import LocalClipCore
         guard !savingCategory else { return }
         categoryBeingEdited = category; categoryDraft = category?.name ?? ""; categoryColor = category?.colorHex ?? nextCategoryColor; categoryError = ""
         showingDetail = false; showingCategoryEditor = true
+    }
+    /// 只更新共享分类列表；面板筛选裁剪仍在可见刷新时进行，by AI.Coding。
+    func reloadCategories() async {
+        if let value = try? await store.categories() { assignIfChanged(\.categories, value) }
     }
     static func categoryFailure(_ error: Error) -> String { (error as? CategoryError)?.message ?? "分类保存失败，请检查容量或存储状态" }
     public func saveCategory() {
@@ -1487,6 +1509,7 @@ import LocalClipCore
     /// 依据当前记录ID逐页定位，不使用旧偏移。
     public func jumpToHistory(category: String? = nil, id: ClipID? = nil) {
         guard let wanted = id ?? selectedID else { return }
+        firstCardPending = false
         searching?.cancel(); paging?.cancel(); paging = nil; pendingPageNavigation = nil
         queryID = UUID(); let generation = queryID
         let targetCategories = Set(category.map { [$0] } ?? [])

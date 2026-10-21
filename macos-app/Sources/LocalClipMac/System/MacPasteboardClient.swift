@@ -130,11 +130,12 @@ final class TIFFFromPNGProvider: NSObject, NSPasteboardItemDataProvider, Sendabl
         let before = access.count
         guard let types = access.types else { return .outcome(.skipped(.accessUnavailable, before)) }
         if before != access.count { return .outcome(.skipped(.changedDuringRead, access.count)) }
+        // clearContents 已推进计数、写入尚未到达时剪贴板为空，随后写入不再改计数；不推进基线，下一轮重读同一世代，by AI.Coding。
+        guard !types.isEmpty else { return .outcome(.noChange) }
         if let reason = policy.rejection(source: .unknown, types: types, at: clock.now()) { return .outcome(.skipped(reason, before)) }
         if policy.pauseWhenExcludedFrontmost, let id = NSWorkspace.shared.frontmostApplication?.bundleIdentifier, policy.excludedBundleIDs.contains(id) {
             return .outcome(.skipped(.excluded, before))
         }
-        guard !types.isEmpty else { return .outcome(.skipped(.unsupported, before)) }
         guard types.count <= 32 else { return .outcome(.skipped(.tooLarge, before)) }
         var sources: [String] = []
         for (index, list) in types.enumerated() where list.contains("org.nspasteboard.source") {

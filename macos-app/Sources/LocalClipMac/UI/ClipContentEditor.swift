@@ -70,10 +70,15 @@ enum ClipContentLayout {
         let language = await SyntaxHighlighter.shared.guess(of: sample, truncated: sample.count < originalText.count).language
         if !hasChanges { applyDetectedLanguage(language) }
     }
-    /// 保存失败保留草稿并写入错误；仅原子提交成功返回true，by AI.Coding。
-    func save(to store: HistoryStore) async -> Bool {
-        guard canSave else { return false }
+    /// 同步锁定保存状态并冻结本次正文，再异步写入；不能保存返回nil，保存中不能重复提交或放弃。
+    /// 失败保留草稿并写入错误；仅原子提交成功返回true，by AI.Coding。
+    func save(to store: HistoryStore) -> Task<Bool, Never>? {
+        guard canSave else { return nil }
         saving = true; error = ""
+        let text = text
+        return Task { await self.write(text, to: store) }
+    }
+    private func write(_ text: String, to store: HistoryStore) async -> Bool {
         do {
             try await store.updateText(id: id, text: text, expectedFingerprint: fingerprint)
             return true

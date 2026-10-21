@@ -37,6 +37,7 @@ import LocalClipCore
     private var manager: HistoryManagerModel?
     /// 管理窗口打开期间切到常规应用以出现在Dock与⌘Tab，关闭时恢复原策略，by AI.Coding。
     private var policyBeforeManager: NSApplication.ActivationPolicy?
+    private var managerReveal: Task<Void, Never>?
     private var feedbackPanel: NSPanel?
     private var feedbackTask: Task<Void, Never>?
     private var model: HistoryViewModel?
@@ -176,6 +177,17 @@ import LocalClipCore
                     }
                     #if DEBUG
                     GUIAcceptanceProbe.attach(model: model, board: access, show: { [weak self] in self?.showHistory() }, hide: { [weak self] in self?.dismissHistory(animated: false) })
+                    GUIAcceptanceProbe.commands = ["fade": { [weak self] in self?.dismissHistory() }, "manager": { [weak self] in self?.showHistoryManager() },
+                                                   "close-manager": { [weak self] in self?.managerWindow?.performClose(nil) },
+                                                   "detail": { model.showingDetail.toggle() }, "filters": { model.showingFilters.toggle() },
+                                                   "ax": { GUIAcceptanceProbe.write(["trusted": AXIsProcessTrusted(), "target": self.applications.target().map { "\($0.pid)" } ?? ""], "ax.json") },
+                                                   "queue": { model.startPasteQueue(Array(model.items.filter { $0.kind == .text }.prefix(3).map(\.id))) },
+                                                   "queue-next": { [weak self] in self?.pasteQueueNext() }, "queue-retry": { [weak self] in self?.pasteQueueNext(retry: true) },
+                                                   "queue-confirm": { model.confirmPasteQueueManualPaste() }, "queue-stop": { model.stopPasteQueue() },
+                                                   "feedback": { [weak self] in self?.showPasteFeedback("已复制，请手动粘贴", failed: false) },
+                                                   "light": { model.updateSettings { $0.appearance = .light } }, "dark": { model.updateSettings { $0.appearance = .dark } },
+                                                   "backdrop": { GUIAcceptanceProbe.showBackdrop() }, "quiet": { GUIAcceptanceProbe.quiet.toggle() },
+                                                   "transform": { if let id = model.items.first(where: { $0.kind == .text })?.id { model.select(id); model.showTransformMenu(atSelectedCard: true) } }]
                     #endif
                     // 等首屏查询完成再隐藏预热；若用户已经打开，则复用其面板，不重复创建或夺取焦点。
                     let preparationDeadline = ContinuousClock.now + .seconds(2)
@@ -430,6 +442,7 @@ import LocalClipCore
         let rect = screen?.frame ?? NSRect(x: 0, y: 0, width: 1400, height: 380)
         let panelHeight = Self.clampedPanelHeight(model.settings.panelHeight, screenHeight: rect.height)
         model.configureHistoryViewport(width: rect.width, cardWidth: HistoryView.cardSide(height: panelHeight))
+        if panel?.isVisible != true { model.showFirstCard() }
         model.panelVisibilityChanged(true)
         model.target = lastExternal
         model.revalidateVisibleContent()
@@ -453,6 +466,8 @@ import LocalClipCore
             panel.contentView?.displayIfNeeded()
             panelPresented = true
             panel.makeKeyAndOrderFront(nil)
+            // 置前后的首次提交（窗口服务器同步）立即完成，不占用随后淡入与位移动画的前几帧，by AI.Coding。
+            CATransaction.flush()
             if panel.alphaValue < 1 {
                 NSAnimationContext.runAnimationGroup {
                     $0.duration = 0.18; $0.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 0.9, 0.3, 1)
@@ -586,7 +601,7 @@ import LocalClipCore
                 showingDetail: self.model?.showingDetail == true,
                 showingCategoryEditor: self.model?.showingCategoryEditor == true,
                 showingFilters: self.model?.showingFilters == true || self.model?.showingStatusDetail == true,
-                showingContentEditor: self.model?.contentEditorPresented == true, queue: self.queuePanel)
+                showingContentEditor: self.model?.contentEditorPresented == true, queue: self.queuePanel, manager: self.managerWindow)
             guard self.focusState.shouldDismiss(panelIsKey: panel.isKeyWindow, ownsKeyWindow: ownsKey,
                 dragging: self.model?.dragActive == true, confirming: self.model?.confirmingChange == true || self.model?.contentEditorPresented == true,
                 hasModal: NSApp.modalWindow != nil, pinned: self.model?.pinned == true) else { return }
@@ -609,14 +624,24 @@ import LocalClipCore
     static func ownsHistoryWindow(_ window: NSWindow?, panel: NSWindow?, settings: NSWindow?,
                                   feedback: NSWindow?, showingDetail: Bool,
                                   showingCategoryEditor: Bool, showingFilters: Bool,
-                                  showingContentEditor: Bool = false, queue: NSWindow? = nil) -> Bool {
-        guard let window else { return false }
+                                  showingContentEditor: Bool = false, queue: NSWindow? = nil, manager: NSWindow? = nil) -> Bool {
+        guard let window, !ownedBy(window, manager) else { return false }
         var owner: NSWindow? = window
         while let value = owner {
             if value === panel { return true }
             owner = value.sheetParent ?? value.parent
         }
         return (showingDetail || showingCategoryEditor || showingFilters || showingContentEditor) && window.isVisible && window !== settings && window !== feedback && window !== queue
+    }
+    /// 窗口本身或其附页、子窗口归属于owner，by AI.Coding。
+    static func ownedBy(_ window: NSWindow?, _ owner: NSWindow?) -> Bool {
+        guard let owner else { return false }
+        var current = window
+        while let value = current {
+            if value === owner { return true }
+            current = value.sheetParent ?? value.parent
+        }
+        return false
     }
     /// 管理窗口里可编辑文字、或只读文字已有选区时，⌘C/⌫等按键交给文本视图，by AI.Coding。
     static func managerTextOwnsKeys(_ responder: NSResponder?) -> Bool {
@@ -713,8 +738,7 @@ import LocalClipCore
             panel.isOpaque = false; panel.backgroundColor = .clear; panel.hasShadow = true
             panel.isReleasedWhenClosed = false; panel.hidesOnDeactivate = false; panel.becomesKeyOnlyIfNeeded = true
             panel.level = .statusBar; panel.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
-            let host = NSHostingView(rootView: PasteQueueView(model: model) { [weak self] in self?.pasteQueueNext(retry: true) }); host.sizingOptions = []
-            panel.contentView = host; queuePanel = panel
+            panel.contentView = Self.queueHost(model: model) { [weak self] in self?.pasteQueueNext(retry: true) }; queuePanel = panel
         }
         guard let panel = queuePanel, let host = panel.contentView else { return }
         panel.sharingType = model.settings.excludeFromSharing ? .none : .readOnly
@@ -726,8 +750,15 @@ import LocalClipCore
         if !panel.isVisible || panel.alphaValue < 1 {
             if !panel.isVisible { panel.alphaValue = 0 }
             panel.orderFrontRegardless()
+            // 首次置前的窗口服务器同步立即完成，不吞掉淡入的前几帧（与历史面板相同），by AI.Coding。
+            CATransaction.flush()
             NSAnimationContext.runAnimationGroup { $0.duration = duration; panel.animator().alphaValue = 1 }
         }
+    }
+    /// 只保留固有尺寸：浮窗按 fittingSize 定尺寸，不让内容反向约束窗口。清空全部选项时 fittingSize 恒为 0，浮窗是 0×0 看不见，by AI.Coding。
+    static func queueHost(model: HistoryViewModel, retry: @escaping () -> Void) -> NSHostingView<PasteQueueView> {
+        let host = NSHostingView(rootView: PasteQueueView(model: model, retry: retry)); host.sizingOptions = [.intrinsicContentSize]
+        return host
     }
     /// 粘贴回退显示短暂非激活提示，不让关闭历史面板隐藏失败原因。
     private func showPasteFeedback(_ message: String, failed: Bool) {
@@ -750,6 +781,7 @@ import LocalClipCore
         // orderFront不激活应用，也不把反馈窗口设为key；淡入淡出避免突兀出现。
         feedbackPanel?.alphaValue = 0
         feedbackPanel?.orderFrontRegardless()
+        CATransaction.flush()
         NSAnimationContext.runAnimationGroup {
             $0.duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : 0.15
             feedbackPanel?.animator().alphaValue = 1
@@ -779,25 +811,67 @@ import LocalClipCore
         NSApp.activate(ignoringOtherApps: true); settingsWindow?.makeKeyAndOrderFront(nil)
     }
     @objc private func showHistoryManagerFromMenu() { showHistoryManager() }
-    /// 首次打开时创建；再次打开只前置并按需选中记录，by AI.Coding。
+    /// 首次打开时创建；再次打开只前置并按需选中记录。管理窗口与底部面板不同时显示：各入口统一收起面板及其浮层，焦点交给管理窗口。
+    /// 面板可见时，管理窗口先以全透明放到面板之下：建窗口、首页数据与行高、首次绘制都在面板原样显示时完成，
+    /// 主线程连续两帧不卡（最多等 0.8s）后面板淡出、管理窗口淡入。淡入淡出由主线程推进，与这些工作重叠会直接跳到终点，by AI.Coding。
     func showHistoryManager(reveal ids: [ClipID] = []) {
         guard let model else { return }
-        if managerWindow == nil {
-            let manager = HistoryManagerModel(history: model)
-            manager.locate = { [weak self] id in self?.showHistory(); self?.model?.jumpToHistory(id: id) }
-            let host = NSHostingController(rootView: HistoryManagerView(model: manager, history: model))
-            host.sceneBridgingOptions = [.toolbars, .title]; host.sizingOptions = []
-            let window = HistoryManagerWindow(content: host)
-            window.onClose = { [weak self] in self?.historyManagerClosed() }
-            managerWindow = window; self.manager = manager
-            policyBeforeManager = NSApp.activationPolicy()
-        }
-        Self.applySharing(model.settings.excludeFromSharing, to: [managerWindow])
+        let window = managerWindow ?? makeHistoryManager(model)
+        Self.applySharing(model.settings.excludeFromSharing, to: [window])
         if !ids.isEmpty { manager?.reveal(ids) }
+        managerReveal?.cancel(); managerReveal = nil
+        guard panelPresented, panel?.isVisible == true, !window.isVisible || window.alphaValue < 1,
+              !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { revealHistoryManager(window, fade: false); return }
+        window.alphaValue = 0; window.ignoresMouseEvents = true; window.orderFrontRegardless()
+        managerReveal = Task { [weak self] in
+            // 首页就绪且画完，再激活应用并让透明窗口成为 key（切换激活策略与焦点也会卡主线程约 0.1s），最后才开始淡入淡出。
+            guard await Self.mainThreadSettles(within: .milliseconds(800), until: { self?.manager?.loading == false }), let self else { return }
+            self.activateForManager(window)
+            guard await Self.mainThreadSettles(within: .milliseconds(300), until: { true }, stopEarly: { self.panelPresented != true }) else { return }
+            self.revealHistoryManager(window, fade: true)
+        }
+    }
+    /// 以 16ms 定时器连续两次准点视为主线程空闲；超时也返回 true 照常继续，只有任务取消返回 false。
+    /// ponytail: 启发式判断，需要更准时改用显示链路回调。
+    private static func mainThreadSettles(within limit: Duration, until ready: () -> Bool, stopEarly: () -> Bool = { false }) async -> Bool {
+        var quiet = 0, last = ContinuousClock.now
+        let deadline = last + limit
+        while quiet < 2, ContinuousClock.now < deadline, !stopEarly() {
+            try? await Task.sleep(for: .milliseconds(16))
+            if Task.isCancelled { return false }
+            let now = ContinuousClock.now
+            quiet = now - last < .milliseconds(30) && ready() ? quiet + 1 : 0
+            last = now
+        }
+        return !Task.isCancelled
+    }
+    private func activateForManager(_ window: NSWindow) {
         if NSApp.activationPolicy() != .regular { NSApp.setActivationPolicy(.regular) }
-        NSApp.activate(ignoringOtherApps: true); managerWindow?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+    }
+    private func revealHistoryManager(_ window: NSWindow, fade: Bool) {
+        managerReveal = nil; window.ignoresMouseEvents = false
+        activateForManager(window)
+        dismissHistory(animated: fade)
+        if fade { NSAnimationContext.runAnimationGroup { $0.duration = 0.18; window.animator().alphaValue = 1 } } else { window.alphaValue = 1 }
+    }
+    private func makeHistoryManager(_ model: HistoryViewModel) -> HistoryManagerWindow {
+        let manager = HistoryManagerModel(history: model)
+        manager.locate = { [weak self] id in self?.showHistory(); self?.model?.jumpToHistory(id: id) }
+        let host = NSHostingController(rootView: HistoryManagerView(model: manager, history: model))
+        host.sceneBridgingOptions = [.toolbars, .title]; host.sizingOptions = []
+        let window = HistoryManagerWindow(content: host)
+        window.onClose = { [weak self] in self?.historyManagerClosed() }
+        managerWindow = window; self.manager = manager
+        policyBeforeManager = NSApp.activationPolicy()
+        // 立即开始读首页，等待淡入时能据加载状态判断首页是否就绪；视图出现时再调用不会重复读取。
+        manager.start()
+        window.applyInspectorIdealWidth()
+        return window
     }
     private func historyManagerClosed() {
+        managerReveal?.cancel(); managerReveal = nil
         manager?.stop(); manager = nil; managerWindow = nil
         if let policy = policyBeforeManager, policy != .regular { NSApp.setActivationPolicy(policy) }
         policyBeforeManager = nil
@@ -819,7 +893,7 @@ import LocalClipCore
             guard let self, let panel = self.panel, self.panelPresented else { return event }
             if Self.ownsHistoryWindow(event.window, panel: panel, settings: self.settingsWindow, feedback: self.feedbackPanel,
                 showingDetail: self.model?.showingDetail == true, showingCategoryEditor: self.model?.showingCategoryEditor == true,
-                showingFilters: self.model?.showingFilters == true || self.model?.showingStatusDetail == true, showingContentEditor: self.model?.contentEditorPresented == true, queue: self.queuePanel) {
+                showingFilters: self.model?.showingFilters == true || self.model?.showingStatusDetail == true, showingContentEditor: self.model?.contentEditorPresented == true, queue: self.queuePanel, manager: self.managerWindow) {
                 // 迟到的旧输入不能取消较新的外部关闭任务，by AI.Coding。
                 if self.focusState.ownedInteraction(at: event.timestamp) { self.focusDismissal?.cancel() }
             } else if event.window != nil {
@@ -898,9 +972,17 @@ import LocalClipCore
             // 本地Cmd-Q先于历史/IME分支，也适用于只有设置窗口或菜单图标隐藏时，by AI.Coding。
             if self.handleQuitShortcut(event) { return nil }
             // 管理窗口按键：附页、文字编辑与输入法组字交还系统，其余由窗口模型处理，by AI.Coding。
-            if let window = self.managerWindow, event.window === window, let manager = self.manager {
-                let editor = window.firstResponder as? NSTextView
-                guard window.attachedSheet == nil, editor?.hasMarkedText() != true else { return event }
+            // 附页按窗口归属认领，不再落入面板编辑器分支保存或取消另一份草稿，by AI.Coding。
+            if let window = self.managerWindow, Self.ownedBy(event.window, window), let manager = self.manager {
+                let editor = event.window?.firstResponder as? NSTextView
+                if editor?.hasMarkedText() == true { return event }
+                if event.window !== window {
+                    // 编辑附页补上编辑器宣称的⌘↩保存；⌘S与Esc由附页自身处理，确认附页保持原生按键，by AI.Coding。
+                    let flags = event.modifierFlags.intersection([.command, .option, .control, .shift])
+                    if manager.editor != nil, flags == [.command], event.keyCode == 36 || event.keyCode == 76 { manager.saveEdit(); return nil }
+                    return event
+                }
+                guard window.attachedSheet == nil else { return event }
                 return manager.handleKey(code: event.keyCode, flags: event.modifierFlags, editing: Self.managerTextOwnsKeys(editor), isRepeat: event.isARepeat) ? nil : event
             }
             // 编辑器接管文字按键；Esc优先收起页内放弃确认或取消编辑，⌘S/⌘↩显式保存，IME候选期间交给文本域，by AI.Coding。
@@ -930,7 +1012,7 @@ import LocalClipCore
             guard let panel = self.panel, self.panelPresented, let model = self.model,
                   Self.ownsHistoryWindow(event.window, panel: panel, settings: self.settingsWindow, feedback: self.feedbackPanel,
                       showingDetail: model.showingDetail, showingCategoryEditor: model.showingCategoryEditor,
-                      showingFilters: model.showingFilters || model.showingStatusDetail, showingContentEditor: model.contentEditorPresented, queue: self.queuePanel) || (event.window == nil && panel.isKeyWindow) else { return event }
+                      showingFilters: model.showingFilters || model.showingStatusDetail, showingContentEditor: model.contentEditorPresented, queue: self.queuePanel, manager: self.managerWindow) || (event.window == nil && panel.isKeyWindow) else { return event }
             self.focusState.ownedInteraction(at: event.timestamp)
             // 面板内确认期间按键只作答：Return确认、Esc取消，其余不进入搜索或历史操作；输入法组字时先交给候选，by AI.Coding。
             if model.panelConfirmation != nil {
@@ -1079,8 +1161,7 @@ struct PasteQueueView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }.padding(12).frame(width: 260, alignment: .leading)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color.primary.opacity(0.08)))
+            .floatingSurface()
             .padding(1)
     }
 }
@@ -1094,8 +1175,7 @@ struct PasteFeedbackView: View {
             Text(message).font(.system(size: 13, weight: .medium)).frame(maxWidth: 380, alignment: .leading).fixedSize(horizontal: false, vertical: true)
         }.padding(.horizontal, 16).padding(.vertical, 11)
             .fixedSize()
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color.primary.opacity(0.08)))
+            .floatingSurface()
             .padding(1)
     }
 }

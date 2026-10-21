@@ -59,7 +59,7 @@ public struct HistoryView: View {
             }.frame(width: viewport.size.width, height: viewport.size.height, alignment: .top)
                 // 确认期间底层控件对辅助功能隐藏，VoiceOver不能越过遮罩操作，by AI.Coding。
                 .accessibilityHidden(model.panelConfirmation != nil)
-                .background { ZStack { HistoryBackdrop(); Color(nsColor: .windowBackgroundColor).opacity(0.76) } }
+                .background { ZStack { HistoryBackdrop(); Color(nsColor: .windowBackgroundColor).opacity(LCStyle.panelTint) } }
                 // 变更确认在面板内遮罩弹出，不用系统附页抬起或撑高底栏面板，by AI.Coding。
                 .overlay {
                     if let copy = model.panelConfirmation {
@@ -162,7 +162,7 @@ public struct HistoryView: View {
             }
         }.frame(height: 32)
             // 弹窗锚定可见导航区域；加号滚出视口时，溢出菜单和快捷键仍能打开编辑器。
-            .popover(isPresented: $model.showingCategoryEditor, arrowEdge: .top) { CategoryEditor(model: model) }
+            .popover(isPresented: $model.showingCategoryEditor, arrowEdge: .top) { PanelCategoryEditor(model: model) }
     }
     /// 类型菜单与类型标签同一选择规则；选中时显示类型名并高亮，by AI.Coding。
     private var kindMenu: some View {
@@ -209,9 +209,15 @@ public struct HistoryView: View {
     /// 类型符号在工具栏与卡片共用。
     /// 列表与队列显示名：自定义名称，否则正文首行，否则类型名，by AI.Coding。
     static func displayTitle(_ item: ClipSummary) -> String { item.title ?? item.preview.split(whereSeparator: \.isNewline).first.map(String.init) ?? kindName(item.kind) }
+    /// 来源未知时只说“来源未知”，不再拼出“未知 · 来源未知”，by AI.Coding。
     static func sourceDescription(_ source: SourceAttribution) -> String {
-        "\(source.name) · \(source.basis == "frontmost" ? "复制时前台应用推断" : source.basis == "declared" ? "应用声明" : "来源未知")"
+        switch source.basis {
+        case "frontmost": "\(source.name) · 复制时前台应用推断"
+        case "declared": "\(source.name) · 应用声明"
+        default: "来源未知"
+        }
     }
+    static func sourceName(_ source: SourceAttribution) -> String { ["frontmost", "declared"].contains(source.basis) ? source.name : "来源未知" }
     static func kindSymbol(_ kind: ClipKind) -> String { switch kind { case .text: "text.alignleft"; case .url: "link"; case .image: "photo"; case .file: "doc.on.doc"; case .mixed: "square.stack" } }
     /// 类型名称与新增文件筛选保持一致。
     public static func kindName(_ kind: ClipKind) -> String { switch kind { case .text: "文本"; case .url: "链接"; case .image: "图片"; case .file: "文件"; case .mixed: "混合" } }
@@ -600,30 +606,44 @@ private struct HistoryMoreMenu: View {
             }
     }
 }
-private struct CategoryEditor: View {
+private struct PanelCategoryEditor: View {
     @ObservedObject var model: HistoryViewModel
+    var body: some View {
+        CategoryEditor(creating: model.categoryBeingEdited == nil, name: $model.categoryDraft, color: $model.categoryColor, error: model.categoryError,
+                       saving: model.savingCategory, cancel: { model.showingCategoryEditor = false }, save: model.saveCategory)
+    }
+}
+/// 分类名称与颜色编辑弹窗；面板与历史管理共用，状态与保存由调用方提供，by AI.Coding。
+struct CategoryEditor: View {
+    let creating: Bool
+    @Binding var name: String
+    @Binding var color: String
+    let error: String
+    let saving: Bool
+    let cancel: () -> Void
+    let save: () -> Void
     @FocusState private var nameFocused: Bool
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text(model.categoryBeingEdited == nil ? "新建分类" : "重命名分类").font(.system(size: LCStyle.FontSize.heading, weight: .semibold))
-            TextField("分类名称", text: $model.categoryDraft).textFieldStyle(.roundedBorder)
-                .focused($nameFocused).disabled(model.savingCategory).onSubmit { model.saveCategory() }
+            Text(creating ? "新建分类" : "重命名分类").font(.system(size: LCStyle.FontSize.heading, weight: .semibold))
+            TextField("分类名称", text: $name).textFieldStyle(.roundedBorder)
+                .focused($nameFocused).disabled(saving).onSubmit(save)
             HStack(spacing: 10) {
-                ForEach(HistoryViewModel.categoryPalette, id: \.hex) { hex, name in
-                    Button { model.categoryColor = hex } label: { Circle().fill(Color(nsColor: RichContent.colorValue(hex))).frame(width:20,height:20).overlay(Circle().strokeBorder(model.categoryColor == hex ? Color.primary : .clear, lineWidth:2).padding(-3)) }.buttonStyle(.plain)
-                        .help(name).accessibilityLabel(name).accessibilityAddTraits(model.categoryColor == hex ? .isSelected : [])
+                ForEach(HistoryViewModel.categoryPalette, id: \.hex) { hex, label in
+                    Button { color = hex } label: { Circle().fill(Color(nsColor: RichContent.colorValue(hex))).frame(width:20,height:20).overlay(Circle().strokeBorder(color == hex ? Color.primary : .clear, lineWidth:2).padding(-3)) }.buttonStyle(.plain)
+                        .help(label).accessibilityLabel(label).accessibilityAddTraits(color == hex ? .isSelected : [])
                 }
             }
-            Text(model.categoryError.isEmpty ? "1–64个字符，名称不能重复" : model.categoryError)
-                .font(.system(size: LCStyle.FontSize.meta)).foregroundStyle(model.categoryError.isEmpty ? Color.secondary : Color.red)
+            Text(error.isEmpty ? "1–64个字符，名称不能重复" : error)
+                .font(.system(size: LCStyle.FontSize.meta)).foregroundStyle(error.isEmpty ? Color.secondary : Color.red)
             HStack {
                 Spacer()
-                Button("取消") { model.showingCategoryEditor = false }.disabled(model.savingCategory)
-                Button(model.savingCategory ? "正在保存…" : model.categoryBeingEdited == nil ? "创建" : "保存") { model.saveCategory() }
-                    .buttonStyle(.borderedProminent).disabled(model.savingCategory || model.categoryDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                Button("取消", action: cancel).disabled(saving)
+                Button(saving ? "正在保存…" : creating ? "创建" : "保存", action: save)
+                    .buttonStyle(.borderedProminent).disabled(saving || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }.padding(18).frame(width: 300).onAppear { nameFocused = true }
-            .onExitCommand { if !model.savingCategory { model.showingCategoryEditor = false } }
+            .onExitCommand { if !saving { cancel() } }
     }
 }
 // 卡片只比较自身显示值，选择/详情变化不使全部卡片反复读取图标和重建内容，by AI.Coding。
@@ -1115,7 +1135,8 @@ struct ClipCard: View, Equatable {
                     let size = await Task.detached(priority: .utility) { urls.map(ClipContentSize.measure) ?? .unknown }.value
                     guard !Task.isCancelled, model.contains(item.id) else { return }
                     contentSize = size
-                    if let path = urls?.first?.path {
+                    // 每次打开面板预览代次都会变，图标只在离屏清空后重取；重复解码多图标 TIFF 会在入场动画期间占主线程，by AI.Coding。
+                    if fileIcon == nil, let path = urls?.first?.path {
                         guard let icon = await Self.fileIcon(path, id: item.id, model: model) else { return }
                         fileIcon = icon
                     }
@@ -1349,6 +1370,8 @@ struct ClipDetailPreview: View {
     let text: NSAttributedString?
     let highlight: SyntaxHighlight?
     let interactive: Bool
+    /// 历史管理检查器用：占满可用高度，长文在区内滚动、图片按空间放大；面板不传，仍按 LC-F01 测高，by AI.Coding。
+    var fills = false
     var body: some View {
         let urls = detail.summary.kind == .file ? detail.payload.fileURLs ?? [] : []
         if image != nil || !urls.isEmpty || text != nil {
@@ -1356,7 +1379,7 @@ struct ClipDetailPreview: View {
                 if let image {
                     LiveTextImage(image: image, interactive: interactive)
                         .aspectRatio(image.size.width > 0 && image.size.height > 0 ? image.size : CGSize(width: 1, height: 1), contentMode: .fit)
-                        .frame(maxWidth: .infinity, maxHeight: text == nil ? 220 : 150).clipShape(RoundedRectangle(cornerRadius: 6))
+                        .frame(maxWidth: .infinity, maxHeight: text == nil ? (fills ? .infinity : 220) : (fills ? 240 : 150)).clipShape(RoundedRectangle(cornerRadius: 6))
                 }
                 ForEach(Array(urls.prefix(4).enumerated()), id: \.offset) { _, url in
                     HStack(spacing: 10) {
@@ -1370,9 +1393,9 @@ struct ClipDetailPreview: View {
                 if urls.count > 4 { Text("另有 \(urls.count - 4) 个文件").font(.caption).foregroundStyle(.secondary) }
                 if let text {
                     // LC-F01：高度计算只测量短文，长文直接使用滚动视口；传入预览的全文保持不变，by AI.Coding。
-                    SyntaxDetailPreview(content: text, highlight: highlight)
+                    SyntaxDetailPreview(content: text, highlight: highlight, fills: fills)
                 }
-            }.padding(10).frame(maxWidth: .infinity, alignment: .leading)
+            }.padding(10).frame(maxWidth: .infinity, maxHeight: fills ? .infinity : nil, alignment: .topLeading)
                 .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 10))
                 .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.primary.opacity(0.06)))
         }
@@ -1385,20 +1408,33 @@ struct ClipRecordInfo: View {
         DisclosureGroup("记录信息") {
             Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 5) {
                 row("大小", "\(detail.payload.items.count) 项 · \(HistoryViewModel.bytes(detail.payload.byteCount))")
-                row("复制", "\(detail.summary.copyCount) 次 · 最近 \(Date(timeIntervalSince1970: Double(detail.summary.lastCopiedAt)/1000).formatted(date: .abbreviated, time: .shortened))")
-                row("格式", detail.payload.items.flatMap { $0.representations.map(\.type) }.sorted().joined(separator: ", "))
+                row("复制", "\(detail.summary.copyCount) 次 · 最近 \(Self.time(detail.summary.lastCopiedAt))")
+                row("格式", Self.formats(detail))
             }.padding(.top, 4)
         }.font(.caption)
-        let notes = (detail.summary.kind == .file ? ["保存的是文件引用，未备份文件本体；移动或删除原件后请重新复制。Finder中双击会复制副本到当前实际文件夹，同名冲突会停止，不覆盖已有文件。"] : [])
-            + (detail.payload.items.contains(where: { !Set($0.declaredTypes).subtracting(SupportedType.all).isEmpty }) ? ["仅保留支持格式，附加私有格式未保存"] : [])
-        if !notes.isEmpty {
-            Label(notes.joined(separator: "\n"), systemImage: "info.circle").font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-        }
+        Self.Notes(detail: detail)
+    }
+    static func time(_ instant: Instant) -> String { Date(timeIntervalSince1970: Double(instant) / 1000).formatted(date: .abbreviated, time: .shortened) }
+    static func formats(_ detail: ClipDetail) -> String { detail.payload.items.flatMap { $0.representations.map(\.type) }.sorted().joined(separator: ", ") }
+    /// 历史管理来源行：来源 · 复制次数 · 最近时间 · 大小常显，格式放悬停提示。
+    static func line(_ detail: ClipDetail) -> String {
+        "\(HistoryView.sourceName(detail.summary.source)) · 复制 \(detail.summary.copyCount) 次 · 最近 \(time(detail.summary.lastCopiedAt)) · \(HistoryViewModel.bytes(detail.payload.byteCount))"
     }
     private func row(_ label: String, _ value: String) -> some View {
         GridRow {
             Text(label).foregroundStyle(.secondary).gridColumnAlignment(.trailing)
             Text(value).lineLimit(2).truncationMode(.middle).textSelection(.enabled)
+        }
+    }
+    /// 影响结果的说明：面板在折叠项下方、历史管理在来源行下方直接显示。
+    struct Notes: View {
+        let detail: ClipDetail
+        var body: some View {
+            let notes = (detail.summary.kind == .file ? ["保存的是文件引用，未备份文件本体；移动或删除原件后请重新复制。Finder中双击会复制副本到当前实际文件夹，同名冲突会停止，不覆盖已有文件。"] : [])
+                + (detail.payload.items.contains(where: { !Set($0.declaredTypes).subtracting(SupportedType.all).isEmpty }) ? ["仅保留支持格式，附加私有格式未保存"] : [])
+            if !notes.isEmpty {
+                Label(notes.joined(separator: "\n"), systemImage: "info.circle").font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 }

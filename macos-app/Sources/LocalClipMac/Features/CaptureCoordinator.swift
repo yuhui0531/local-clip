@@ -20,6 +20,10 @@ import LocalClipCore
     private var retryTask: Task<Void, Never>?
     /// 首次重试等待；之后每次翻倍（默认1s/2s/4s，共3次）。测试可缩短。
     var retryDelay: Duration = .seconds(1)
+    #if DEBUG
+    /// 测试用屏障替代退避计时，按步骤放行重试而不依赖时间窗口，by AI.Coding。
+    var retryBarrier: (() async -> Void)?
+    #endif
     static let maxRetryAttempts = 3
     static let retryingState = "磁盘空间不足，稍后重试保存"
     /// 首次提交后不可用的那一条才是"结果未确认"；之后的复制在入口即被拒绝，确定未记录。
@@ -226,7 +230,11 @@ import LocalClipCore
     /// 按入队顺序逐条退避重试；不阻塞新复制的drain，暂停或重建基线时整体作废。
     private func runRetries() async {
         while let attempt = retries.first?.attempt {
+            #if DEBUG
+            if let retryBarrier { await retryBarrier() } else { do { try await Task.sleep(for: retryDelay * (1 << (attempt - 1))) } catch { return } }
+            #else
             do { try await Task.sleep(for: retryDelay * (1 << (attempt - 1))) } catch { return }
+            #endif
             // 计时器到点后才被取消时sleep不再抛错；先复核，再弹出实际要处理的条目。
             guard !Task.isCancelled else { return }
             guard !retries.isEmpty else { break }

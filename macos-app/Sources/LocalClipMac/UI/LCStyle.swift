@@ -30,4 +30,13 @@ enum LCStyle {
         static let card = Shadow(opacity: 0.08, radius: 4, y: 2)
         static let hover = Shadow(opacity: 0.14, radius: 8, y: 4)
     }
+    /// 磨砂之上的窗口底色不透明度（底部面板）：0.55 透出背后色彩又不显杂乱；卡片正文保持实底。
+    static let panelTint = 0.55
+}
+/// 浮窗统一表面（队列、粘贴提示、转换菜单）：与底部面板同一套磨砂、卡片圆角与细描边；阴影由窗口自带，by AI.Coding。
+extension View {
+    func floatingSurface() -> some View {
+        let shape = RoundedRectangle(cornerRadius: LCStyle.Radius.card, style: .continuous)
+        return background(.regularMaterial, in: shape).overlay(shape.strokeBorder(Color.primary.opacity(0.08)))
+    }
 }
