@@ -141,3 +141,14 @@ baseline(10样本，fixture v1更大)服务搜索P956679.6ms；后续SQL预筛/�
 ## 0.1.12 浏览性能增量（未量测）
 
 源码确认旧select每次调用store.detail读取/哈希完整原始内容，并随后请求图片缩略图；卡片观察整个HistoryViewModel，完整详情/metadata发布都影响所有卡片。本轮改为即时高亮、25ms合并轻量metadata、详情展开才读取正文、Equatable卡片与仅越界滚动；缩略图复查不再加载原始载荷，去除VM重复采集刷新。数据库提交/真实恢复仍完整校验。不提供未经执行的前后耗时、FPS或P95；没有本轮性能原始样本，历史样本不认证本版选择/布局路径。
+
+## 历史管理窗口按页码取页（0.3.55 之后未发布，Debug，1 万条文本，临时库）
+
+`LOCALCLIP_MANAGER_PERF=1 scripts/test.sh --filter HistoryPagingTests/tenThousandRowPaging`，每项 5 次取中位数，含同一快照的总数统计：
+
+| 查询 | 首页（offset 0） | 末页（offset 9950） |
+|---|---|---|
+| 无检索词浏览 | 3.1 ms | 6.7 ms |
+| 字面检索（全部命中） | 34.7 ms | 36.2 ms |
+
+首页另含一次 `categoryMemberships` 读取。Debug 构建、单机单次运行，未测 Release 与界面渲染帧率。

@@ -33,6 +33,10 @@ import LocalClipCore
     private var status: NSStatusItem?
     private var panel: NSPanel?
     private var settingsWindow: NSWindow?
+    private var managerWindow: HistoryManagerWindow?
+    private var manager: HistoryManagerModel?
+    /// 管理窗口打开期间切到常规应用以出现在Dock与⌘Tab，关闭时恢复原策略，by AI.Coding。
+    private var policyBeforeManager: NSApplication.ActivationPolicy?
     private var feedbackPanel: NSPanel?
     private var feedbackTask: Task<Void, Never>?
     private var model: HistoryViewModel?
@@ -135,6 +139,7 @@ import LocalClipCore
             }
             model.panelInteractionChanged = { [weak self] in self?.scheduleFocusDismissal() }
             model.openSettings = { [weak self] in self?.showSettings() }
+            model.openHistoryManager = { [weak self] ids in self?.showHistoryManager(reveal: ids) }
             model.quitApplication = { [weak self] in self?.quitApplication(nil) }
             model.registerShortcut = { [weak self] in self?.hotkeys.register($0) ?? false }
             model.focusResults = { [weak self] in guard let panel = self?.panel else { return }; panel.makeFirstResponder(panel) }
@@ -266,6 +271,8 @@ import LocalClipCore
         let window = NSMenuItem(title: "窗口", action: nil, keyEquivalent: "")
         let windowMenu = NSMenu(title: "窗口")
         windowMenu.addItem(withTitle: "关闭窗口", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        let manage = windowMenu.addItem(withTitle: "历史管理…", action: #selector(showHistoryManagerFromMenu), keyEquivalent: "h")
+        manage.keyEquivalentModifierMask = [.command, .option]; manage.target = self
         window.submenu = windowMenu; menu.addItem(window)
         return menu
     }
@@ -295,6 +302,9 @@ import LocalClipCore
         menu.addItem(.sectionHeader(title: statusMenuTitle))
         let show = menu.addItem(withTitle: "打开历史", action: #selector(showHistory), keyEquivalent: ""); show.target = self
         show.image = NSImage(systemSymbolName: "square.on.square", accessibilityDescription: nil)
+        let manage = menu.addItem(withTitle: "历史管理…", action: #selector(showHistoryManagerFromMenu), keyEquivalent: "h"); manage.target = self
+        manage.keyEquivalentModifierMask = [.command, .option]
+        manage.image = NSImage(systemSymbolName: "tablecells", accessibilityDescription: nil)
         let pause = menu.addItem(withTitle: "", action: #selector(toggleCapture), keyEquivalent: ""); pause.target = self
         updateCaptureItem(pause)
         if let model, model.pasteQueueActive {
@@ -530,7 +540,7 @@ import LocalClipCore
         status?.button?.appearsDisabled = !model.settings.captureEnabled
         if !registered { model.message = "快捷键冲突，菜单栏入口保留" }
         // 已显示的队列浮窗与历史面板同时生效，不等下一次进度更新，by AI.Coding。
-        Self.applySharing(model.settings.excludeFromSharing, to: [panel, queuePanel])
+        Self.applySharing(model.settings.excludeFromSharing, to: [panel, queuePanel, managerWindow])
         model.actualPanelHeight = model.settings.panelHeight; placePanel(to: panel?.screen)
     }
     static func applySharing(_ exclude: Bool, to windows: [NSWindow?]) {
@@ -607,6 +617,11 @@ import LocalClipCore
             owner = value.sheetParent ?? value.parent
         }
         return (showingDetail || showingCategoryEditor || showingFilters || showingContentEditor) && window.isVisible && window !== settings && window !== feedback && window !== queue
+    }
+    /// 管理窗口里可编辑文字、或只读文字已有选区时，⌘C/⌫等按键交给文本视图，by AI.Coding。
+    static func managerTextOwnsKeys(_ responder: NSResponder?) -> Bool {
+        guard let text = responder as? NSTextView else { return false }
+        return text.isEditable || text.selectedRange().length > 0
     }
     /// 所有退出入口共用系统终止请求，测试替换请求而不终止任何真实应用，by AI.Coding。
     @objc func quitApplication(_ sender: Any?) { requestTermination() }
@@ -763,6 +778,30 @@ import LocalClipCore
         model.settingsVisibilityChanged(true)
         NSApp.activate(ignoringOtherApps: true); settingsWindow?.makeKeyAndOrderFront(nil)
     }
+    @objc private func showHistoryManagerFromMenu() { showHistoryManager() }
+    /// 首次打开时创建；再次打开只前置并按需选中记录，by AI.Coding。
+    func showHistoryManager(reveal ids: [ClipID] = []) {
+        guard let model else { return }
+        if managerWindow == nil {
+            let manager = HistoryManagerModel(history: model)
+            manager.locate = { [weak self] id in self?.showHistory(); self?.model?.jumpToHistory(id: id) }
+            let host = NSHostingController(rootView: HistoryManagerView(model: manager, history: model))
+            host.sceneBridgingOptions = [.toolbars, .title]; host.sizingOptions = []
+            let window = HistoryManagerWindow(content: host)
+            window.onClose = { [weak self] in self?.historyManagerClosed() }
+            managerWindow = window; self.manager = manager
+            policyBeforeManager = NSApp.activationPolicy()
+        }
+        Self.applySharing(model.settings.excludeFromSharing, to: [managerWindow])
+        if !ids.isEmpty { manager?.reveal(ids) }
+        if NSApp.activationPolicy() != .regular { NSApp.setActivationPolicy(.regular) }
+        NSApp.activate(ignoringOtherApps: true); managerWindow?.makeKeyAndOrderFront(nil)
+    }
+    private func historyManagerClosed() {
+        manager?.stop(); manager = nil; managerWindow = nil
+        if let policy = policyBeforeManager, policy != .regular { NSApp.setActivationPolicy(policy) }
+        policyBeforeManager = nil
+    }
     /// 按点击时的状态保存明确意图，恢复仍从新计数开始，by AI.Coding。
     @objc private func toggleCapture() {
         model?.toggleRecording()
@@ -858,6 +897,12 @@ import LocalClipCore
             guard let self else { return event }
             // 本地Cmd-Q先于历史/IME分支，也适用于只有设置窗口或菜单图标隐藏时，by AI.Coding。
             if self.handleQuitShortcut(event) { return nil }
+            // 管理窗口按键：附页、文字编辑与输入法组字交还系统，其余由窗口模型处理，by AI.Coding。
+            if let window = self.managerWindow, event.window === window, let manager = self.manager {
+                let editor = window.firstResponder as? NSTextView
+                guard window.attachedSheet == nil, editor?.hasMarkedText() != true else { return event }
+                return manager.handleKey(code: event.keyCode, flags: event.modifierFlags, editing: Self.managerTextOwnsKeys(editor), isRepeat: event.isARepeat) ? nil : event
+            }
             // 编辑器接管文字按键；Esc优先收起页内放弃确认或取消编辑，⌘S/⌘↩显式保存，IME候选期间交给文本域，by AI.Coding。
             if let editorState = self.model?.contentEditor, self.model?.contentEditorPresented == true {
                 let textEditor = event.window?.firstResponder as? NSTextView
@@ -934,6 +979,7 @@ import LocalClipCore
             }
             // ⌘, 是macOS打开设置的通用快捷键，面板内同样生效，by AI.Coding。
             if flags == [.command], event.keyCode == 43 { model.openSettings?(); return nil }
+            if flags == [.command, .option], event.keyCode == 4 { model.openHistoryManager?([]); return nil }
             // 搜索文字未改变且最后动作是记录删除时，仍可撤销该记录。
             if flags == [.command], event.keyCode == 6, editing, model.canUndoFromSearch { model.undoDeletion(); return nil }
             if Self.copiesRecordFromSearch(event, responder: panel.firstResponder, model: model) { return nil }

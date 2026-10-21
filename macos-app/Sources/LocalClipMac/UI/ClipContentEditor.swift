@@ -57,6 +57,40 @@ enum ClipContentLayout {
         if !hasCustomTitle && itemTitle == HistoryView.kindName(kind) { itemTitle = name }
         if !monospaced { monospaced = true }
     }
+    static let loadFailure = "内容读取失败，记录可能已删除或过期。"
+    /// 不可编辑的内容返回nil，by AI.Coding。
+    convenience init?(detail: ClipDetail) {
+        guard let text = detail.payload.editableText else { return nil }
+        self.init(detail: detail, text: text)
+    }
+    /// 编辑器只用识别结果决定排版；用户已改动草稿时不再套用旧原文的结论。
+    func detectLanguage() async {
+        guard kind == .text, !monospaced else { return }
+        let sample = String(originalText.prefix(4_096))
+        let language = await SyntaxHighlighter.shared.guess(of: sample, truncated: sample.count < originalText.count).language
+        if !hasChanges { applyDetectedLanguage(language) }
+    }
+    /// 保存失败保留草稿并写入错误；仅原子提交成功返回true，by AI.Coding。
+    func save(to store: HistoryStore) async -> Bool {
+        guard canSave else { return false }
+        saving = true; error = ""
+        do {
+            try await store.updateText(id: id, text: text, expectedFingerprint: fingerprint)
+            return true
+        } catch {
+            saving = false
+            if let failure = error as? ContentEditError { self.error = failure.message }
+            else if let failure = error as? StoreError {
+                switch failure {
+                case .notFound: self.error = "记录已删除或过期，草稿已保留。"
+                case .quotaExceeded, .diskFull: self.error = "可用空间不足，保存失败；原内容与草稿均已保留。"
+                case .postCommitUnavailable: self.error = "提交后存储不可用，请保留草稿并重启核对；修改可能已保存。"
+                default: self.error = "保存失败，草稿已保留，请重试。"
+                }
+            } else { self.error = "保存失败，草稿已保留，请重试。" }
+            return false
+        }
+    }
     /// 一键还原到初始原文，清除未保存错误与放弃确认态，by AI.Coding。
     func revert() {
         guard !saving else { return }

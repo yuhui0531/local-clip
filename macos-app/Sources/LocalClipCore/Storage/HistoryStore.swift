@@ -388,6 +388,26 @@ public actor HistoryStore: HistoryRepository {
             return .init(summary: summary(row), categoryIDs: categories, hasTextRepresentations: total > 0 && total == textual, revision: try self.revision(db), outputByteCount: bytes, hasFileReferences: files)
         }
     }
+    /// 历史管理表格一页一次读取分类归属，不逐条读取元数据，by AI.Coding。
+    public func categoryMemberships(_ ids: [ClipID]) throws -> [ClipID: Set<String>] {
+        guard !ids.isEmpty else { return [:] }
+        return try strategy.read { db in
+            let rows = try db.rows("SELECT clipID, categoryID FROM clip_categories WHERE clipID IN(" + ids.map { _ in "?" }.joined(separator: ",") + ")", ids.map(SQLValue.text))
+            return rows.reduce(into: [:]) { $0[$1.text("clipID"), default: []].insert($1.text("categoryID")) }
+        }
+    }
+    /// 浏览顺序（无检索词、最近复制优先、非单分类人工顺序）中给定记录的最小起始位置；不符合条件的记录忽略，by AI.Coding。
+    public func firstOffset(of ids: Set<ClipID>, in request: SearchRequest) throws -> Int? {
+        guard SearchNormalizer.normalize(request.literal).isEmpty, request.sort == .recentDesc, request.categoryIDs.count != 1 else { return nil }
+        let (condition, filters, _) = searchCondition(request, settings: try settings(), at: clock.now())
+        return try strategy.read { db in
+            try ids.compactMap { id -> Int? in
+                guard let row = try db.rows("SELECT lastCopiedAtMs FROM clips WHERE " + condition + " AND id=?", filters + [.text(id)]).first else { return nil }
+                let at = row.int("lastCopiedAtMs")
+                return Int(try db.scalarInt("SELECT COUNT(*) FROM clips WHERE " + condition + " AND (lastCopiedAtMs>? OR (lastCopiedAtMs=? AND id<?))", filters + [.integer(at), .integer(at), .text(id)]))
+            }.min()
+        }
+    }
     /// 接口分离避免列表批量读取图片。
     #if DEBUG
     private(set) var outputPayloadLoads = 0
@@ -577,15 +597,18 @@ public actor HistoryStore: HistoryRepository {
                 filters += ids.map { .text($0) }
             }
             let needle = SearchNormalizer.normalize(request.literal)
-            let offset = request.cursor?.offset ?? 0; let size = min(50, max(1, request.pageSize))
+            let offset = request.cursor?.offset ?? request.offset; let size = min(50, max(1, request.pageSize))
             guard offset >= 0 else { throw StoreError.invalidCursor }
+            let countsTotal = request.countTotal && request.cursor == nil
             if needle.isEmpty {
                 // 多取一行判断下一页，普通浏览不再为每页额外统计全库，顺序/版本身份不变，by AI.Coding。
-                let rows = try db.rows("SELECT *, (\(protectedSQL)) AS isProtected FROM clips WHERE " + condition + " ORDER BY " + order + " LIMIT ? OFFSET ?", filters + (request.categoryIDs.count == 1 ? [.text(request.categoryIDs.first!)] : []) + [.integer(Int64(size + 1)), .integer(Int64(offset))])
+                let orderParams: [SQLValue] = (request.sort == .recentDesc && request.categoryIDs.count == 1) ? [.text(request.categoryIDs.first!)] : []
+                let rows = try db.rows("SELECT *, (\(protectedSQL)) AS isProtected FROM clips WHERE " + condition + " ORDER BY " + order + " LIMIT ? OFFSET ?", filters + orderParams + [.integer(Int64(size + 1)), .integer(Int64(offset))])
                 if rows.isEmpty && offset > 0 {
                     guard offset <= Int(try db.scalarInt("SELECT COUNT(*) FROM clips WHERE " + condition, filters)) else { throw StoreError.invalidCursor }
                 }
-                let page = SearchPage(queryID: request.queryID, revision: revision, items: rows.prefix(size).map { summary($0) }, next: rows.count > size ? .init(revision: revision, offset: offset + size, signature: request.signature) : nil)
+                var page = SearchPage(queryID: request.queryID, revision: revision, items: rows.prefix(size).map { summary($0) }, next: rows.count > size ? .init(revision: revision, offset: offset + size, signature: request.signature) : nil)
+                if countsTotal { page.total = Int(try db.scalarInt("SELECT COUNT(*) FROM clips WHERE " + condition, filters)) }
                 return .init(page: page, candidateIDs: nil, indexIsComplete: knownCompleteRevision == revision)
             }
             // 按SQLite页缓存扫描有界结果，不在Swift中常驻全部正文/规范化副本。
@@ -597,13 +620,29 @@ public actor HistoryStore: HistoryRepository {
                  UNION ALL SELECT o.itemIndex,o.normalizedText FROM image_text o WHERE o.clipID=clips.id AND o.normalizedText<>''
                    AND EXISTS(SELECT 1 FROM representations x WHERE x.clipID=o.clipID AND x.itemIndex=o.itemIndex AND x.blobDigest=o.blobDigest)
                 """ : ""
+            let matchOrder: String
+            let pageOrder: String
+            switch request.sort {
+            case .recentDesc:
+                matchOrder = "matchRank,lastCopiedAtMs DESC,id"
+                pageOrder = "page.matchRank,page.lastCopiedAtMs DESC,page.id"
+            case .recentAsc:
+                matchOrder = "matchRank,lastCopiedAtMs ASC,id"
+                pageOrder = "page.matchRank,page.lastCopiedAtMs ASC,page.id"
+            case .copyCountDesc:
+                matchOrder = "matchRank,copyCount DESC,lastCopiedAtMs DESC,id"
+                pageOrder = "page.matchRank,page.copyCount DESC,page.lastCopiedAtMs DESC,page.id"
+            case .firstCopiedDesc:
+                matchOrder = "matchRank,firstCopiedAtMs DESC,id"
+                pageOrder = "page.matchRank,page.firstCopiedAtMs DESC,page.id"
+            }
             // 仅第一页需要候选缓存；候选JSON只随首行返回，by AI.Coding。
             let collectCandidates = request.cursor == nil && includeMatchContext
-            let candidateProjection = collectCandidates ? "CASE WHEN page.id IS (SELECT id FROM page ORDER BY matchRank,lastCopiedAtMs DESC,id LIMIT 1) THEN (SELECT candidateIDs FROM candidate_ids) END" : "NULL"
+            let candidateProjection = collectCandidates ? "CASE WHEN page.id IS (SELECT id FROM page ORDER BY \(matchOrder) LIMIT 1) THEN (SELECT candidateIDs FROM candidate_ids) END" : "NULL"
             // 大库匹配/排序只物化身份与排序字段，分页后在同一快照回取完整元数据，避免重复搬运预览等宽列。
             let sql = """
             WITH matches AS MATERIALIZED (
-                SELECT clips.id, clips.lastCopiedAtMs,
+                SELECT clips.id, clips.lastCopiedAtMs, clips.copyCount, clips.firstCopiedAtMs,
                 -- 自定义名称命中与正文开头同级；正文排名规则不变，by AI.Coding。
                 MIN(CASE WHEN instr(normalizedTitle,?1)>0 THEN 1 ELSE 4 END, clip_literal_rank(
                     (SELECT CAST(group_concat(normalizedText,char(10)) AS BLOB)
@@ -613,16 +652,17 @@ public actor HistoryStore: HistoryRepository {
             ), matching AS MATERIALIZED (
                 SELECT * FROM matches WHERE matchRank<4
             ), candidate_set AS MATERIALIZED (
-                SELECT id FROM matching ORDER BY matchRank,lastCopiedAtMs DESC,id LIMIT 5001
+                SELECT id FROM matching ORDER BY \(matchOrder) LIMIT 5001
             ), candidate_ids AS (
                 SELECT CASE WHEN (SELECT COUNT(*) FROM candidate_set)<=5000
                     THEN (SELECT json_group_array(id) FROM candidate_set) END AS candidateIDs
             ), page AS MATERIALIZED (
-                SELECT * FROM matching ORDER BY matchRank,lastCopiedAtMs DESC,id LIMIT ? OFFSET ?
-            ) SELECT clips.*, (\(protectedSQL)) AS isProtected, page.matchRank,\(candidateProjection) AS candidateIDs
+                SELECT * FROM matching ORDER BY \(matchOrder) LIMIT ? OFFSET ?
+            ) SELECT clips.*, (\(protectedSQL)) AS isProtected, page.matchRank,\(candidateProjection) AS candidateIDs,
+                \(countsTotal ? "(SELECT COUNT(*) FROM matching)" : "NULL") AS totalMatches
               FROM (SELECT 1) LEFT JOIN page ON true
               LEFT JOIN clips ON clips.id=page.id
-              ORDER BY page.matchRank,page.lastCopiedAtMs DESC,page.id
+              ORDER BY \(pageOrder)
             """
             let rows = try db.rows(sql, [.text(needle)] + filters + [.integer(Int64(size + 1)), .integer(Int64(offset))])
             let candidateJSON = rows.first?.text("candidateIDs") ?? ""
@@ -654,8 +694,10 @@ public actor HistoryStore: HistoryRepository {
                 if useContextCache, searchContexts.count < 256, context.utf8.count <= 4096 { searchContexts[key] = context }
                 return summary(row, context:context)
             }
+            // 匹配集合已物化，总数在同一条SQL内取得，不再额外扫描正文，by AI.Coding。
             let resultPage = SearchPage(queryID: request.queryID, revision: revision, items: page,
-                next: pageRows.count > size ? .init(revision: revision, offset: offset + size, signature: request.signature) : nil)
+                next: pageRows.count > size ? .init(revision: revision, offset: offset + size, signature: request.signature) : nil,
+                total: countsTotal ? Int(rows.first?.int("totalMatches") ?? 0) : nil)
             return .init(page: resultPage, candidateIDs: candidateIDs, indexIsComplete: indexIsComplete)
         }()
     }
@@ -885,7 +927,8 @@ public actor HistoryStore: HistoryRepository {
                 try removeExpired(db, settings: settings, at: at)
             }
         }
-        if case .delete = preview.operation {
+        // 目标已不存在的删除不清除上一次删除的撤销，by AI.Coding。
+        if case .delete = preview.operation, preview.affectedCount > 0 {
             undoExpiry?.cancel(); undoPacket = undoCandidate
             if let undoCandidate { undoExpiry = Task { [weak self] in
                 do { try await Task.sleep(for: .seconds(30)) } catch { return }
@@ -1049,7 +1092,17 @@ public actor HistoryStore: HistoryRepository {
             clauses.append("EXISTS(SELECT 1 FROM clip_categories WHERE clipID=clips.id AND categoryID IN(" + request.categoryIDs.map { _ in "?" }.joined(separator: ",") + "))")
             values += request.categoryIDs.sorted().map(SQLValue.text)
         }
-        let order = request.categoryIDs.count == 1 ? "(SELECT position FROM clip_categories WHERE clipID=clips.id AND categoryID=?),id" : "lastCopiedAtMs DESC,id"
+        let order: String
+        switch request.sort {
+        case .recentDesc:
+            order = request.categoryIDs.count == 1 ? "(SELECT position FROM clip_categories WHERE clipID=clips.id AND categoryID=?),id" : "lastCopiedAtMs DESC,id"
+        case .recentAsc:
+            order = "lastCopiedAtMs ASC,id"
+        case .copyCountDesc:
+            order = "copyCount DESC,lastCopiedAtMs DESC,id"
+        case .firstCopiedDesc:
+            order = "firstCopiedAtMs DESC,id"
+        }
         return (clauses.joined(separator: " AND "), values, order)
     }
     /// 最新加入/重新拖入批次置前，只写本批归属，不重排整个分类或改变复制身份，by AI.Coding。

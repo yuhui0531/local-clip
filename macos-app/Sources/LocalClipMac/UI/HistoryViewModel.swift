@@ -374,6 +374,8 @@ import LocalClipCore
     /// 追加页读取失败时“更多历史”显示重试；下一次读取开始即清除，by AI.Coding。
     @Published private(set) var loadMoreFailed = false
     public var openSettings: (() -> Void)?
+    /// 打开历史管理窗口并选中给定记录；空数组只打开窗口，by AI.Coding。
+    public var openHistoryManager: (([ClipID]) -> Void)?
     public var quitApplication: (() -> Void)?
     public var registerShortcut: ((Shortcut) -> Bool)?
     /// 粘贴队列快捷键只在队列进行中注册；由宿主接到系统全局快捷键，by AI.Coding。
@@ -409,6 +411,8 @@ import LocalClipCore
                     continue
                 }
                 if case .unavailable = event { self.message = "提交后存储不可用，请重启。已提交操作不会重放。" }
+                // 删除可能来自历史管理窗口；面板的⌘Z入口跟随存储里的真实撤销状态，by AI.Coding。
+                self.assignIfChanged(\.canUndoDeletion, await self.store.undoAvailable())
                 if !self.panelVisible {
                     self.hiddenChanges = true
                     do { self.acceptSettings(try await self.store.settings()) }
@@ -820,31 +824,8 @@ import LocalClipCore
                 let detail = try await store.detail(id: id, at: clock.now())
                 guard !Task.isCancelled, generation == detailID, canDisplayContents, selectedID == id, showingDetail else { return }
                 guard isVisible(detail.summary) else { revalidateVisibleContent(); return }
-                // 附件检查可能扫描大富文本，后台计算后与详情同世代发布；保存仍重新校验。
-                async let editable = Task.detached { detail.payload.editableText != nil }.value
-                let rich = await Task.detached { () -> AttributedString in
-                    let result = NSMutableAttributedString(string: "")
-                    for (index, item) in detail.payload.items.enumerated() { if index > 0 { result.append(NSAttributedString(string: "\n")) }; result.append(RichContent.attributed(item)) }
-                    return AttributedString(result)
-                }.value
-                guard !Task.isCancelled, generation == detailID, canDisplayContents, selectedID == id else { return }
                 // 正文高亮、识别结果与原图都在弹出前备好；弹窗只在详情发布后出现，不先显示加载态再撑高，by AI.Coding。
-                // 文件列表与纯图片不显示正文预览。
-                let kind = detail.summary.kind
-                let preview = NSAttributedString(rich)
-                let showsText = kind != .image && (kind != .file || (detail.payload.fileURLs ?? []).isEmpty) && preview.length > 0
-                let previewString = showsText ? preview.string : ""
-                async let highlight = previewString.isEmpty ? nil : SyntaxHighlighter.detail.highlight(previewString)
-                var inspection: ContentInspector.Inspection?
-                if let text = detail.payload.plainText, !detail.payload.hasFileReferences {
-                    // 详情“识别结果”描述整份内容，只采用完整（未截断）的结论；非法JSON候选在此给出诊断，超出判定预算时显示为文本。
-                    let guess = await SyntaxHighlighter.detail.guess(of: text)
-                    let language = guess.complete ? guess.language : nil
-                    inspection = await Task.detached { ContentInspector.inspectFull(text, language: language) }.value
-                }
-                let bytes = kind == .image || kind == .mixed ? await Task.detached { RichContent.fullImage(detail.payload) }.value : nil
-                let readyHighlight = await highlight
-                let readyEditable = await editable
+                let content = try await ClipDetailContent.load(detail)
                 guard !Task.isCancelled, generation == detailID, canDisplayContents, selectedID == id else { return }
                 let latest = try await store.metadata(id: id, at: clock.now())
                 guard generation == detailID, canDisplayContents, selectedID == id, isVisible(latest.summary), !pendingDeletion.contains(id) else { return }
@@ -852,12 +833,12 @@ import LocalClipCore
                 guard latest.summary.contentFingerprint == detail.summary.contentFingerprint else {
                     invalidateDetail(); if showingDetail { loadDetail() }; return
                 }
-                richPreview = showsText ? preview : nil; detailInspection = inspection; detailHighlight = readyHighlight
-                if kind == .image || kind == .mixed {
-                    image = bytes.flatMap(NSImage.init(data:))
+                richPreview = content.richPreview; detailInspection = content.inspection; detailHighlight = content.highlight
+                if detail.summary.kind == .image || detail.summary.kind == .mixed {
+                    image = content.image
                     if image == nil { previewMessage = "原图预览不可用或超过40MP；原始格式仍保留" }
                 }
-                detailEditable = readyEditable
+                detailEditable = content.editable
                 self.detail = detail; detailLoading = false; detailSlowTask?.cancel(); detailSlow = false
             } catch { if generation == detailID { invalidateDetail(); detailFailed = !(error is CancellationError) } }
         }
@@ -932,11 +913,16 @@ import LocalClipCore
         let ids = ids ?? orderedSelection
         guard !ids.isEmpty else { return }
         Task {
-            let result = await paste.perform(.init(ids: ids, format: format ?? settings.defaultFormat, action: action ?? settings.defaultAction, target: pasteTarget(), transform: transform, join: join))
+            let result = await output(.init(ids: ids, format: format ?? settings.defaultFormat, action: action ?? settings.defaultAction, target: pasteTarget(), transform: transform, join: join))
             showPasteResult(result)
             notifyPasteResult(result)
-            await recordUse(ids, result)
         }
+    }
+    /// 输出并记录使用；面板与历史管理窗口共用，结果提示由调用方决定，by AI.Coding。
+    func output(_ request: PasteRequest) async -> PasteResult {
+        let result = await paste.perform(request)
+        await recordUse(request.ids, result)
+        return result
     }
     /// 按完整选择检查，不能由当前主卡片代表其它所选项目，by AI.Coding。
     func canCopyAsText(_ ids: Set<ClipID>) async -> Bool {
@@ -976,17 +962,11 @@ import LocalClipCore
             do {
                 let detail = try await store.detail(id: id, at: clock.now())
                 guard request == contentEditRequest, panelVisible, canDisplayContents, contains(id), contentEditor == nil else { return }
-                guard let text = detail.payload.editableText else { message = ContentEditError.unsupportedContent.message; return }
-                let editor = ClipContentEditorState(detail: detail, text: text)
+                guard let editor = ClipContentEditorState(detail: detail) else { message = ContentEditError.unsupportedContent.message; return }
                 contentEditor = editor
                 panelInteractionChanged?()
-                if detail.summary.kind == .text, !editor.monospaced {
-                    // 编辑器只用识别结果决定排版；用户已改动草稿时不再套用旧原文的结论。
-                    let sample = String(text.prefix(4_096))
-                    let language = await SyntaxHighlighter.shared.guess(of: sample, truncated: sample.count < text.count).language
-                    if contentEditor === editor, !editor.hasChanges { editor.applyDetectedLanguage(language) }
-                }
-            } catch { if request == contentEditRequest { message = "内容读取失败，记录可能已删除或过期。" } }
+                await editor.detectLanguage()
+            } catch { if request == contentEditRequest { message = ClipContentEditorState.loadFailure } }
         }
     }
     /// 取消有修改时先确认，失焦或列表刷新不删除草稿，by AI.Coding。
@@ -1002,27 +982,13 @@ import LocalClipCore
     /// 保存失败保留草稿和错误；只在原子提交成功后关闭编辑器，by AI.Coding。
     func saveContentEdit() {
         guard let editor = contentEditor, editor.canSave else { return }
-        let text = editor.text
-        editor.saving = true; editor.error = ""
         Task {
-            do {
-                try await store.updateText(id: editor.id, text: text, expectedFingerprint: editor.fingerprint)
-                if contentEditor === editor { contentEditor = nil }
-                notice("内容已保存"); panelInteractionChanged?()
-            } catch {
-                editor.saving = false
-                if let error = error as? ContentEditError { editor.error = error.message }
-                else if let error = error as? StoreError {
-                    switch error {
-                    case .notFound: editor.error = "记录已删除或过期，草稿已保留。"
-                    case .quotaExceeded, .diskFull: editor.error = "可用空间不足，保存失败；原内容与草稿均已保留。"
-                    case .postCommitUnavailable: editor.error = "提交后存储不可用，请保留草稿并重启核对；修改可能已保存。"
-                    default: editor.error = "保存失败，草稿已保留，请重试。"
-                    }
-                } else { editor.error = "保存失败，草稿已保留，请重试。" }
-            }
+            guard await editor.save(to: store) else { return }
+            if contentEditor === editor { contentEditor = nil }
+            notice("内容已保存"); panelInteractionChanged?()
         }
     }
+    static let renameFailure = "重命名失败：名称需为单行且不超过1024字节，记录和容量仍须有效"
     /// 只编辑指定卡片的名称，不改变单选/多选与当前滚动窗口，by AI.Coding。
     public func beginRename(_ id: ClipID) {
         guard !dragActive, contains(id), contentEditor == nil else { return }
@@ -1052,7 +1018,7 @@ import LocalClipCore
                 notice("已重命名")
             }
             catch {
-                if generation == renameGeneration { message = "重命名失败：名称需为单行且不超过1024字节，记录和容量仍须有效" }
+                if generation == renameGeneration { message = Self.renameFailure }
             }
         }
     }
@@ -1098,47 +1064,60 @@ import LocalClipCore
         Task {
             defer { changingHistory = false }
             do {
-                let preview = try await store.preview(change)
-                if preview.requiresConfirmation {
+                let result = try await commit(change, confirm: { preview in
                     confirmingChange = true; panelInteractionChanged?()
                     let accepted = fromSettings ? await ChangeConfirmation.confirm(preview) : await confirmInPanel(preview)
                     confirmingChange = false; panelInteractionChanged?()
-                    guard accepted else { return }
-                }
-                searching?.cancel(); delayedLoading?.cancel(); queryPending = false; queryID = UUID(); cursor = nil; loading = false
-                invalidateSelection()
-                if case .delete(let ids) = change {
-                    // 确认后仅撤销被删记录，保留相邻卡片；在途旧查询也受删除集合过滤。
-                    let previous = items.firstIndex(where: { $0.id == selectedID }) ?? 0
-                    selectedIDs.subtract(ids); pendingDeletion.formUnion(ids)
-                    withAnimation(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? nil : .snappy(duration: 0.2)) { items.removeAll { pendingDeletion.contains($0.id) } }
-                    select(items.isEmpty ? nil : items[min(previous, items.count - 1)].id)
-                } else { selectedMetadata = nil }
-                let result = try await store.apply(preview.token)
-                // 提交前查询已作废；提交事件拥有刷新，不能在返回时取消新版本查询，by AI.Coding。
-                pendingDeletion.removeAll()
-                switch change { case .delete, .clearOrdinary: capture.discardPendingRetries(); default: break }
-                await capture.refreshCapacity()
-                // 删除和容量/期限操作后更新计量，其他变更只在设置窗口可见时读取，by AI.Coding。
-                switch change {
-                case .delete, .clearOrdinary, .quota, .retention, .deleteCategory: await refreshUsage()
-                default: if settingsVisible { await refreshUsage() }
-                }
-                let undo = await store.undoAvailable(); canUndoDeletion = undo
-                let deleted = { if case .delete = change { return true }; return false }()
-                if deleted { recordUndoQuery = undo ? query : nil }
-                // 分类归属成功后明确目标名称；只有提交完成才报告加入成功。
-                // 结果在界面上已可见，底栏只给简短提示；删除保留撤销入口，by AI.Coding。
-                switch change {
-                case .category(_, let categoryID, true): notice("已加入“\(categories.first(where: { $0.id == categoryID })?.name ?? "分类")”")
-                case .category(_, _, false): notice("已移出分类")
-                case .favorite(_, let on), .favorites(_, let on): notice(on ? "已收藏" : "已取消收藏")
-                case .delete: notice(undo ? "已删除 \(result.removed) 条 · ⌘Z 撤销" : "已删除 \(result.removed) 条")
-                case .clearOrdinary, .retention, .quota, .deleteCategory:
-                    notice(result.removed > 0 ? "已清理 \(result.removed) 条，释放 \(Self.bytes(result.reclaimedBytes))" : "已保存")
-                }
+                    return accepted
+                }, willApply: {
+                    searching?.cancel(); delayedLoading?.cancel(); queryPending = false; queryID = UUID(); cursor = nil; loading = false
+                    invalidateSelection()
+                    if case .delete(let ids) = change {
+                        // 确认后仅撤销被删记录，保留相邻卡片；在途旧查询也受删除集合过滤。
+                        let previous = items.firstIndex(where: { $0.id == selectedID }) ?? 0
+                        selectedIDs.subtract(ids); pendingDeletion.formUnion(ids)
+                        withAnimation(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? nil : .snappy(duration: 0.2)) { items.removeAll { pendingDeletion.contains($0.id) } }
+                        select(items.isEmpty ? nil : items[min(previous, items.count - 1)].id)
+                    } else { selectedMetadata = nil }
+                }, didApply: {
+                    // 提交前查询已作废；提交事件拥有刷新，不能在返回时取消新版本查询，by AI.Coding。
+                    pendingDeletion.removeAll()
+                })
+                guard let result else { return }
+                if case .delete = change { recordUndoQuery = canUndoDeletion ? query : nil }
+                notice(changeMessage(change, result: result))
             } catch StoreError.stalePreview { pendingDeletion.removeAll(); message = "历史已变化，请重新预览并确认"; refresh() }
             catch { pendingDeletion.removeAll(); message = "变更未完成，旧内容保持或存储不可用，请检查状态"; refresh() }
+        }
+    }
+    /// 预览→确认→提交→容量/计量/撤销收尾；面板与历史管理窗口共用，确认方式与界面反馈由调用方决定。
+    /// 用户取消返回nil；willApply在提交前、didApply在提交成功后立即执行，by AI.Coding。
+    func commit(_ change: HistoryChange, confirm: (ChangePreview) async -> Bool, willApply: () -> Void = {}, didApply: () -> Void = {}) async throws -> ChangeResult? {
+        let preview = try await store.preview(change)
+        if preview.requiresConfirmation, !(await confirm(preview)) { return nil }
+        willApply()
+        let result = try await store.apply(preview.token)
+        didApply()
+        switch change { case .delete, .clearOrdinary: capture.discardPendingRetries(); default: break }
+        await capture.refreshCapacity()
+        // 删除和容量/期限操作后更新计量，其他变更只在设置窗口可见时读取，by AI.Coding。
+        switch change {
+        case .delete, .clearOrdinary, .quota, .retention, .deleteCategory: await refreshUsage()
+        default: if settingsVisible { await refreshUsage() }
+        }
+        canUndoDeletion = await store.undoAvailable()
+        return result
+    }
+    /// 分类归属成功后明确目标名称；只有提交完成才报告加入成功。
+    /// 结果在界面上已可见，只给简短提示；删除保留撤销入口，by AI.Coding。
+    func changeMessage(_ change: HistoryChange, result: ChangeResult) -> String {
+        switch change {
+        case .category(_, let categoryID, true): "已加入“\(categories.first(where: { $0.id == categoryID })?.name ?? "分类")”"
+        case .category(_, _, false): "已移出分类"
+        case .favorite(_, let on), .favorites(_, let on): on ? "已收藏" : "已取消收藏"
+        case .delete: canUndoDeletion ? "已删除 \(result.removed) 条 · ⌘Z 撤销" : "已删除 \(result.removed) 条"
+        case .clearOrdinary, .retention, .quota, .deleteCategory:
+            result.removed > 0 ? "已清理 \(result.removed) 条，释放 \(Self.bytes(result.reclaimedBytes))" : "已保存"
         }
     }
     /// 面板内确认不新建窗口，面板frame与焦点保持不变；保留预览版本校验，by AI.Coding。
@@ -1181,6 +1160,7 @@ import LocalClipCore
         categoryBeingEdited = category; categoryDraft = category?.name ?? ""; categoryColor = category?.colorHex ?? nextCategoryColor; categoryError = ""
         showingDetail = false; showingCategoryEditor = true
     }
+    static func categoryFailure(_ error: Error) -> String { (error as? CategoryError)?.message ?? "分类保存失败，请检查容量或存储状态" }
     public func saveCategory() {
         guard !savingCategory else { return }
         let category = categoryBeingEdited, name = categoryDraft
@@ -1197,8 +1177,7 @@ import LocalClipCore
                     notice("已创建分类")
                 }
                 showingCategoryEditor = false
-            } catch let error as CategoryError { categoryError = error.message }
-            catch { categoryError = "分类保存失败，请检查容量或存储状态" }
+            } catch { categoryError = Self.categoryFailure(error) }
         }
     }
     /// 开始拖动只生成短期ID令牌，正文由公开提供者按需读取。
@@ -1497,11 +1476,17 @@ import LocalClipCore
         Task { do { try await store.moveItem(id: selectedID, categoryID: categoryID, delta: delta) } catch { message = "记录排序未保存" } }
     }
     public func undoDeletion() {
-        Task { do { try await store.undoDelete(); recordUndoQuery = nil; canUndoDeletion = false; pendingDeletion.removeAll(); notice("已撤销删除") } catch { canUndoDeletion = false; message = "不能撤销：期限、容量、策略或内容已变化" } }
+        Task { if await restoreDeleted() { notice("已撤销删除") } else { message = Self.undoFailure } }
+    }
+    static let undoFailure = "不能撤销：期限、容量、策略或内容已变化"
+    /// 撤销最近一次删除；面板与历史管理窗口共用，提示由调用方决定，by AI.Coding。
+    func restoreDeleted() async -> Bool {
+        do { try await store.undoDelete(); recordUndoQuery = nil; canUndoDeletion = false; pendingDeletion.removeAll(); return true }
+        catch { canUndoDeletion = false; return false }
     }
     /// 依据当前记录ID逐页定位，不使用旧偏移。
-    public func jumpToHistory(category: String? = nil) {
-        guard let wanted = selectedID else { return }
+    public func jumpToHistory(category: String? = nil, id: ClipID? = nil) {
+        guard let wanted = id ?? selectedID else { return }
         searching?.cancel(); paging?.cancel(); paging = nil; pendingPageNavigation = nil
         queryID = UUID(); let generation = queryID
         let targetCategories = Set(category.map { [$0] } ?? [])
@@ -1660,7 +1645,7 @@ import LocalClipCore
         pasteQueueTask?.cancel(); pasteQueueTask = nil; pasteQueueGeneration = UUID(); pasteQueueBusy = false
         activeQueueShortcut = shortcut
         pasteQueueSummaries = ids.map { id in
-            items.first { $0.id == id }.map { $0.title ?? $0.preview.split(whereSeparator: \.isNewline).first.map(String.init) ?? HistoryView.kindName($0.kind) } ?? "—"
+            items.first { $0.id == id }.map(HistoryView.displayTitle) ?? "—"
         }
         pasteQueue = ids; pasteQueuePosition = 0; pasteQueueWarning = nil; pasteQueueAwaiting = false; pasteQueueRecordedPosition = nil; touchPasteQueue()
         closePanel?(false)
@@ -1928,6 +1913,11 @@ import LocalClipCore
         }
     }
     /// 用户明确选择单个对象再打开，混合记录不会自动打开所有资源。
+    /// 可打开对象：文件引用，否则声明的网址；纯文本网址没有public.url表示，按同一识别规则回退，by AI.Coding。
+    static func openTargets(_ payload: ClipboardPayload) -> [URL] {
+        let declared = payload.items.flatMap { $0.representations }.filter { $0.type == SupportedType.url }.compactMap { String(data: $0.data, encoding: .utf8).flatMap(URL.init(string:)) }.filter { ["http","https","mailto"].contains($0.scheme?.lowercased() ?? "") }
+        return payload.fileURLs ?? (declared.isEmpty && payload.kind == .url ? payload.plainText.flatMap(ClipboardPayload.webLink).map { [$0] } ?? [] : declared)
+    }
     public func openSelected(reveal: Bool = false, withApplication: Bool = false) {
         guard canDisplayContents, let selectedID else { return }
         let visibility = contentGeneration
@@ -1935,9 +1925,7 @@ import LocalClipCore
             do {
                 let value = try await store.detail(id: selectedID, at: clock.now())
                 guard canDisplayContents, visibility == contentGeneration, self.selectedID == selectedID else { return }
-                let declared = value.payload.items.flatMap { $0.representations }.filter { $0.type == SupportedType.url }.compactMap { String(data: $0.data, encoding: .utf8).flatMap(URL.init(string:)) }.filter { ["http","https","mailto"].contains($0.scheme?.lowercased() ?? "") }
-                // 纯文本网址没有public.url表示，按同一识别规则回退，by AI.Coding。
-                let urls = value.payload.fileURLs ?? (declared.isEmpty && value.payload.kind == .url ? value.payload.plainText.flatMap(ClipboardPayload.webLink).map { [$0] } ?? [] : declared)
+                let urls = Self.openTargets(value.payload)
                 guard !urls.isEmpty else { message = "没有可打开的链接或文件"; return }
                 var url = urls[0]
                 if urls.count > 1 { let picker = NSAlert(); picker.messageText = "选择要打开的对象"; let popup = NSPopUpButton(frame: NSRect(x:0,y:0,width:400,height:26)); popup.addItems(withTitles: urls.map { $0.isFileURL ? $0.lastPathComponent : $0.absoluteString }); picker.accessoryView = popup; picker.addButton(withTitle:"打开"); picker.addButton(withTitle:"取消"); guard picker.runModal() == .alertFirstButtonReturn else { return }; url = urls[popup.indexOfSelectedItem] }

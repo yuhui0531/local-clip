@@ -315,6 +315,20 @@ public enum CategoryError: Error, Sendable {
         }
     }
 }
+public enum HistorySortOrder: String, Codable, CaseIterable, Sendable {
+    case recentDesc
+    case recentAsc
+    case copyCountDesc
+    case firstCopiedDesc
+    public var title: String {
+        switch self {
+        case .recentDesc: "最近复制优先"
+        case .recentAsc: "最早复制优先"
+        case .copyCountDesc: "复制次数最多"
+        case .firstCopiedDesc: "首次创建优先"
+        }
+    }
+}
 public struct SearchCursor: Sendable, Equatable { public var revision: Int64; public var offset: Int; public var signature: String }
 // 所有筛选参与分页身份，分类取并集，其他条件取交集，by AI.Coding。
 public struct SearchRequest: Sendable {
@@ -328,16 +342,26 @@ public struct SearchRequest: Sendable {
     public var sourceBundleID: String?
     public var from: Instant?
     public var until: Instant?
-    public init(_ literal: String = "", favorites: Bool = false, kind: ClipKind? = nil, cursor: SearchCursor? = nil, queryID: UUID = UUID(), pageSize: Int = 50, categoryIDs: Set<String> = [], sourceBundleID: String? = nil, from: Instant? = nil, until: Instant? = nil) {
+    public var sort: HistorySortOrder
+    /// 无游标时的起始位置；历史管理窗口按页码直接取页，不参与查询身份，by AI.Coding。
+    public var offset = 0
+    /// 首页同时统计符合条件的总数；面板不需要，默认关闭，by AI.Coding。
+    public var countTotal = false
+    public init(_ literal: String = "", favorites: Bool = false, kind: ClipKind? = nil, cursor: SearchCursor? = nil, queryID: UUID = UUID(), pageSize: Int = 50, categoryIDs: Set<String> = [], sourceBundleID: String? = nil, from: Instant? = nil, until: Instant? = nil, sort: HistorySortOrder = .recentDesc) {
         self.literal = literal; self.favoritesOnly = favorites; self.kind = kind; self.cursor = cursor; self.queryID = queryID; self.pageSize = pageSize
-        self.categoryIDs = categoryIDs; self.sourceBundleID = sourceBundleID; self.from = from; self.until = until
+        self.categoryIDs = categoryIDs; self.sourceBundleID = sourceBundleID; self.from = from; self.until = until; self.sort = sort
     }
     public var signature: String {
-        let values = [literal, String(favoritesOnly), kind?.rawValue ?? "", categoryIDs.sorted().joined(separator: ","), sourceBundleID ?? "", String(from ?? Int64.min), String(until ?? Int64.max)]
+        var values = [literal, String(favoritesOnly), kind?.rawValue ?? "", categoryIDs.sorted().joined(separator: ","), sourceBundleID ?? "", String(from ?? Int64.min), String(until ?? Int64.max)]
+        if sort != .recentDesc { values.append(sort.rawValue) }
         return ContentFingerprint.hash((try? JSONEncoder().encode(values)) ?? Data())
     }
 }
-public struct SearchPage: Sendable { public var queryID: UUID; public var revision: Int64; public var items: [ClipSummary]; public var next: SearchCursor? }
+public struct SearchPage: Sendable {
+    public var queryID: UUID; public var revision: Int64; public var items: [ClipSummary]; public var next: SearchCursor?
+    /// 仅countTotal且无游标的请求返回，与本页同一快照，by AI.Coding。
+    public var total: Int? = nil
+}
 public enum HistoryChange: Sendable, Equatable {
     case favorite(ClipID, Bool), favorites([ClipID], Bool), delete([ClipID]), clearOrdinary, retention(Int), quota(Int64)
     case category([ClipID], String, Bool), deleteCategory(String)

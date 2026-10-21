@@ -207,6 +207,11 @@ public struct HistoryView: View {
         switch state { case "正常": "正在监控"; case "用户暂停": "已停止监控"; case "定时暂停": "已定时停止监控"; case "正在暂停": "正在停止监控"; case "容量已满": "容量已满，新内容未记录"; default: state }
     }
     /// 类型符号在工具栏与卡片共用。
+    /// 列表与队列显示名：自定义名称，否则正文首行，否则类型名，by AI.Coding。
+    static func displayTitle(_ item: ClipSummary) -> String { item.title ?? item.preview.split(whereSeparator: \.isNewline).first.map(String.init) ?? kindName(item.kind) }
+    static func sourceDescription(_ source: SourceAttribution) -> String {
+        "\(source.name) · \(source.basis == "frontmost" ? "复制时前台应用推断" : source.basis == "declared" ? "应用声明" : "来源未知")"
+    }
     static func kindSymbol(_ kind: ClipKind) -> String { switch kind { case .text: "text.alignleft"; case .url: "link"; case .image: "photo"; case .file: "doc.on.doc"; case .mixed: "square.stack" } }
     /// 类型名称与新增文件筛选保持一致。
     public static func kindName(_ kind: ClipKind) -> String { switch kind { case .text: "文本"; case .url: "链接"; case .image: "图片"; case .file: "文件"; case .mixed: "混合" } }
@@ -580,6 +585,7 @@ private struct HistoryMoreMenu: View {
             Button(model.settings.hideContents ? "显示内容" : "隐藏内容") { model.updateSettings { $0.hideContents.toggle() } }
             Button("撤销删除 · ⌘Z") { model.undoDeletion() }.disabled(!model.canUndoDeletion)
             Divider()
+            Button("历史管理… · ⌥⌘H") { model.openHistoryManager?([]) }
             Button("设置… · ⌘,") { model.openSettings?() }
             Button("清空普通历史…", role: .destructive) { model.change(.clearOrdinary) }
             Divider(); Button("退出 LocalClip") { model.quitApplication?() }.keyboardShortcut("q", modifiers: .command)
@@ -1072,6 +1078,7 @@ struct ClipCard: View, Equatable {
                 Button("预览") { model.preview(id: item.id) }.keyboardShortcut(.space, modifiers: [])
                 // 显式详情入口同步完成选择，再开启目标详情。
                 Button("详情") { model.showDetail(id: item.id) }.keyboardShortcut("i", modifiers: .command)
+                Button("在历史管理中显示") { model.openHistoryManager?(model.selectedIDs.contains(item.id) ? model.orderedSelection : [item.id]) }
                 Menu("定位") {
                     Button("在历史中定位") { model.select(item.id); model.jumpToHistory() }.keyboardShortcut("g", modifiers: .command)
                     if !categories.isEmpty {
@@ -1252,7 +1259,7 @@ struct ClipCard: View, Equatable {
     private var symbol: String { code ? "chevron.left.forwardslash.chevron.right" : HistoryView.kindSymbol(item.kind) }
 }
 // 复制时间只按分钟更新，紧凑卡片不被秒数长文本挤压，by AI.Coding。
-private struct CopyAge: View {
+struct CopyAge: View {
     let copiedAt: Instant
     var body: some View {
         TimelineView(.periodic(from: .now, by: 60)) { context in
@@ -1260,7 +1267,7 @@ private struct CopyAge: View {
         }
     }
     /// 相对时间使用单个最大单位，保持标题区域稳定。
-    private static func label(seconds: Int) -> String {
+    static func label(seconds: Int) -> String {
         if seconds < 60 { return "刚刚" }
         if seconds < 3600 { return "\(seconds / 60)分钟前" }
         if seconds < 86400 { return "\(seconds / 3600)小时前" }
@@ -1282,28 +1289,16 @@ struct ClipInspector: View {
             if let detail = model.detail {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(detail.summary.title ?? HistoryView.kindName(detail.summary.kind)).font(.system(size: 17, weight: .semibold)).lineLimit(1)
-                    Text("\(detail.summary.source.name) · \(detail.summary.source.basis == "frontmost" ? "复制时前台应用推断" : detail.summary.source.basis == "declared" ? "应用声明" : "来源未知")")
+                    Text(HistoryView.sourceDescription(detail.summary.source))
                         .font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
                 // 中间信息区封顶，超出在区内滚动；标题与操作按钮始终可见，弹窗不随识别行数无限增高，by AI.Coding。
                 ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
-                preview(detail)
+                ClipDetailPreview(detail: detail, image: model.image, text: model.richPreview, highlight: model.detailHighlight, interactive: !model.settings.hideContents)
                 if let inspection = model.detailInspection, !model.settings.hideContents { InspectionSection(model: model, detail: detail, inspection: inspection) }
                 if !model.previewMessage.isEmpty { Text(model.previewMessage).font(.caption).foregroundStyle(.secondary) }
-                // 正文优先：大小/复制/格式默认折叠；影响结果的说明仍在下方就地可见，by AI.Coding。
-                DisclosureGroup("记录信息") {
-                    Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 5) {
-                        row("大小", "\(detail.payload.items.count) 项 · \(HistoryViewModel.bytes(detail.payload.byteCount))")
-                        row("复制", "\(detail.summary.copyCount) 次 · 最近 \(Date(timeIntervalSince1970: Double(detail.summary.lastCopiedAt)/1000).formatted(date: .abbreviated, time: .shortened))")
-                        row("格式", detail.payload.items.flatMap { $0.representations.map(\.type) }.sorted().joined(separator: ", "))
-                    }.padding(.top, 4)
-                }.font(.caption)
-                let notes = (detail.summary.kind == .file ? ["保存的是文件引用，未备份文件本体；移动或删除原件后请重新复制。Finder中双击会复制副本到当前实际文件夹，同名冲突会停止，不覆盖已有文件。"] : [])
-                    + (detail.payload.items.contains(where: { !Set($0.declaredTypes).subtracting(SupportedType.all).isEmpty }) ? ["仅保留支持格式，附加私有格式未保存"] : [])
-                if !notes.isEmpty {
-                    Label(notes.joined(separator: "\n"), systemImage: "info.circle").font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                }
+                ClipRecordInfo(detail: detail)
                 }.frame(maxWidth: .infinity, alignment: .leading)
                 }.scrollBounceBehavior(.basedOnSize)
                     .frame(maxHeight: usesTextLayout ? .infinity : Self.maxInfoHeight)
@@ -1337,14 +1332,29 @@ struct ClipInspector: View {
             .frame(width: ClipContentLayout.size.width, height: usesTextLayout ? ClipContentLayout.size.height : nil, alignment: .topLeading)
             .presentationBackground(Color(nsColor: .windowBackgroundColor))
     }
-    /// 预览放入浅底圆角容器；文件显示图标、名称与所在文件夹，不把路径当代码高亮，by AI.Coding。
-    @ViewBuilder private func preview(_ detail: ClipDetail) -> some View {
+    /// 主按钮沿用面板蓝色胶囊，次按钮沿用工具栏标签胶囊，by AI.Coding。
+    @ViewBuilder private func copyButton(_ title: String, _ format: OutputFormat, enabled: Bool) -> some View {
+        if model.settings.defaultFormat == format {
+            Button { model.perform(format, action: .copy) } label: {
+                Text(title).font(.system(size: LCStyle.FontSize.body, weight: .semibold)).foregroundStyle(.white).padding(.horizontal, 14).frame(height: 28)
+                    .background(Color.accentColor, in: RoundedRectangle(cornerRadius: LCStyle.Radius.control)).contentShape(Capsule())
+            }.buttonStyle(.plain).disabled(!enabled).opacity(enabled ? 1 : 0.45)
+        } else { Button(title) { model.perform(format, action: .copy) }.buttonStyle(ToolbarTabStyle(selected: true)).disabled(!enabled) }
+    }
+}
+/// 详情预览放入浅底圆角容器；文件显示图标、名称与所在文件夹，不把路径当代码高亮。面板详情与历史管理检查器共用，by AI.Coding。
+struct ClipDetailPreview: View {
+    let detail: ClipDetail
+    let image: NSImage?
+    let text: NSAttributedString?
+    let highlight: SyntaxHighlight?
+    let interactive: Bool
+    var body: some View {
         let urls = detail.summary.kind == .file ? detail.payload.fileURLs ?? [] : []
-        let text = model.richPreview
-        if model.image != nil || !urls.isEmpty || text != nil {
+        if image != nil || !urls.isEmpty || text != nil {
             VStack(alignment: .leading, spacing: 10) {
-                if let image = model.image {
-                    LiveTextImage(image: image, interactive: !model.settings.hideContents)
+                if let image {
+                    LiveTextImage(image: image, interactive: interactive)
                         .aspectRatio(image.size.width > 0 && image.size.height > 0 ? image.size : CGSize(width: 1, height: 1), contentMode: .fit)
                         .frame(maxWidth: .infinity, maxHeight: text == nil ? 220 : 150).clipShape(RoundedRectangle(cornerRadius: 6))
                 }
@@ -1360,11 +1370,29 @@ struct ClipInspector: View {
                 if urls.count > 4 { Text("另有 \(urls.count - 4) 个文件").font(.caption).foregroundStyle(.secondary) }
                 if let text {
                     // LC-F01：高度计算只测量短文，长文直接使用滚动视口；传入预览的全文保持不变，by AI.Coding。
-                    SyntaxDetailPreview(content: text, highlight: model.detailHighlight)
+                    SyntaxDetailPreview(content: text, highlight: highlight)
                 }
             }.padding(10).frame(maxWidth: .infinity, alignment: .leading)
                 .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 10))
                 .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.primary.opacity(0.06)))
+        }
+    }
+}
+/// 正文优先：大小/复制/格式默认折叠；影响结果的说明仍在下方就地可见。面板详情与历史管理检查器共用，by AI.Coding。
+struct ClipRecordInfo: View {
+    let detail: ClipDetail
+    var body: some View {
+        DisclosureGroup("记录信息") {
+            Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 5) {
+                row("大小", "\(detail.payload.items.count) 项 · \(HistoryViewModel.bytes(detail.payload.byteCount))")
+                row("复制", "\(detail.summary.copyCount) 次 · 最近 \(Date(timeIntervalSince1970: Double(detail.summary.lastCopiedAt)/1000).formatted(date: .abbreviated, time: .shortened))")
+                row("格式", detail.payload.items.flatMap { $0.representations.map(\.type) }.sorted().joined(separator: ", "))
+            }.padding(.top, 4)
+        }.font(.caption)
+        let notes = (detail.summary.kind == .file ? ["保存的是文件引用，未备份文件本体；移动或删除原件后请重新复制。Finder中双击会复制副本到当前实际文件夹，同名冲突会停止，不覆盖已有文件。"] : [])
+            + (detail.payload.items.contains(where: { !Set($0.declaredTypes).subtracting(SupportedType.all).isEmpty }) ? ["仅保留支持格式，附加私有格式未保存"] : [])
+        if !notes.isEmpty {
+            Label(notes.joined(separator: "\n"), systemImage: "info.circle").font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
     }
     private func row(_ label: String, _ value: String) -> some View {
@@ -1372,15 +1400,6 @@ struct ClipInspector: View {
             Text(label).foregroundStyle(.secondary).gridColumnAlignment(.trailing)
             Text(value).lineLimit(2).truncationMode(.middle).textSelection(.enabled)
         }
-    }
-    /// 主按钮沿用面板蓝色胶囊，次按钮沿用工具栏标签胶囊，by AI.Coding。
-    @ViewBuilder private func copyButton(_ title: String, _ format: OutputFormat, enabled: Bool) -> some View {
-        if model.settings.defaultFormat == format {
-            Button { model.perform(format, action: .copy) } label: {
-                Text(title).font(.system(size: LCStyle.FontSize.body, weight: .semibold)).foregroundStyle(.white).padding(.horizontal, 14).frame(height: 28)
-                    .background(Color.accentColor, in: RoundedRectangle(cornerRadius: LCStyle.Radius.control)).contentShape(Capsule())
-            }.buttonStyle(.plain).disabled(!enabled).opacity(enabled ? 1 : 0.45)
-        } else { Button(title) { model.perform(format, action: .copy) }.buttonStyle(ToolbarTabStyle(selected: true)).disabled(!enabled) }
     }
 }
 // 筛选按来源/日期/分类分组，与设置同一原生分组表单样式，by AI.Coding。

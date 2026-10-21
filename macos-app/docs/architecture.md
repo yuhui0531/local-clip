@@ -35,6 +35,14 @@
 - Enter：直接粘贴（`defaultAction`，可在设置改为仅复制）；⌘C 仅复制；Shift+Enter 纯文本粘贴；双击正文粘贴。
 - 再次打开应用：同版本只显示历史面板；磁盘上的安装版本变化时才启动新实例接替旧进程。
 
+## 历史管理窗口
+
+- **入口**：菜单栏「历史管理… ⌥⌘H」、面板「更多 › 历史管理…」与面板内 ⌥⌘H、卡片右键「在历史管理中显示」（打开并选中所选记录）。
+- **结构**：`HistoryManagerWindow`（`NSWindow` + `NSHostingController`，桥接工具栏与标题，尺寸位置自动记忆，最小 900×560）承载 `HistoryManagerView`（侧栏 | 表格 | 检查器）。打开时切到常规应用出现在 Dock/⌘Tab，关闭时恢复原激活策略并释放模型与事件订阅。共享屏幕排除设置同样作用于该窗口。
+- **状态**：`HistoryManagerModel` 自有查询、页码与选择，不改动面板状态；按 `SearchRequest.offset` + `countTotal` 按页码取页（每页 100 时分两次取 50），删除后页码越界回到最后一页；订阅 `store.events()` 刷新。搜索框沿用面板前缀语法（`SearchQueryParser`）。
+- **写入**：收藏、分类、删除都走 `HistoryViewModel.commit`（预览 → 按存储规则确认附页 → 提交），删除可在提示条或 ⌘Z 撤销；重命名、编辑内容直接调用存储接口。只复制，不直接粘贴。
+- **按键**：由 `AppDelegate` 本地监视器转交 `HistoryManagerModel.handleKey`；文字编辑、输入法组字与附页期间一律交还系统。
+
 ## 性能基线（M2 Max，Release，3000 条 / 261 MiB）
 
 | 指标 | 值 |
