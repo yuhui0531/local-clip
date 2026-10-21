@@ -10,7 +10,7 @@ import LocalClipCore
     var draggingDestinationWindow: NSWindow?
     var draggingLocation: NSPoint
     let draggingPasteboard: NSPasteboard
-    var draggingSourceOperationMask: NSDragOperation { .copy }
+    var draggingSourceOperationMask: NSDragOperation = .copy
     var draggedImageLocation: NSPoint = .zero
     nonisolated var draggedImage: NSImage? { nil }
     var draggingSource: Any? { nil }
@@ -149,4 +149,85 @@ import LocalClipCore
         #expect(host.draggingEntered(info).isEmpty); #expect(!host.performDragOperation(info))
         #expect(try await store.search(.init()).revision == beforeCancellation)
     }
+    /// 隐藏窗口中经过实际托管路由排序；拒绝外部令牌、重复认领和换范围后的旧拖动。
+    @Test func cardReorderingThroughHostingDestination() async throws {
+        _ = NSApplication.shared
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try HistoryStore(location: root)
+        for index in 0..<5 {
+            _ = try await store.ingest(.init(payload: .init([.init([.init(SupportedType.string, Data("reorder-route-\(index)".utf8))])])), at: SystemClock().now() + Int64(index))
+        }
+        let board = MacPasteboardClient(access: RawBoard()), capture = CaptureCoordinator(board: board, store: store)
+        let model = HistoryViewModel(store: store, capture: capture, paste: PasteCoordinator(board: board, applications: FakeApplications(), store: store, capture: capture), derived: DerivedContentService(store: store))
+        try await model.start(); capture.stop()
+        func wait(_ predicate: () -> Bool) async throws {
+            let until = ContinuousClock.now + .seconds(5)
+            while !predicate(), ContinuousClock.now < until { try await Task.sleep(for: .milliseconds(5)) }
+            #expect(predicate())
+        }
+        try await wait { !model.historyBusy && model.items.count == 5 }
+        let original = model.items.map(\.id)
+        let host = CategoryDropHostingView(rootView: HistoryView(model: model), model: model); host.sizingOptions = []
+        let window = NSPanel(contentRect: .init(x: 0, y: 0, width: 1600, height: 340), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false; window.contentView = host
+        defer { window.contentView = nil; window.close() }
+        window.contentView?.layoutSubtreeIfNeeded()
+        try await Task.sleep(for: .milliseconds(100))
+        let target = try #require(HistoryDragBridge.DragView.view(for: original[0]))
+        let point = target.convert(.init(x: target.bounds.width * 0.25, y: target.bounds.midY), to: nil)
+        let privateBoard = NSPasteboard(name: .init("local.localclip.reorder." + UUID().uuidString))
+        defer { privateBoard.releaseGlobally() }
+        let info = RoutingDragInfo(window: window, point: point, board: privateBoard)
+        info.draggingSourceOperationMask = [.copy, .move]
+        // 缩窄隐藏视口，在来源卡片仍占据右边缘时也应推进滚动，而不是因自身不可投放而卡住。
+        window.setContentSize(.init(width: 900, height: 340)); window.contentView?.layoutSubtreeIfNeeded()
+        try await Task.sleep(for: .milliseconds(100))
+        let scroll = try #require(target.enclosingScrollView), clip = scroll.contentView
+        let edge = clip.convert(.init(x: clip.bounds.maxX - 4, y: clip.bounds.midY), to: nil)
+        let edgeCard = try #require(HistoryDragBridge.DragView.dropTarget(at: edge, in: window, model: model))
+        let edgeToken = model.prepareDrag(edgeCard.view.id)
+        privateBoard.setData(Data(edgeToken.utf8), forType: .init(HistoryViewModel.categoryDragType))
+        info.draggingLocation = edge
+        let beforeEdge = clip.bounds.minX
+        _ = host.draggingUpdated(info)
+        #expect(clip.bounds.minX > beforeEdge)
+        host.draggingExited(info); model.finishDrag(cancelled: true)
+        clip.scroll(to: .zero); scroll.reflectScrolledClipView(clip)
+        window.setContentSize(.init(width: 1600, height: 340)); window.contentView?.layoutSubtreeIfNeeded()
+        try await Task.sleep(for: .milliseconds(100))
+        info.draggingLocation = target.convert(.init(x: target.bounds.width * 0.25, y: target.bounds.midY), to: nil)
+        let token = model.prepareDrag(original[3])
+        privateBoard.setData(Data(UUID().uuidString.utf8), forType: .init(HistoryViewModel.categoryDragType))
+        #expect(host.draggingEntered(info).isEmpty)
+        privateBoard.setData(Data(token.utf8), forType: .init(HistoryViewModel.categoryDragType))
+        #expect(host.draggingEntered(info) == .move)
+        #expect(host.prepareForDragOperation(info)); #expect(host.performDragOperation(info))
+        #expect(!host.performDragOperation(info))
+        model.finishDrag(cancelled: false)
+        try await wait { !model.historyBusy && !model.reorderingCards && model.items.first?.id == original[3] }
+        #expect(model.items.map(\.id) == [original[3], original[0], original[1], original[2], original[4]])
+        #expect(model.selectedID == original[3])
+        let reopened = try HistoryStore(location: root)
+        #expect(try await reopened.search(.init(sort: .manual)).items.map(\.id) == model.items.map(\.id))
+        // 多选在同一会话内保持当前先后顺序，一次认领后整批插在目标后方。
+        window.contentView?.layoutSubtreeIfNeeded()
+        let tail = try #require(HistoryDragBridge.DragView.view(for: original[4]))
+        info.draggingLocation = tail.convert(.init(x: tail.bounds.width * 0.75, y: tail.bounds.midY), to: nil)
+        model.choose(original[0], modifiers: []); model.choose(original[1], modifiers: .command)
+        let multi = model.prepareDrag(original[0])
+        privateBoard.setData(Data(multi.utf8), forType: .init(HistoryViewModel.categoryDragType))
+        #expect(host.draggingEntered(info) == .move); #expect(host.performDragOperation(info))
+        model.finishDrag(cancelled: false)
+        try await wait { !model.historyBusy && !model.reorderingCards && model.items.last?.id == original[1] }
+        #expect(model.items.map(\.id) == [original[3], original[2], original[4], original[0], original[1]])
+        #expect(model.selectedIDs == Set([original[0], original[1]]))
+        #expect(model.listState.snapshot.reorderRevision >= 2)
+        let cancelled = model.prepareDrag(original[4])
+        model.query = "different scope"
+        #expect(!model.canReorderCards(cancelled, relativeTo: original[0]))
+        model.finishDrag(cancelled: true)
+        #expect(!host.prepareForDragOperation(info))
+    }
+
 }

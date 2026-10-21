@@ -68,6 +68,22 @@ struct HistoryScrollMetrics: Equatable {
     @MainActor final class State {
         fileprivate var metrics = HistoryScrollMetrics()
         fileprivate var pendingOffset: CGFloat?
+        /// 普通滚轮统一按主轴平滑横移；触控板横向保留系统惯性，纵向映射保持逐像素跟手，by AI.Coding。
+        func targetOffset(horizontal: CGFloat, vertical: CGFloat, precise: Bool) -> CGFloat? {
+            guard horizontal.isFinite, vertical.isFinite else { return nil }
+            let horizontalDominates = abs(horizontal) >= abs(vertical)
+            if precise && horizontalDominates {
+                pendingOffset = nil
+                return nil
+            }
+            let delta = horizontalDominates ? horizontal : vertical
+            guard delta != 0, metrics.maximum > 0 else { return nil }
+            // 尚未绘制的连续输入累加到请求位置，反向滚动也从当前目标接续，避免丢步或来回跳动。
+            let next = min(metrics.maximum, max(0, (pendingOffset ?? metrics.offset) - delta * (precise ? 1 : 36)))
+            pendingOffset = next
+            return next
+        }
+
         /// 已完整可见的选中卡片不再次滚动，避免连续方向键制造重叠滚动动画。
         func needsReveal(index: Int, cardWidth: CGFloat) -> Bool {
             guard metrics.viewport > 0 else { return false }
@@ -96,7 +112,7 @@ struct HistoryScrollMetrics: Equatable {
 
         init(state: State) { self.state = state }
 
-        /// 只消费当前历史区域内的垂直滚轮；横向手势保留系统惯性/自然滚动。
+        /// 仅接管当前历史区域内需要平滑或转向的滚轮；触控板横向手势保留系统惯性，by AI.Coding。
         func attach(to view: NSView) {
             region = view
             monitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel, .leftMouseDown]) { [weak self] event in
@@ -108,16 +124,7 @@ struct HistoryScrollMetrics: Equatable {
                     return event
                 }
                 guard event.modifierFlags.intersection([.command, .control, .option]).isEmpty else { return event }
-                let x = event.scrollingDeltaX, y = event.scrollingDeltaY
-                if abs(x) >= abs(y) {
-                    self.state.pendingOffset = nil
-                    return event
-                }
-                guard y.isFinite, self.state.metrics.maximum > 0 else { return event }
-                // 系统delta已包含自然滚动方向；普通离散滚轮按行放大，触控板按精确像素移动。
-                let scale: CGFloat = event.hasPreciseScrollingDeltas ? 1 : 36
-                let next = min(self.state.metrics.maximum, max(0, (self.state.pendingOffset ?? self.state.metrics.offset) - y * scale))
-                self.state.pendingOffset = next
+                guard let next = self.state.targetOffset(horizontal: event.scrollingDeltaX, vertical: event.scrollingDeltaY, precise: event.hasPreciseScrollingDeltas) else { return event }
                 // 离散滚轮短动画平滑跳格；触控板沿用逐像素即时跟随，by AI.Coding。
                 if event.hasPreciseScrollingDeltas || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion { self.onScroll?(next) }
                 else { withAnimation(.smooth(duration: 0.15)) { self.onScroll?(next) } }

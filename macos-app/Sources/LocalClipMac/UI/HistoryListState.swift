@@ -54,6 +54,8 @@ import LocalClipCore
         var scrollRestoration: HistoryViewModel.ScrollRestoration?
         /// 新查询替换整个列表时递增；滚动区据此重建身份。
         var scrollEpoch = 0
+        /// 只为一次成功拖放的列表发布启用短位移动画，by AI.Coding。
+        var reorderRevision = 0
     }
     @Published private(set) var snapshot = Snapshot()
     let footerState = HistoryFooterState()

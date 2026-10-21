@@ -437,14 +437,17 @@ private struct ManagerDetail: View {
     let row: ClipSummary
     let content: ClipDetailContent
     @State private var draft = HistoryManagerModel.NameDraft(nil)
+    /// 自动生成的名称同样是可读标题，占位提示与已保存名称均使用正文颜色，by AI.Coding。
     var body: some View {
         let detail = content.detail
         let urls = row.kind == .file ? detail.payload.fileURLs ?? [] : []
         let hasOCR = row.kind == .image || row.kind == .mixed || urls.contains { ClipboardPayload.isImageFile($0.path) }
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 6) {
-                TextField(NameCell.title(row), text: $draft.text)
+                // 未命名记录以预览作提示，显式指定颜色，避免系统将名称渲染成浅灰占位文字。
+                TextField(NameCell.title(row), text: $draft.text, prompt: Text(NameCell.title(row)).foregroundStyle(.primary))
                     .textFieldStyle(.plain).font(.system(size: LCStyle.FontSize.heading, weight: .semibold))
+                    .foregroundStyle(.primary)
                     .onSubmit {
                         guard let name = draft.submit(current: row.title) else { return }
                         Task { await model.rename(row.id, name); draft.finished(name) }

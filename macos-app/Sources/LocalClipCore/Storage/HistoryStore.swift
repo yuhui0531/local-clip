@@ -52,11 +52,13 @@ public actor HistoryStore: HistoryRepository {
         if FileManager.default.fileExists(atPath: strategy.databaseURL.path) {
             // 读写打开让SQLite回滚崩溃遗留的热日志；只读取版本，高版本库不被修改。
             let db = try SQLiteConnection(strategy.databaseURL)
-            // 仅支持v5；版本不兼容保留原库，按迁移/恢复契约使用匹配版本或完整快照，by AI.Coding。
-            guard try db.scalarInt("PRAGMA user_version") == Schema.version else { try db.close(); throw StoreError.incompatibleSchema }
+            // v5只允许已知的原子升级路径；更高或未知版本在任何写入前拒绝，by AI.Coding。
+            let version = try db.scalarInt("PRAGMA user_version")
+            guard version == 5 || version == Schema.version else { try db.close(); throw StoreError.incompatibleSchema }
             guard try db.scalarText("PRAGMA quick_check") == "ok", try db.rows("PRAGMA foreign_key_check").isEmpty else { throw StoreError.corruptPayload }
             let hasImageText = try db.scalarInt("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='image_text'") == 1
             try db.close()
+            if version == 5 { try strategy.commit(quota: .max, allowOverQuota: true) { try Schema.migrateV5($0) } }
             // 同版本旧库只在单一事务内补建空派生表，不改动已有表与数据；失败回滚，原库保持可用。
             if hasImageText { imageTextReady = true }
             else {
@@ -272,6 +274,7 @@ public actor HistoryStore: HistoryRepository {
                 } else {
                     try db.run("UPDATE clips SET lastCopiedAtMs=?,copyCount=copyCount+1,sourceBundleID=?,sourceName=?,sourceBasis=? WHERE id=?", [
                         .integer(at), snapshot.source.bundleID.map(SQLValue.text) ?? .null, .text(snapshot.source.name), .text(snapshot.source.basis), .text(id)])
+                    try prependHistoryItems([id], db: db)
                     // 有效用户再次复制在每个归属分类置前；分类排序不能遮住最新复制，by AI.Coding。
                     for row in try db.rows("SELECT categoryID FROM clip_categories WHERE clipID=?", [.text(id)]) {
                         try prependCategoryItems([id], categoryID: row.text("categoryID"), db: db)
@@ -287,6 +290,7 @@ public actor HistoryStore: HistoryRepository {
                 try db.run("INSERT INTO clips(id,contentHash,firstCopiedAtMs,lastCopiedAtMs,copyCount,kind,isFavorite,sourceBundleID,sourceName,sourceBasis,previewText) VALUES(?,?,?,?,?,?,?,?,?,?,?)", [.text(id), .text(hash), .integer(at), .integer(at), .integer(1),
                     .text(payload.kind.rawValue), .integer(0), snapshot.source.bundleID.map(SQLValue.text) ?? .null,
                     .text(snapshot.source.name), .text(snapshot.source.basis), .text(String(text.prefix(180)))])
+                try prependHistoryItems([id], db: db)
                 for (index, item) in payload.items.enumerated() {
                     let declared = String(decoding: try JSONEncoder().encode(item.declaredTypes), as: UTF8.self)
                     try db.run("INSERT INTO items VALUES(?,?,?)", [.text(id), .integer(Int64(index)), .text(declared)])
@@ -325,6 +329,7 @@ public actor HistoryStore: HistoryRepository {
                     categoryItems[row.text("categoryID"), default: []].append(id)
                 }
             }
+            try prependHistoryItems(ids.filter { seen.remove($0) != nil }, db: db)
             for (categoryID, orderedIDs) in categoryItems {
                 try prependCategoryItems(orderedIDs, categoryID: categoryID, db: db)
             }
@@ -398,10 +403,18 @@ public actor HistoryStore: HistoryRepository {
     }
     /// 浏览顺序（无检索词、最近复制优先、非单分类人工顺序）中给定记录的最小起始位置；不符合条件的记录忽略，by AI.Coding。
     public func firstOffset(of ids: Set<ClipID>, in request: SearchRequest) throws -> Int? {
-        guard SearchNormalizer.normalize(request.literal).isEmpty, request.sort == .recentDesc, request.categoryIDs.count != 1 else { return nil }
+        guard SearchNormalizer.normalize(request.literal).isEmpty, [.recentDesc, .manual].contains(request.sort), request.categoryIDs.count != 1 else { return nil }
         let (condition, filters, _) = searchCondition(request, settings: try settings(), at: clock.now())
         return try strategy.read { db in
-            try ids.compactMap { id -> Int? in
+            // 手动视图定位按持久位置计算，不能再用复制时间推算分页偏移。
+            if request.sort == .manual {
+                return try ids.compactMap { id -> Int? in
+                    guard let row = try db.rows("SELECT manualPosition FROM clips WHERE " + condition + " AND id=?", filters + [.text(id)]).first else { return nil }
+                    let position = row.int("manualPosition")
+                    return Int(try db.scalarInt("SELECT COUNT(*) FROM clips WHERE " + condition + " AND (manualPosition<? OR (manualPosition=? AND id<?))", filters + [.integer(position), .integer(position), .text(id)]))
+                }.min()
+            }
+            return try ids.compactMap { id -> Int? in
                 guard let row = try db.rows("SELECT lastCopiedAtMs FROM clips WHERE " + condition + " AND id=?", filters + [.text(id)]).first else { return nil }
                 let at = row.int("lastCopiedAtMs")
                 return Int(try db.scalarInt("SELECT COUNT(*) FROM clips WHERE " + condition + " AND (lastCopiedAtMs>? OR (lastCopiedAtMs=? AND id<?))", filters + [.integer(at), .integer(at), .text(id)]))
@@ -602,7 +615,7 @@ public actor HistoryStore: HistoryRepository {
             let countsTotal = request.countTotal && request.cursor == nil
             if needle.isEmpty {
                 // 多取一行判断下一页，普通浏览不再为每页额外统计全库，顺序/版本身份不变，by AI.Coding。
-                let orderParams: [SQLValue] = (request.sort == .recentDesc && request.categoryIDs.count == 1) ? [.text(request.categoryIDs.first!)] : []
+                let orderParams: [SQLValue] = ([.recentDesc, .manual].contains(request.sort) && request.categoryIDs.count == 1) ? [.text(request.categoryIDs.first!)] : []
                 let rows = try db.rows("SELECT *, (\(protectedSQL)) AS isProtected FROM clips WHERE " + condition + " ORDER BY " + order + " LIMIT ? OFFSET ?", filters + orderParams + [.integer(Int64(size + 1)), .integer(Int64(offset))])
                 if rows.isEmpty && offset > 0 {
                     guard offset <= Int(try db.scalarInt("SELECT COUNT(*) FROM clips WHERE " + condition, filters)) else { throw StoreError.invalidCursor }
@@ -623,6 +636,9 @@ public actor HistoryStore: HistoryRepository {
             let matchOrder: String
             let pageOrder: String
             switch request.sort {
+            case .manual:
+                matchOrder = "matchRank,sortPosition,id"
+                pageOrder = "page.matchRank,page.sortPosition,page.id"
             case .recentDesc:
                 matchOrder = "matchRank,lastCopiedAtMs DESC,id"
                 pageOrder = "page.matchRank,page.lastCopiedAtMs DESC,page.id"
@@ -636,6 +652,9 @@ public actor HistoryStore: HistoryRepository {
                 matchOrder = "matchRank,firstCopiedAtMs DESC,id"
                 pageOrder = "page.matchRank,page.firstCopiedAtMs DESC,page.id"
             }
+            // 单分类检索沿用该分类人工位置；全局及并集使用全局位置，不改变匹配排名。
+            let manualCategory = request.sort == .manual && request.categoryIDs.count == 1 ? request.categoryIDs.first : nil
+            let positionSQL = manualCategory == nil ? "clips.manualPosition" : "(SELECT position FROM clip_categories WHERE clipID=clips.id AND categoryID=?2)"
             // 仅第一页需要候选缓存；候选JSON只随首行返回，by AI.Coding。
             let collectCandidates = request.cursor == nil && includeMatchContext
             let candidateProjection = collectCandidates ? "CASE WHEN page.id IS (SELECT id FROM page ORDER BY \(matchOrder) LIMIT 1) THEN (SELECT candidateIDs FROM candidate_ids) END" : "NULL"
@@ -643,6 +662,7 @@ public actor HistoryStore: HistoryRepository {
             let sql = """
             WITH matches AS MATERIALIZED (
                 SELECT clips.id, clips.lastCopiedAtMs, clips.copyCount, clips.firstCopiedAtMs,
+                \(positionSQL) AS sortPosition,
                 -- 自定义名称命中与正文开头同级；正文排名规则不变，by AI.Coding。
                 MIN(CASE WHEN instr(normalizedTitle,?1)>0 THEN 1 ELSE 4 END, clip_literal_rank(
                     (SELECT CAST(group_concat(normalizedText,char(10)) AS BLOB)
@@ -664,7 +684,7 @@ public actor HistoryStore: HistoryRepository {
               LEFT JOIN clips ON clips.id=page.id
               ORDER BY \(pageOrder)
             """
-            let rows = try db.rows(sql, [.text(needle)] + filters + [.integer(Int64(size + 1)), .integer(Int64(offset))])
+            let rows = try db.rows(sql, [.text(needle)] + (manualCategory.map { [.text($0)] } ?? []) + filters + [.integer(Int64(size + 1)), .integer(Int64(offset))])
             let candidateJSON = rows.first?.text("candidateIDs") ?? ""
             let candidateIDs = candidateJSON.isEmpty ? nil : try JSONDecoder().decode([ClipID].self, from: Data(candidateJSON.utf8))
             #if DEBUG
@@ -1096,6 +1116,8 @@ public actor HistoryStore: HistoryRepository {
         }
         let order: String
         switch request.sort {
+        case .manual:
+            order = request.categoryIDs.count == 1 ? "(SELECT position FROM clip_categories WHERE clipID=clips.id AND categoryID=?),id" : "manualPosition,id"
         case .recentDesc:
             order = request.categoryIDs.count == 1 ? "(SELECT position FROM clip_categories WHERE clipID=clips.id AND categoryID=?),id" : "lastCopiedAtMs DESC,id"
         case .recentAsc:
@@ -1106,6 +1128,53 @@ public actor HistoryStore: HistoryRepository {
             order = "firstCopiedAtMs DESC,id"
         }
         return (clauses.joined(separator: " AND "), values, order)
+    }
+    /// 新复制整批置前；撤销包的旧位置保留占位，避免删除头部后新记录与恢复记录同位。
+    private func prependHistoryItems(_ ids: [ClipID], db: SQLiteConnection) throws {
+        var minimum = try db.scalarInt("SELECT COALESCE(MIN(manualPosition),0) FROM clips")
+        if let packet = undoPacket, packet.expires > clock.now() {
+            for row in packet.tables["clips"] ?? [] { minimum = min(minimum, row.int("manualPosition")) }
+        }
+        for (index, id) in ids.enumerated() {
+            try db.run("UPDATE clips SET manualPosition=? WHERE id=?", [.integer(minimum - Int64(ids.count) + Int64(index)), .text(id)])
+        }
+    }
+    /// 按锚点移动一批记录；完整范围内计算位置，未加载页与筛选隐藏项不会丢失。
+    public func reorderItems(_ ids: [ClipID], categoryID: String?, relativeTo anchor: ClipID, after: Bool) throws {
+        var seen = Set<ClipID>()
+        let moving = ids.filter { seen.insert($0).inserted }
+        guard !moving.isEmpty, !seen.contains(anchor) else { return }
+        let settings = try settings(), at = clock.now()
+        // actor内无await，读取和提交之间不会插入其他写入；无效投放不推进版本。
+        let original = try strategy.read { db in
+            let condition = searchCondition(.init(categoryIDs: Set(categoryID.map { [$0] } ?? [])), settings: settings, at: at)
+            return try db.rows("SELECT id FROM clips WHERE " + condition.0 + " ORDER BY " + (categoryID == nil ? "manualPosition,id" : "(SELECT position FROM clip_categories WHERE clipID=clips.id AND categoryID=?),id"), condition.1 + (categoryID.map { [.text($0)] } ?? [])).map { $0.text("id") }
+        }
+        guard original.contains(anchor), seen.isSubset(of: Set(original)) else { throw StoreError.notFound }
+        var next = original.filter { !seen.contains($0) }
+        guard let index = next.firstIndex(of: anchor) else { return }
+        next.insert(contentsOf: moving, at: index + (after ? 1 : 0))
+        guard next != original else { return }
+        // 有效撤销记录继续占据原位置，重排其余记录时跳过占位，恢复不会因同位而依赖UUID排序。
+        let reserved: Set<Int64>
+        if let packet = undoPacket, packet.expires > clock.now() {
+            reserved = Set(categoryID.map { category in
+                (packet.tables["clip_categories"] ?? []).filter { $0.text("categoryID") == category }.map { $0.int("position") }
+            } ?? (packet.tables["clips"] ?? []).map { $0.int("manualPosition") })
+        } else { reserved = [] }
+        try mutate(quota: settings.quotaBytes) { db in
+            var position = try db.scalarInt(categoryID == nil ? "SELECT COALESCE(MIN(manualPosition),0) FROM clips" : "SELECT COALESCE(MIN(position),0) FROM clip_categories WHERE categoryID=?", categoryID.map { [.text($0)] } ?? [])
+            position = min(position, reserved.min() ?? position)
+            for id in next {
+                while reserved.contains(position) { position += 1 }
+                defer { position += 1 }
+                if let categoryID {
+                    try db.run("UPDATE clip_categories SET position=? WHERE categoryID=? AND clipID=?", [.integer(Int64(position)), .text(categoryID), .text(id)])
+                } else {
+                    try db.run("UPDATE clips SET manualPosition=? WHERE id=?", [.integer(Int64(position)), .text(id)])
+                }
+            }
+        }
     }
     /// 最新加入/重新拖入批次置前，只写本批归属，不重排整个分类或改变复制身份，by AI.Coding。
     private func prependCategoryItems(_ ids: [ClipID], categoryID: String, db: SQLiteConnection) throws {

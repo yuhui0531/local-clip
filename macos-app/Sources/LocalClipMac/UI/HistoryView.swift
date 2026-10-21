@@ -48,7 +48,7 @@ public struct HistoryView: View {
                         filterButton
                             .popover(isPresented: $model.showingFilters) { FilterEditor(model: model) }
                         HistoryMoreMenu(model: model, footer: model.listState.footerState)
-                        ToolbarIconButton(symbol: model.pinned ? "pin.fill" : "pin", tint: model.pinned ? .accentColor : nil, help: model.pinned ? "取消置顶" : "置顶（失焦不隐藏）", label: model.pinned ? "取消置顶" : "置顶") { model.pinned.toggle(); model.panelInteractionChanged?() }
+                        ToolbarIconButton(symbol: model.pinned ? "pin.fill" : "pin", iconSize: 12, tint: model.pinned ? .accentColor : nil, help: model.pinned ? "取消置顶" : "置顶（失焦不隐藏）", label: model.pinned ? "取消置顶" : "置顶") { model.pinned.toggle(); model.panelInteractionChanged?() }
                         ToolbarIconButton(symbol: "xmark", help: "关闭 · Esc") { model.closePanel?(true) }
                     }
                 }.padding(.horizontal, Self.cardInset).frame(height: Self.toolbarHeight)
@@ -296,6 +296,7 @@ private struct HistoryScroller: View {
     /// 列表就地刷新必须重算本视图，不能依赖父视图传入的值相等判断。
     @ObservedObject var list: HistoryListState
     let epoch: Int
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var scrollPosition = ScrollPosition(edge: .leading)
     @State private var scrollWheelState = HistoryScrollWheel.State()
     var body: some View {
@@ -320,7 +321,10 @@ private struct HistoryScroller: View {
                             }.frame(width: 130, height: strip.cardHeight)
                         }.buttonStyle(.plain)
                     }
-                }.padding(.horizontal, HistoryView.cardInset).padding(.vertical, HistoryView.cardVerticalPadding)
+                }
+                // 只动画化成功拖放的顺序变化，滚轮浏览仍直接跟手；尊重减少动态效果，by AI.Coding。
+                .animation(reduceMotion ? nil : .smooth(duration: 0.18), value: list.snapshot.reorderRevision)
+                .padding(.horizontal, HistoryView.cardInset).padding(.vertical, HistoryView.cardVerticalPadding)
                     .background(OverlayScrollerStyle())
             }.scrollIndicators(.visible)
                 .scrollPosition($scrollPosition)
@@ -1525,18 +1529,22 @@ private struct CardSlotStyle: ButtonStyle {
     }
 }
 /// 工具栏图标按钮：无圆圈SF Symbols、14pt次要色、统一28pt命中区与悬停底色，by AI.Coding。
-/// 操作图标用统一绘制框与字重，避免相同字号下符号大小、基线仍不同，by AI.Coding。
+/// 操作图标保留 SF Symbols 的原生光学比例，统一字号、字重与布局框，by AI.Coding。
 private struct HistoryActionSymbol: View {
     let symbol: String
     var size: CGFloat = LCStyle.FontSize.title
+    /// 不将符号拉伸填满方框，避免关闭图标偏大、更多图标的圆点偏小，by AI.Coding。
     var body: some View {
-        Image(systemName: symbol).resizable().scaledToFit()
-            .font(.system(size: size, weight: .medium)).symbolRenderingMode(.monochrome)
+        Image(systemName: symbol)
+            .font(.system(size: size, weight: .medium)).imageScale(.medium)
+            .symbolRenderingMode(.monochrome)
             .frame(width: size, height: size)
     }
 }
 struct ToolbarIconButton: View {
     let symbol: String
+    /// 细长符号可单独校正视觉尺寸，点击区域仍保持 28pt，by AI.Coding。
+    var iconSize: CGFloat = LCStyle.FontSize.title
     var tint: Color? = nil
     let help: String
     /// 朗读名称默认去掉提示中的“ · 快捷键”部分，by AI.Coding。
@@ -1546,7 +1554,7 @@ struct ToolbarIconButton: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body: some View {
         Button(action: action) {
-            HistoryActionSymbol(symbol: symbol)
+            HistoryActionSymbol(symbol: symbol, size: iconSize)
                 .foregroundStyle(tint ?? Color.secondary)
                 .frame(width: 28, height: 28)
                 // 选中态（置顶等）用强调色底，未选中只在悬停时显示浅底，by AI.Coding。

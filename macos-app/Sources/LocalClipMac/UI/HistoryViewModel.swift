@@ -588,7 +588,7 @@ import LocalClipCore
         let bounds = dateBounds
         return SearchRequest(parsed.literal, favorites: favorites || parsed.favorites, kind: parsed.kind ?? kind, cursor: cursor, queryID: queryID, pageSize: pageSize,
                              categoryIDs: parsed.categoryIDs.isEmpty ? activeCategories : parsed.categoryIDs, sourceBundleID: parsed.sourceBundleID ?? sourceFilter,
-                             from: parsed.from ?? (parsed.until == nil ? bounds?.0 : nil), until: parsed.until ?? (parsed.from == nil ? bounds?.1 : nil))
+                             from: parsed.from ?? (parsed.until == nil ? bounds?.0 : nil), until: parsed.until ?? (parsed.from == nil ? bounds?.1 : nil), sort: .manual)
     }
     /// app:前缀需要来源列表；面板未加载时按需读取一次，后续翻页沿用同一份，by AI.Coding。
     private var querySources: [SourceAttribution] { sourceSuggestions.isEmpty ? prefixSources : sourceSuggestions }
@@ -670,7 +670,7 @@ import LocalClipCore
                 var seen = Set<ClipID>()
                 let visible = window.items.filter { isVisible($0) && seen.insert($0.id).inserted }
                 // 新记录插入头部时保留正在浏览的卡片与卡内偏移，不用旧像素位置显示别的记录，by AI.Coding。
-                if preserveWindow, historyOffset > 0,
+                if preserveWindow, !cardReorderAnimationPending, historyOffset > 0,
                    let anchor = scrollAnchor, let index = visible.firstIndex(where: { $0.id == anchor.id }) {
                     let offset = max(0, HistoryView.cardInset + CGFloat(index) * historyStride + anchor.relative)
                     if abs(offset - historyOffset) > 0.5 { scrollRestoration = .init(offset: offset) }
@@ -682,6 +682,9 @@ import LocalClipCore
                         scrollAnchor = nil; historyOffset = 0
                         scrollRestoration = .init(offset: 0)
                         listState[\.scrollEpoch] += 1
+                    }
+                    if cardReorderAnimationPending {
+                        listState[\.reorderRevision] += 1; cardReorderAnimationPending = false
                     }
                     items = visible; cursor = window.cursor; loading = false; listState.queryStatus.update(failed: false)
                     if preserveWindow {
@@ -1242,13 +1245,15 @@ import LocalClipCore
                 select(nearest ?? items.first?.id)
             }
         }
-        dragSelection = nil; panelInteractionChanged?()
+        dragSelection = nil; dragQuerySignature = nil; panelInteractionChanged?()
         #if DEBUG
         GUIAcceptanceProbe.event(cancelled ? "drag-cancelled" : "drag-completed", self)
         #endif
     }
+    /// 准备原生拖动时冻结选择和查询身份，后续内部投放必须属于同一浏览范围，by AI.Coding。
     public func prepareDrag(_ clipID: ClipID) -> String {
         internalCategoryDrop = false
+        dragQuerySignature = currentSearchSignature
         if !selectedIDs.contains(clipID) { select(clipID) }
         dragSelection = (items.map(\.id), items.firstIndex { $0.id == selectedID } ?? 0)
         let token = UUID().uuidString
@@ -1259,6 +1264,36 @@ import LocalClipCore
         GUIAcceptanceProbe.event("drag-started", self)
         #endif
         return token
+    }
+    /// 冻结来源范围，避免拖动期间切换分类后把同一批记录排入其他范围，by AI.Coding。
+    private var dragQuerySignature: String?
+    private(set) var reorderingCards = false
+    private var cardReorderAnimationPending = false
+    /// 仅当前内部会话可调整卡片；正文检索有匹配排名，不提供与排名冲突的插入反馈。
+    func canReorderCards(_ token: String, relativeTo anchor: ClipID? = nil) -> Bool {
+        let request = searchRequest(sources: querySources)
+        guard dragActive, !changingHistory, !historyBusy, !reorderingCards,
+              let drag = categoryDrag, drag.token == token, clock.now() <= drag.expiresAt,
+              dragQuerySignature == currentSearchSignature,
+              SearchNormalizer.normalize(request.literal).isEmpty else { return false }
+        if let anchor, !contains(anchor) || drag.ids.contains(anchor) || pendingDeletion.contains(anchor) { return false }
+        return !drag.ids.isEmpty && drag.ids.allSatisfy { contains($0) && !pendingDeletion.contains($0) }
+    }
+    /// 同步认领内部令牌后持久化；失败不乐观重排，也不把内部整理当成外部导出保留文件。
+    func reorderCards(_ token: String, relativeTo anchor: ClipID, after: Bool) -> Bool {
+        guard canReorderCards(token, relativeTo: anchor), let drag = categoryDrag else { return false }
+        let request = searchRequest(sources: querySources)
+        let category = request.categoryIDs.count == 1 ? request.categoryIDs.first : nil
+        categoryDrag = nil; internalCategoryDrop = true; reorderingCards = true; cardReorderAnimationPending = true
+        finishDragFiles(keepFiles: false)
+        Task {
+            defer { reorderingCards = false }
+            do {
+                try await store.reorderItems(drag.ids, categoryID: category, relativeTo: anchor, after: after)
+                refresh()
+            } catch { cardReorderAnimationPending = false; message = "卡片顺序未保存，请重试" }
+        }
+        return true
     }
     /// 原生拖放目标同步校验令牌，不读取正文，不接受其他应用伪造的归属ID。
     public func canDropIntoCategory(_ token: String, categoryID: String) -> Bool {
@@ -1524,7 +1559,7 @@ import LocalClipCore
                 try Task.checkCancellation(); guard generation == queryID else { return }
                 var next: SearchCursor?; var found: [ClipSummary] = []
                 repeat {
-                    let page = try await store.search(SearchRequest(cursor: next, queryID: generation, categoryIDs: targetCategories))
+                    let page = try await store.search(SearchRequest(cursor: next, queryID: generation, categoryIDs: targetCategories, sort: .manual))
                     guard !Task.isCancelled, generation == queryID else { return }; found += page.items; next = page.next
                 } while !found.contains(where: { $0.id == wanted }) && next != nil
                 let visible = found.filter(isVisible)

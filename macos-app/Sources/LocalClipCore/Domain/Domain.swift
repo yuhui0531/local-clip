@@ -315,13 +315,16 @@ public enum CategoryError: Error, Sendable {
         }
     }
 }
+// 手动顺序独立于复制时间，供历史卡片拖放使用，by AI.Coding。
 public enum HistorySortOrder: String, Codable, CaseIterable, Sendable {
+    case manual
     case recentDesc
     case recentAsc
     case copyCountDesc
     case firstCopiedDesc
     public var title: String {
         switch self {
+        case .manual: "手动排序"
         case .recentDesc: "最近复制优先"
         case .recentAsc: "最早复制优先"
         case .copyCountDesc: "复制次数最多"

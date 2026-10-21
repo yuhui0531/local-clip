@@ -143,10 +143,19 @@ struct CategoryDropTarget: NSViewRepresentable {
 @MainActor final class CategoryDropHostingView<Content: View>: NSHostingView<Content> {
     private weak var model: HistoryViewModel?
     private weak var highlighted: CategoryDropTarget.CategoryButton?
+    /// 插入线位于托管内容之上，只负责绘制，不截断按钮/卡片命中，by AI.Coding。
+    private final class InsertionLine: NSView {
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    }
+    private let insertionLine = InsertionLine()
+    private var lastEdgeScroll = TimeInterval.zero
     init(rootView: Content, model: HistoryViewModel) {
         self.model = model
         super.init(rootView: rootView)
         registerForDraggedTypes([.init(HistoryViewModel.categoryDragType)])
+        insertionLine.wantsLayer = true; insertionLine.layer?.cornerRadius = 1.5
+        insertionLine.layer?.backgroundColor = NSColor.controlAccentColor.cgColor
+        insertionLine.isHidden = true; addSubview(insertionLine)
     }
     @MainActor required init(rootView: Content) { fatalError("Use init(rootView:model:)") }
     @MainActor required dynamic init?(coder: NSCoder) { fatalError("init(coder:) is unavailable") }
@@ -174,21 +183,69 @@ struct CategoryDropTarget: NSViewRepresentable {
     }
     private func clearHighlight() {
         highlighted?.setDropTargeted(false); highlighted = nil
+        insertionLine.isHidden = true
+    }
+    /// 卡片排序与分类拖入共用真实会话令牌；其他窗口、外部数据和过期会话均拒绝。
+    private func cardTarget(_ sender: any NSDraggingInfo, allowSource: Bool = false) -> (view: HistoryDragBridge.DragView, after: Bool, token: String)? {
+        guard let model, let window, sender.draggingDestinationWindow === window,
+              let data = sender.draggingPasteboard.data(forType: .init(HistoryViewModel.categoryDragType)), data.count == 36,
+              let token = String(data: data, encoding: .utf8),
+              let card = HistoryDragBridge.DragView.dropTarget(at: sender.draggingLocation, in: window, model: model),
+              model.canReorderCards(token, relativeTo: allowSource ? nil : card.view.id) else { return nil }
+        return (card.view, card.after, token)
+    }
+    /// AppKit周期性更新时平滑推进滚动区，只有指针处于真实卡片视口边缘才滚动。
+    private func scrollAtEdge(_ sender: any NSDraggingInfo, card: NSView) {
+        guard let scroll = card.enclosingScrollView else { return }
+        let clip = scroll.contentView, point = clip.convert(sender.draggingLocation, from: nil)
+        let inset: CGFloat = 32
+        let direction: CGFloat = point.x < clip.bounds.minX + inset ? -1 : point.x > clip.bounds.maxX - inset ? 1 : 0
+        guard direction != 0 else { lastEdgeScroll = 0; return }
+        let now = ProcessInfo.processInfo.systemUptime
+        let elapsed = lastEdgeScroll == 0 ? 1.0 / 60 : min(0.05, now - lastEdgeScroll)
+        lastEdgeScroll = now
+        let maximum = max(0, (scroll.documentView?.frame.width ?? 0) - clip.bounds.width)
+        let offset = min(maximum, max(0, clip.bounds.minX + direction * CGFloat(elapsed) * 480))
+        clip.scroll(to: .init(x: offset, y: clip.bounds.minY)); scroll.reflectScrolledClipView(clip)
+        if direction > 0, offset >= maximum - 32 { model?.loadMore() }
+    }
+    /// 插入位置按卡片中线分前后；线条裁剪到可见区域，避免指向屏幕外的位置。
+    private func showInsertion(_ card: NSView, after: Bool) {
+        let rect = card.convert(card.bounds, to: self)
+        let visible = card.convert(card.bounds.intersection(card.visibleRect), to: self)
+        let x = after ? rect.maxX + HistoryView.cardSpacing / 2 : rect.minX - HistoryView.cardSpacing / 2
+        guard !visible.isEmpty, x >= visible.minX - HistoryView.cardSpacing, x <= visible.maxX + HistoryView.cardSpacing else { insertionLine.isHidden = true; return }
+        insertionLine.frame = .init(x: x - 1.5, y: visible.minY + 4, width: 3, height: max(0, visible.height - 8))
+        insertionLine.isHidden = false
     }
     override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation { draggingUpdated(sender) }
+    /// 分类目标优先；卡片仅给当前有效锚点提供move反馈，取消或离开及时移除插入线。
     override func draggingUpdated(_ sender: any NSDraggingInfo) -> NSDragOperation {
         let button = target(sender)
         if highlighted !== button { clearHighlight(); highlighted = button }
-        button?.setDropTargeted(true)
-        return button == nil ? [] : .copy
+        if let button { insertionLine.isHidden = true; button.setDropTargeted(true); return .copy }
+        if let card = cardTarget(sender, allowSource: true), sender.draggingSourceOperationMask.contains(.move) {
+            // 即使指针仍在来源卡片上也允许边缘滚动；自身不是有效放下位置。
+            scrollAtEdge(sender, card: card.view)
+            guard model?.canReorderCards(card.token, relativeTo: card.view.id) == true else { insertionLine.isHidden = true; return [] }
+            showInsertion(card.view, after: card.after)
+            return .move
+        }
+        insertionLine.isHidden = true; lastEdgeScroll = 0
+        return []
     }
-    override func draggingExited(_ sender: (any NSDraggingInfo)?) { clearHighlight() }
-    override func prepareForDragOperation(_ sender: any NSDraggingInfo) -> Bool { target(sender) != nil }
+    override func draggingExited(_ sender: (any NSDraggingInfo)?) { clearHighlight(); lastEdgeScroll = 0 }
+    override func prepareForDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+        target(sender) != nil || (sender.draggingSourceOperationMask.contains(.move) && cardTarget(sender) != nil)
+    }
+    /// 放下时重新命中并认领一次，异步落库不依赖原生结束回调的先后顺序。
     override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
-        defer { clearHighlight() }
-        return target(sender)?.performCategoryDrop(from: sender.draggingPasteboard) == true
+        defer { clearHighlight(); lastEdgeScroll = 0 }
+        if let button = target(sender) { return button.performCategoryDrop(from: sender.draggingPasteboard) }
+        guard sender.draggingSourceOperationMask.contains(.move), let card = cardTarget(sender) else { return false }
+        return model?.reorderCards(card.token, relativeTo: card.view.id, after: card.after) == true
     }
-    override func concludeDragOperation(_ sender: (any NSDraggingInfo)?) { clearHighlight() }
+    override func concludeDragOperation(_ sender: (any NSDraggingInfo)?) { clearHighlight(); lastEdgeScroll = 0 }
     /// Escape等取消路径可能不派发draggingExited，不能遗留目标反馈，by AI.Coding。
-    override func draggingEnded(_ sender: any NSDraggingInfo) { clearHighlight() }
+    override func draggingEnded(_ sender: any NSDraggingInfo) { clearHighlight(); lastEdgeScroll = 0 }
 }

@@ -373,6 +373,19 @@ struct HistoryDragBridge: NSViewRepresentable {
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
         /// ⌘T转换菜单定位到所选卡片；只取仍在窗口中的卡片，by AI.Coding。
         static func view(for id: ClipID) -> NSView? { views.allObjects.first { $0.id == id && $0.window != nil } }
+        /// 托管目的地按实际卡片裁剪范围选插入锚点，间距也归最近卡片；不以拖动预览位置命中。
+        static func dropTarget(at point: NSPoint, in window: NSWindow, model: HistoryViewModel) -> (view: DragView, after: Bool)? {
+            let candidates = views.allObjects.filter { view in
+                guard view.window === window, view.model === model, !view.isHiddenOrHasHiddenAncestor else { return false }
+                let visible = view.bounds.intersection(view.visibleRect)
+                guard !visible.isEmpty else { return false }
+                return visible.insetBy(dx: -HistoryView.cardSpacing / 2, dy: 0).contains(view.convert(point, from: nil))
+            }
+            guard let view = candidates.min(by: {
+                abs($0.convert(point, from: nil).x - $0.bounds.midX) < abs($1.convert(point, from: nil).x - $1.bounds.midX)
+            }) else { return nil }
+            return (view, view.convert(point, from: nil).x >= view.bounds.midX)
+        }
         /// 按下时冻结来源ID，并消费整段左键手势；右键菜单仍由SwiftUI处理。
         func install() {
             Self.views.add(self)
@@ -483,7 +496,11 @@ struct HistoryDragBridge: NSViewRepresentable {
         }
         /// LC-V02：注册失败后禁止接收端接受投放，原生手势仍由AppKit处理到结束，by AI.Coding。
         var allowedDragOperation: NSDragOperation { dataProviderRegistrationFailed ? [] : .copy }
-        func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation { allowedDragOperation }
+        // 内部排序允许move；外部应用继续接收原有copy操作，by AI.Coding。
+        func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
+            guard !dataProviderRegistrationFailed else { return [] }
+            return context == .withinApplication ? [.copy, .move] : .copy
+        }
         /// 不在willBegin中提前结束模型会话；失败的原生会话禁止投放，结束回调统一取消/清理。
         func installDataProviders(on board: NSPasteboard, _ install: () throws -> Void) {
             do { try install() }
