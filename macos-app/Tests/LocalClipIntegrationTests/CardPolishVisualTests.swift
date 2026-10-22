@@ -45,7 +45,7 @@ import LocalClipCore
         let favorite = try await store.preview(.favorite(ids[3], true)); _ = try await store.apply(favorite.token)
         _ = try await store.createCategory(name: "工作", colorHex: "34C759")
         try await model.start(); capture.stop()
-        let ready = ContinuousClock.now + .seconds(5)
+        let ready = ContinuousClock.now + .seconds(15)
         while model.items.count < records.count, ContinuousClock.now < ready { try await Task.sleep(for: .milliseconds(10)) }
         try #require(model.items.count == records.count)
         let host = NSHostingView(rootView: HistoryView(model: model)); host.sizingOptions = []
@@ -57,7 +57,7 @@ import LocalClipCore
             window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
             for height in [280.0, 520.0] {
                 model.updateSettings { $0.panelHeight = height }
-                let deadline = ContinuousClock.now + .seconds(3)
+                let deadline = ContinuousClock.now + .seconds(15)
                 while model.settings.panelHeight != height, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
                 model.actualPanelHeight = height
                 model.configureHistoryViewport(width: 2000, cardWidth: HistoryView.cardSide(height: height))

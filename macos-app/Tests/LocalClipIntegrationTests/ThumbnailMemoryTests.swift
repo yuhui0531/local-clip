@@ -7,7 +7,7 @@ import LocalClipCore
 @MainActor struct ThumbnailMemoryTests {
     /// 并行功能测试可能占用主线程，用条件等待而不是固定睡眠判定清理完成。
     private func wait(_ condition: () -> Bool) async throws {
-        let deadline = ContinuousClock.now + .seconds(3)
+        let deadline = ContinuousClock.now + .seconds(15)
         while !condition(), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(5)) }
         #expect(condition())
     }

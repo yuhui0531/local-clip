@@ -21,7 +21,7 @@ import LocalClipCore
     }
     /// 有界等待真实异步任务，失败时不无限挂起。
     private func until(_ condition: () -> Bool) async throws {
-        let deadline = ContinuousClock.now + .seconds(3)
+        let deadline = ContinuousClock.now + .seconds(15)
         while !condition(), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
         #expect(condition())
     }

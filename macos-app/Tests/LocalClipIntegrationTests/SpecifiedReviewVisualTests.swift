@@ -26,7 +26,7 @@ import LocalClipCore
         }
         _ = try await store.ingest(.init(payload: .init([.init([.init(SupportedType.png, try ImageFixtures.image(width: 300, height: 480))])])), at: now + 4)
         try await model.start(); capture.stop()
-        let ready = ContinuousClock.now + .seconds(5)
+        let ready = ContinuousClock.now + .seconds(15)
         while model.items.count < 4, ContinuousClock.now < ready { try await Task.sleep(for: .milliseconds(10)) }
         try #require(model.items.count == 4)
         let host = NSHostingView(rootView: HistoryView(model: model)); host.sizingOptions = []
@@ -40,7 +40,7 @@ import LocalClipCore
                 for height in [280.0, 340.0, 520.0] {
                     for hidden in [false, true] {
                         model.updateSettings { $0.compactLayout = compact; $0.hideContents = hidden; $0.panelHeight = height }
-                        let deadline = ContinuousClock.now + .seconds(3)
+                        let deadline = ContinuousClock.now + .seconds(15)
                         while (model.settings.compactLayout != compact || model.settings.hideContents != hidden || model.settings.panelHeight != height), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
                         try #require(model.settings.compactLayout == compact && model.settings.hideContents == hidden && model.settings.panelHeight == height)
                         model.actualPanelHeight = height

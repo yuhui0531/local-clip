@@ -10,7 +10,7 @@ import LocalClipCore
 @MainActor struct CommentUITests {
     /// 等待真实异步条件，失败时明确记录。
     private func wait(_ predicate: () -> Bool) async throws {
-        let deadline = ContinuousClock.now + .seconds(3)
+        let deadline = ContinuousClock.now + .seconds(15)
         while !predicate(), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(5)) }
         #expect(predicate())
     }

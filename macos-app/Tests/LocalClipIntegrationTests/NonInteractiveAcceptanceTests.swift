@@ -78,7 +78,7 @@ private actor AcceptanceRecognitionGate {
         model.recognizeImageText = { _ in await gate.recognize() }
         raw.user("initial"); let count = raw.count
         func waitForStart(_ count: Int) async throws {
-            let deadline = ContinuousClock.now + .seconds(3)
+            let deadline = ContinuousClock.now + .seconds(15)
             while await gate.started < count, ContinuousClock.now < deadline { await Task.yield() }
             try #require(await gate.started == count)
         }

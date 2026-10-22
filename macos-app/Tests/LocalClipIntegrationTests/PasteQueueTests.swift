@@ -25,7 +25,7 @@ import Testing
         return .init(root: root, store: store, raw: raw, apps: apps, model: model, recorder: recorder, ids: ids)
     }
     private func until(_ h: Harness, _ predicate: () -> Bool, line: Int = #line) async throws {
-        let deadline = ContinuousClock.now + .seconds(5)
+        let deadline = ContinuousClock.now + .seconds(15)
         while !predicate(), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(5)) }
         #expect(predicate(), "line \(line): position=\(h.model.pasteQueuePosition) active=\(h.model.pasteQueueActive) events=\(h.apps.events) feedback=\(h.recorder.feedback.map(\.0)) message=\(h.model.message)")
     }

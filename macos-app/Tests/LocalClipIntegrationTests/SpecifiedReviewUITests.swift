@@ -31,7 +31,7 @@ private actor ReviewRecognitionGate {
         raw.user("initial"); let before = raw.count
         model.copyImageText(id: id)
         let completion = try #require(model.imageTextTask)
-        let deadline = ContinuousClock.now + .seconds(3)
+        let deadline = ContinuousClock.now + .seconds(15)
         while !(await gate.started), ContinuousClock.now < deadline { await Task.yield() }
         #expect(await gate.started)
         switch scenario {

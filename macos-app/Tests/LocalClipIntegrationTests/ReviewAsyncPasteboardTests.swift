@@ -106,7 +106,7 @@ private final class CountingBodyProvider: NSObject, NSPasteboardItemDataProvider
         let next = Task { await capture.poll() }
         while access.continuation == nil { await Task.yield() }
         access.finish(); await next.value
-        let deadline = ContinuousClock.now + .seconds(3)
+        let deadline = ContinuousClock.now + .seconds(15)
         while try await store.search(.init()).items.isEmpty, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
         #expect(try await store.search(.init()).items.map(\.preview) == ["new-after-resume"])
         capture.stop()

@@ -11,7 +11,7 @@ import LocalClipCore
         return HistoryViewModel(store: store, capture: capture, paste: PasteCoordinator(board: board, applications: FakeApplications(), store: store, capture: capture), derived: DerivedContentService(store: store))
     }
     private func until(_ predicate: () -> Bool) async throws {
-        let deadline = ContinuousClock.now + .seconds(5)
+        let deadline = ContinuousClock.now + .seconds(15)
         while !predicate(), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
         #expect(predicate())
     }
@@ -168,7 +168,7 @@ import LocalClipCore
         for text in ["A", "B", "C"] { raw.user(text); model.capture.tick() }
         model.capture.updatePolicy(model.capture.policy)
         model.updateSettings { $0.panelHeight = 480 }
-        let deadline = ContinuousClock.now + .seconds(5)
+        let deadline = ContinuousClock.now + .seconds(15)
         while try await store.search(.init()).items.count < 3, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
         #expect(Set(try await store.search(.init()).items.map(\.preview)) == Set(["A", "B", "C"]))
         try await until { model.settings.panelHeight == 480 }

@@ -73,7 +73,7 @@ import Testing
         try await history.start(); capture.stop()
         let model = HistoryManagerModel(history: history); model.start()
         defer { model.stop() }
-        let until = ContinuousClock.now + .seconds(5)
+        let until = ContinuousClock.now + .seconds(15)
         while model.rows.isEmpty, ContinuousClock.now < until { try await Task.sleep(for: .milliseconds(5)) }
         model.selection = [id]
         while model.detail == nil, ContinuousClock.now < until { try await Task.sleep(for: .milliseconds(5)) }
@@ -110,7 +110,7 @@ import Testing
         let recorder = ManagerPreviewRecorder(), model = HistoryManagerModel(history: history, preview: recorder)
         model.start(); history.panelVisibilityChanged(false); defer { model.stop() }
         func wait(_ predicate: () -> Bool) async throws {
-            let deadline = ContinuousClock.now + .seconds(5)
+            let deadline = ContinuousClock.now + .seconds(15)
             while !predicate(), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(5)) }
             #expect(predicate())
         }

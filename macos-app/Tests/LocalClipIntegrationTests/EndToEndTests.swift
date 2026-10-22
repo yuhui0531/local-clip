@@ -48,12 +48,12 @@ import LocalClipCore
         let raw = RawBoard(), board = MacPasteboardClient(access: raw), capture = CaptureCoordinator(board: board, store: store)
         try await capture.start(); capture.stop()
         raw.count += 1; raw.items = [[SupportedType.png: Data(repeating: 3, count: 400 * 1024)]]; capture.tick()
-        let rejected = ContinuousClock.now + .seconds(3)
+        let rejected = ContinuousClock.now + .seconds(15)
         while !capture.state.contains("未记录"), ContinuousClock.now < rejected { try await Task.sleep(for: .milliseconds(10)) }
         #expect(capture.state.contains("未记录")); #expect(!capture.capacityBlocked)
         #expect(try await store.search(.init()).items.count == 2)
         raw.user("SMALL-NEXT-COPY"); capture.tick()
-        let saved = ContinuousClock.now + .seconds(3)
+        let saved = ContinuousClock.now + .seconds(15)
         while try await store.search(.init("SMALL-NEXT-COPY")).items.isEmpty, ContinuousClock.now < saved { try await Task.sleep(for: .milliseconds(10)) }
         #expect(try await store.search(.init("SMALL-NEXT-COPY")).items.count == 1)
         #expect(try await store.detail(id: favoriteID, at: SystemClock().now()).summary.isFavorite)
@@ -84,7 +84,7 @@ import LocalClipCore
         let capture = CaptureCoordinator(board: board, store: store)
         try await capture.start(); capture.stop()
         raw.user("LOCALCLIP-TEST-A"); capture.tick()
-        let firstDeadline = ContinuousClock.now + .seconds(3)
+        let firstDeadline = ContinuousClock.now + .seconds(15)
         while try await store.search(.init()).items.isEmpty, ContinuousClock.now < firstDeadline { try await Task.sleep(for: .milliseconds(10)) }
         let first = try await store.search(.init()); #expect(first.items.count == 1)
         guard let firstID = first.items.first?.id else { return }
@@ -94,7 +94,7 @@ import LocalClipCore
         #expect(try await store.detail(id: firstID, at: SystemClock().now()).summary.copyCount == 1)
         _ = await paste.perform(.init(ids: [firstID]))
         raw.user("LOCALCLIP-TEST-B"); capture.tick()
-        let secondDeadline = ContinuousClock.now + .seconds(3)
+        let secondDeadline = ContinuousClock.now + .seconds(15)
         while try await store.search(.init()).items.count != 2, ContinuousClock.now < secondDeadline { try await Task.sleep(for: .milliseconds(10)) }
         #expect(try await store.search(.init()).items.count == 2)
     }
@@ -110,7 +110,7 @@ import LocalClipCore
         capture.updatePolicy(try await store.updateCaptureSettings(settings)); capture.tick()
         #expect(try await store.search(.init()).items.isEmpty)
         raw.user("B"); capture.tick()
-        let deadline = ContinuousClock.now + .seconds(3)
+        let deadline = ContinuousClock.now + .seconds(15)
         while try await store.search(.init()).items.isEmpty, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
         #expect(try await store.search(.init()).items.count == 1)
     }

@@ -45,10 +45,11 @@ import LocalClipCore
 @MainActor enum ChangeConfirmation {
     /// 只承载设置窗口发起的确认；底栏历史面板贴屏幕底边且覆盖Dock，附页会抬起或撑高面板，改由面板内浮层确认，by AI.Coding。
     /// 异步等待真实用户选择，保留预览版本校验；不阻塞采集任务，不跳过确认策略，by AI.Coding。
-    static func confirm(_ preview: ChangePreview) async -> Bool {
+    /// parent由调用方显式给出；后台应用的非激活窗口不一定是key窗口，by AI.Coding。
+    static func confirm(_ preview: ChangePreview, parent: NSWindow? = NSApp.keyWindow) async -> Bool {
         await withCheckedContinuation { continuation in
             let controller = Controller(preview: preview, continuation: continuation)
-            controller.present(parent: NSApp.keyWindow)
+            controller.present(parent: parent)
         }
     }
 

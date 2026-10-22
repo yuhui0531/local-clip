@@ -33,11 +33,11 @@ struct ImageFixtures {
         let raw = RawBoard(), board = MacPasteboardClient(access: raw), capture = CaptureCoordinator(board: board, store: store, clock: clock)
         let model = HistoryViewModel(store: store, capture: capture, paste: PasteCoordinator(board: board, applications: FakeApplications(), store: store, capture: capture, clock: clock), derived: DerivedContentService(store: store), clock: clock)
         try await model.start(); capture.stop()
-        let ready = ContinuousClock.now + .seconds(3)
+        let ready = ContinuousClock.now + .seconds(15)
         while model.items.count != 50, ContinuousClock.now < ready { try await Task.sleep(for: .milliseconds(10)) }
         #expect(model.items.count == 50); #expect(model.hasMore)
         clock.advance(150)
-        let expired = ContinuousClock.now + .seconds(3)
+        let expired = ContinuousClock.now + .seconds(15)
         while model.items.map(\.id) != [favoriteID], ContinuousClock.now < expired { try await Task.sleep(for: .milliseconds(10)) }
         #expect(model.items.map(\.id) == [favoriteID]); #expect(!model.hasMore)
     }
@@ -55,13 +55,13 @@ struct ImageFixtures {
         let capture = CaptureCoordinator(board: board, store: store, clock: clock)
         let model = HistoryViewModel(store: store, capture: capture, paste: PasteCoordinator(board: board, applications: FakeApplications(), store: store, capture: capture, clock: clock), derived: DerivedContentService(store: store), clock: clock)
         try await model.start(); capture.stop()
-        let ready = ContinuousClock.now + .seconds(3)
+        let ready = ContinuousClock.now + .seconds(15)
         while model.items.count != 2, ContinuousClock.now < ready { try await Task.sleep(for: .milliseconds(10)) }
         model.select(id); model.showingDetail = true; model.detailVisibilityChanged()
         while model.detail?.summary.id != id, ContinuousClock.now < ready { try await Task.sleep(for: .milliseconds(10)) }
         #expect(model.detail?.summary.id == id)
         clock.advance(150)
-        let expired = ContinuousClock.now + .seconds(3)
+        let expired = ContinuousClock.now + .seconds(15)
         while model.items.contains(where: { $0.id == id }), ContinuousClock.now < expired { try await Task.sleep(for: .milliseconds(10)) }
         #expect(model.items.map(\.id) == [favoriteID]); #expect(model.selectedID != id); #expect(model.detail?.summary.id != id); #expect(model.image == nil)
         #expect(try await store.search(.init()).items.map(\.id) == [favoriteID])
@@ -79,20 +79,20 @@ struct ImageFixtures {
         // 文件系统拒绝保存时不显示配置成功，解除临时gate也不补采暂停期间内容。
         try FileManager.default.setAttributes([.posixPermissions:0o555],ofItemAtPath:staging.path)
         model.updateSettings { $0.captureEnabled=false }; #expect(capture.state == "正在暂停")
-        let failureDeadline=ContinuousClock.now + .seconds(3)
+        let failureDeadline=ContinuousClock.now + .seconds(15)
         while !model.message.contains("设置保存失败"), ContinuousClock.now < failureDeadline { try await Task.sleep(for:.milliseconds(10)) }
         #expect(model.message.contains("设置保存失败")); #expect(try await store.settings().captureEnabled); #expect(capture.policy.captureEnabled)
         try FileManager.default.setAttributes([.posixPermissions:0o755],ofItemAtPath:staging.path)
         raw.onRead = { _,_ in raw.onRead=nil; model.updateSettings { $0.captureEnabled=false } }
         raw.user("IN-FLIGHT-A"); capture.tick()
-        let pauseDeadline=ContinuousClock.now + .seconds(3)
+        let pauseDeadline=ContinuousClock.now + .seconds(15)
         while model.settings.captureEnabled, ContinuousClock.now < pauseDeadline { try await Task.sleep(for:.milliseconds(10)) }
         #expect(!model.settings.captureEnabled); #expect(try await store.search(.init()).items.isEmpty)
         model.updateSettings { $0.captureEnabled=true }
-        let resumeDeadline=ContinuousClock.now + .seconds(3)
+        let resumeDeadline=ContinuousClock.now + .seconds(15)
         while !model.settings.captureEnabled, ContinuousClock.now < resumeDeadline { try await Task.sleep(for:.milliseconds(10)) }
         raw.user("NEW-B"); capture.tick()
-        let saveDeadline=ContinuousClock.now + .seconds(3)
+        let saveDeadline=ContinuousClock.now + .seconds(15)
         while try await store.search(.init()).items.count != 1, ContinuousClock.now < saveDeadline { try await Task.sleep(for:.milliseconds(10)) }
         #expect(try await store.search(.init()).items.first?.preview == "NEW-B"); capture.stop()
     }
@@ -106,11 +106,11 @@ struct ImageFixtures {
         let capture=CaptureCoordinator(board:board,store:store)
         let model=HistoryViewModel(store:store,capture:capture,paste:PasteCoordinator(board:board,applications:apps,store:store,capture:capture),derived:DerivedContentService(store:store))
         try await model.start(); defer { capture.stop() }
-        let deadline=ContinuousClock.now + .seconds(3)
+        let deadline=ContinuousClock.now + .seconds(15)
         while model.items.count != 50, ContinuousClock.now < deadline { try await Task.sleep(for:.milliseconds(10)) }
         #expect(model.items.count == 50); #expect(model.hasMore)
         guard let last=model.items.last else { return }; model.select(last.id); model.navigate(1)
-        let pageDeadline=ContinuousClock.now + .seconds(3)
+        let pageDeadline=ContinuousClock.now + .seconds(15)
         while model.items.count != 55, ContinuousClock.now < pageDeadline { try await Task.sleep(for:.milliseconds(10)) }
         #expect(model.items.count == 55); #expect(!model.hasMore); #expect(model.selectedID == model.items[50].id)
     }
@@ -143,13 +143,13 @@ struct ImageFixtures {
         try await model.start(); defer { capture.stop() }
         model.query = "old"; model.searchChanged(); model.query = "需求"; model.searchChanged()
         // 并发图片测试可能占用主线程；等待条件是正确结果，不用固定睡眠伪造性能证明。
-        let deadline = ContinuousClock.now + .seconds(3)
+        let deadline = ContinuousClock.now + .seconds(15)
         while model.items.first?.preview != "最新需求", ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
         #expect(model.items.count == 1); #expect(model.items.first?.preview == "最新需求")
         guard let id = model.items.first?.id else { return }
         model.select(id)
         let preview = try await store.preview(.delete([id])); _ = try await store.apply(preview.token)
-        let deletionDeadline = ContinuousClock.now + .seconds(3)
+        let deletionDeadline = ContinuousClock.now + .seconds(15)
         while !model.items.isEmpty, ContinuousClock.now < deletionDeadline { try await Task.sleep(for: .milliseconds(10)) }
         #expect(model.items.isEmpty); #expect(model.detail == nil); #expect(model.selectedID == nil); #expect(model.image == nil)
     }

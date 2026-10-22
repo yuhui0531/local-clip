@@ -7,7 +7,7 @@ import LocalClipCore
 @testable import LocalClipMac
 @MainActor struct HistoryManagerTests {
     /// 超时记为失败，等待之后没有断言的步骤也不会静默通过。
-    private func until(timeout: Duration = .seconds(5), _ condition: () -> Bool, sourceLocation: SourceLocation = #_sourceLocation) async throws {
+    private func until(timeout: Duration = .seconds(15), _ condition: () -> Bool, sourceLocation: SourceLocation = #_sourceLocation) async throws {
         let deadline = ContinuousClock.now + timeout
         while !condition(), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
         if !condition() { Issue.record("等待条件超时", sourceLocation: sourceLocation) }

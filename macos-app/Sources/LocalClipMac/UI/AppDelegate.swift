@@ -891,8 +891,8 @@ import LocalClipCore
             let confirmation = SurfaceConfirmation(title: title, closing: closing)
             surfaceConfirmation = confirmation
             defer { surfaceConfirmation = nil }
-            // 气泡指向正在编辑的输入框（重命名框或内容编辑气泡），by AI.Coding。
-            let anchor = NSApp.keyWindow?.firstResponder as? NSView ?? responder as? NSView
+            // 气泡只指向正在编辑的文字输入（重命名框或内容编辑气泡）；焦点在其他视图时居中，by AI.Coding。
+            let anchor = [NSApp.keyWindow?.firstResponder, responder].lazy.compactMap { $0 as? NSTextView }.first { !Self.isHistorySearchEditor($0) }
             return await confirmation.present(for: owner, anchor: anchor, visible: presentsSurfaces)
         }
         let alert = NSAlert(); alert.messageText = "\(title)尚未保存"

@@ -36,7 +36,7 @@ import LocalClipCore
         ]
         for (index, payload) in payloads.enumerated() { _ = try await store.ingest(.init(payload: payload), at: now + Int64(index)) }
         try await model.start(); capture.stop()
-        let ready = ContinuousClock.now + .seconds(5)
+        let ready = ContinuousClock.now + .seconds(15)
         while model.items.count < payloads.count, ContinuousClock.now < ready { try await Task.sleep(for: .milliseconds(10)) }
         try #require(model.items.count == payloads.count)
         let host = NSHostingView(rootView: HistoryView(model: model)); host.sizingOptions = []
@@ -47,7 +47,7 @@ import LocalClipCore
         for height in [200.0, 280.0, 520.0] {
             for hidden in [false, true] {
                 model.updateSettings { $0.hideContents = hidden; $0.panelHeight = height }
-                let deadline = ContinuousClock.now + .seconds(3)
+                let deadline = ContinuousClock.now + .seconds(15)
                 while (model.settings.hideContents != hidden || model.settings.panelHeight != height), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
                 model.actualPanelHeight = height
                 model.configureHistoryViewport(width: 1200, cardWidth: HistoryView.cardSide(height: height))

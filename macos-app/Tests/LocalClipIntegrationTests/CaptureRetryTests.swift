@@ -82,7 +82,8 @@ private final class StoreFault: StorageFaultInjector, @unchecked Sendable {
         let h = try await harness(); defer { h.capture.stop(); try? FileManager.default.removeItem(at: h.root) }
         h.fault.arm(100)
         h.raw.user("A4-LOST"); h.capture.tick()
-        try await until { h.capture.state == "磁盘空间不足，未记录" }
+        // 退避合计不足0.2秒；完整并行套件中主线程被其他测试占用时放宽等待上限，不改变断言，by AI.Coding。
+        try await until({ h.capture.state == "磁盘空间不足，未记录" }, seconds: 15)
         #expect(h.fault.failures == 1 + CaptureCoordinator.maxRetryAttempts)
         try await Task.sleep(for: .milliseconds(300))
         #expect(h.fault.failures == 1 + CaptureCoordinator.maxRetryAttempts)

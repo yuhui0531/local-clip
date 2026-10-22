@@ -257,7 +257,7 @@ import Testing
     }
     /// 等待真实模型完成异步工作，超时保留失败而不略过样本，by AI.Coding。
     private func until(_ predicate: () -> Bool) async throws {
-        let deadline = ContinuousClock.now + .seconds(5)
+        let deadline = ContinuousClock.now + .seconds(15)
         while !predicate(), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(5)) }
         #expect(predicate())
     }

@@ -81,7 +81,7 @@ import LocalClipCore
         let model = HistoryViewModel(store: store, capture: capture, paste: PasteCoordinator(board: rawBoard, applications: FakeApplications(), store: store, capture: capture), derived: DerivedContentService(store: store))
         try await model.start(); capture.stop()
         func wait(_ predicate: () -> Bool) async throws {
-            let until = ContinuousClock.now + .seconds(5)
+            let until = ContinuousClock.now + .seconds(15)
             while !predicate(), ContinuousClock.now < until { try await Task.sleep(for: .milliseconds(5)) }
             #expect(predicate())
         }
@@ -162,7 +162,7 @@ import LocalClipCore
         let model = HistoryViewModel(store: store, capture: capture, paste: PasteCoordinator(board: board, applications: FakeApplications(), store: store, capture: capture), derived: DerivedContentService(store: store))
         try await model.start(); capture.stop()
         func wait(_ predicate: () -> Bool) async throws {
-            let until = ContinuousClock.now + .seconds(5)
+            let until = ContinuousClock.now + .seconds(15)
             while !predicate(), ContinuousClock.now < until { try await Task.sleep(for: .milliseconds(5)) }
             #expect(predicate())
         }
@@ -211,6 +211,11 @@ import LocalClipCore
         let reopened = try HistoryStore(location: root)
         #expect(try await reopened.search(.init(sort: .manual)).items.map(\.id) == model.items.map(\.id))
         // 多选在同一会话内保持当前先后顺序，一次认领后整批插在目标后方。
+        // 与前段一致，布局后等卡片位移落定再取坐标；满载时首次重排的动画可能尚未结束，by AI.Coding。
+        window.contentView?.layoutSubtreeIfNeeded()
+        try await Task.sleep(for: .milliseconds(300))
+        // 重排提交后的存储事件可能再触发一次刷新；刷新进行中拖放会被拒绝，等其结束再继续。
+        try await wait { !model.historyBusy && !model.reorderingCards }
         window.contentView?.layoutSubtreeIfNeeded()
         let tail = try #require(HistoryDragBridge.DragView.view(for: original[4]))
         info.draggingLocation = tail.convert(.init(x: tail.bounds.width * 0.75, y: tail.bounds.midY), to: nil)

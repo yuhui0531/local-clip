@@ -15,7 +15,7 @@ private final class RenameClock: ClipClock, @unchecked Sendable {
 @MainActor struct ClipRenameInteractionTests {
     /// 等待实际模型完成，不以固定延时冒充保存/刷新，by AI.Coding。
     private func wait(_ predicate: () -> Bool) async throws {
-        let end = ContinuousClock.now + .seconds(3)
+        let end = ContinuousClock.now + .seconds(15)
         while !predicate(), ContinuousClock.now < end { try await Task.sleep(for: .milliseconds(5)) }
         #expect(predicate())
     }

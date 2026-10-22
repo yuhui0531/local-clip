@@ -18,6 +18,7 @@ import SwiftUI
     private weak var previousResponder: NSResponder?
     private var ownerClose: NSObjectProtocol?
     private var blockedWindows: [(NSWindow, Bool)] = []
+    private var shield: Shield?
     private let animator = SurfaceAnimator()
 
     private var bodySize: NSSize = .zero
@@ -55,18 +56,29 @@ import SwiftUI
         let y = min(max(owner.midY - size.height / 2, screen.minY + 12), screen.maxY - size.height - 12)
         return NSRect(origin: NSPoint(x: x, y: y), size: size)
     }
-    /// 气泡优先在触发元素上方，放不下翻到下方；箭头指向锚点中线并避开圆角，by AI.Coding。
-    static func frame(size: NSSize, anchor: NSRect, screen: NSRect) -> (frame: NSRect, arrowX: CGFloat, arrowUp: Bool) {
-        let height = size.height + Bubble.arrowHeight
-        let x = min(max(anchor.midX - size.width / 2, screen.minX + 12), screen.maxX - size.width - 12)
-        let above = anchor.maxY + 4 + height <= screen.maxY - 12
-        let y = above ? anchor.maxY + 4 : max(screen.minY + 12, anchor.minY - 4 - height)
-        let arrowX = min(max(anchor.midX - x, 24), size.width - 24)
-        return (NSRect(x: x, y: y, width: size.width, height: height), arrowX, !above)
+    /// 气泡依次尝试锚点上方、下方、右侧、左侧，取第一个不遮住锚点的位置；都放不下才在上方夹取。
+    /// 箭头位于气泡朝向锚点的一边，offset沿该边指向锚点中线并避开圆角，by AI.Coding。
+    static func frame(size: NSSize, anchor: NSRect, screen: NSRect) -> (frame: NSRect, arrow: Bubble.Arrow) {
+        let tip = Bubble.arrowHeight, gap: CGFloat = 4, inset: CGFloat = 12
+        let area = screen.insetBy(dx: inset, dy: inset)
+        let x = min(max(anchor.midX - size.width / 2, area.minX), area.maxX - size.width)
+        let y = min(max(anchor.midY - size.height / 2, area.minY), area.maxY - size.height)
+        func along(_ value: CGFloat, _ length: CGFloat) -> CGFloat { min(max(value, 24), length - 24) }
+        let vertical = NSSize(width: size.width, height: size.height + tip), horizontal = NSSize(width: size.width + tip, height: size.height)
+        let candidates: [(NSRect, Edge)] = [
+            (NSRect(origin: .init(x: x, y: anchor.maxY + gap), size: vertical), .bottom),
+            (NSRect(origin: .init(x: x, y: anchor.minY - gap - vertical.height), size: vertical), .top),
+            (NSRect(origin: .init(x: anchor.maxX + gap, y: y), size: horizontal), .leading),
+            (NSRect(origin: .init(x: anchor.minX - gap - horizontal.width, y: y), size: horizontal), .trailing),
+        ]
+        let (frame, edge) = candidates.first { area.contains($0.0) }
+            ?? (NSRect(origin: .init(x: x, y: min(anchor.maxY + gap, area.maxY - vertical.height)), size: vertical), .bottom)
+        let offset = edge == .top || edge == .bottom ? along(anchor.midX - frame.minX, size.width) : along(frame.maxY - anchor.midY, size.height)
+        return (frame, .init(edge: edge, offset: offset))
     }
-    /// 箭头指向目标上沿细条（卡片、编辑框本身都很高）；几乎覆盖整块父窗的视图指不出触发元素，返回nil回退居中，by AI.Coding。
-    static func anchorEdge(_ rect: NSRect, owner: NSRect) -> NSRect? {
-        rect.height >= owner.height * 0.9 ? nil : NSRect(x: rect.minX, y: rect.maxY - 2, width: rect.width, height: 2)
+    /// 几乎覆盖整块父窗的视图指不出触发元素，返回nil回退居中；卡片、编辑框虽高仍是有效锚点，by AI.Coding。
+    static func usableAnchor(_ rect: NSRect, owner: NSRect) -> NSRect? {
+        rect.height >= owner.height * 0.9 ? nil : rect
     }
     /// 锚点只取视图在屏幕上的可见部分；已滚出或隐藏时返回nil，回退为居中。
     static func screenRect(of view: NSView) -> NSRect? {
@@ -78,8 +90,8 @@ import SwiftUI
 
     /// 子窗关系保留层级与归属；不调用beginSheet，系统没有移动父面板的机会。
     /// 有锚点时贴近触发元素弹出并以箭头指向它；无锚点时居中于父窗。
-    /// freezesOwner为false时父窗自行吸收点击（面板确认用透明层），避免点击穿透到下层应用或Dock，by AI.Coding。
-    func present(for owner: NSWindow, anchor: NSView? = nil, freezesOwner: Bool = true, visible: Bool = true) async -> SurfaceEdits.Choice {
+    /// 父面板与其子窗由透明遮挡子窗吸收点击并视为取消，点击不会穿透到下层应用或Dock，by AI.Coding。
+    func present(for owner: NSWindow, anchor: NSView? = nil, visible: Bool = true) async -> SurfaceEdits.Choice {
         guard let window else { return .cancel }
         parentWindow = owner
         // 内容编辑气泡也属于父面板；确认期间一并冻结，避免从背后的编辑器提交草稿。
@@ -87,20 +99,22 @@ import SwiftUI
             [window] + (window.childWindows ?? []).flatMap { descendants($0) }
         }
         let family = descendants(owner)
-        blockedWindows = family.filter { freezesOwner || $0 !== owner }.map { ($0, $0.ignoresMouseEvents) }
+        // 子窗（内容编辑气泡）冻结后点击落到其下的遮挡窗；父窗本身由遮挡窗覆盖，不改其鼠标状态。
+        blockedWindows = family.filter { $0 !== owner }.map { ($0, $0.ignoresMouseEvents) }
         previousKeyWindow = family.first(where: \.isKeyWindow) ?? owner
         previousResponder = previousKeyWindow?.firstResponder
         blockedWindows.forEach { $0.0.ignoresMouseEvents = true }
         window.sharingType = owner.sharingType; window.appearance = owner.effectiveAppearance
-        window.level = owner.level
+        // 与面板一致进入当前桌面与全屏辅助空间，全屏应用前也可见。
+        window.level = owner.level; window.collectionBehavior = owner.collectionBehavior
         // 底栏覆盖Dock，下沿取整屏；上沿避开菜单栏。
         let full = owner.screen?.frame ?? owner.frame
         let screen = NSRect(x: full.minX, y: full.minY, width: full.width, height: (owner.screen?.visibleFrame.maxY ?? full.maxY) - full.minY)
         // 锚点须属于父窗或其子窗，且不能是几乎整块面板的大视图，否则箭头指不出触发元素。
         let target = anchor.flatMap { view in family.contains { $0 === view.window } ? Self.screenRect(of: view) : nil }
-        if let edge = target.flatMap({ Self.anchorEdge($0, owner: owner.frame) }), let host = window.contentView as? NSHostingView<Bubble> {
-            let placed = Self.frame(size: bodySize, anchor: edge, screen: screen)
-            host.rootView.arrow = (placed.arrowX, placed.arrowUp)
+        if let rect = target.flatMap({ Self.usableAnchor($0, owner: owner.frame) }), let host = window.contentView as? NSHostingView<Bubble> {
+            let placed = Self.frame(size: bodySize, anchor: rect, screen: screen)
+            host.rootView.arrow = placed.arrow
             window.setFrame(placed.frame, display: false)
         } else {
             window.setFrame(Self.frame(size: bodySize, owner: owner.frame, screen: screen), display: false)
@@ -112,6 +126,12 @@ import SwiftUI
             answer = continuation
             // 隐藏窗口测试不排序到屏幕；真实呈现只淡化确认窗，父窗保持原位。
             guard visible else { return }
+            let shield = Shield(frame: family.filter(\.isVisible).reduce(owner.frame) { $0.union($1.frame) })
+            shield.sharingType = owner.sharingType; shield.level = owner.level; shield.collectionBehavior = owner.collectionBehavior
+            shield.tap = { [weak self] in self?.finish(.cancel) }
+            self.shield = shield
+            owner.addChildWindow(shield, ordered: .above)
+            shield.orderFrontRegardless()
             window.alphaValue = 0
             owner.addChildWindow(window, ordered: .above)
             window.makeKeyAndOrderFront(nil)
@@ -140,6 +160,7 @@ import SwiftUI
             parentWindow?.removeChildWindow(window)
             window.orderOut(nil); window.contentView = nil; window.close()
         }
+        if let shield { parentWindow?.removeChildWindow(shield); shield.orderOut(nil); shield.close(); self.shield = nil }
         blockedWindows.forEach { $0.0.ignoresMouseEvents = $0.1 }; blockedWindows = []
         // 取消时回到原内容编辑气泡，而非一律将键盘焦点转给底部父面板。
         let focus = previousKeyWindow?.isVisible == true ? previousKeyWindow : parentWindow
@@ -151,25 +172,55 @@ import SwiftUI
     }
     func windowWillClose(_ notification: Notification) { cancelImmediately() }
 
-    /// 确认内容加可选箭头；箭头与卡片同底色，指向触发元素，by AI.Coding。
+    /// 透明遮挡窗：显式接收鼠标（透明窗默认会让点击穿透），任何按下都视为取消；不取得键盘焦点，不激活应用。
+    final class Shield: NSPanel {
+        var tap: () -> Void = {}
+        init(frame: NSRect) {
+            super.init(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+            isReleasedWhenClosed = false; isMovable = false; hidesOnDeactivate = false; animationBehavior = .none
+            // 近乎透明而非全透明：即便系统按像素透明度路由点击，遮挡窗也能接住。
+            backgroundColor = NSColor(white: 0, alpha: 0.001); isOpaque = false; hasShadow = false; ignoresMouseEvents = false
+        }
+        override var canBecomeKey: Bool { false }
+        override var canBecomeMain: Bool { false }
+        override func mouseDown(with event: NSEvent) { tap() }
+        override func rightMouseDown(with event: NSEvent) { tap() }
+        override func otherMouseDown(with event: NSEvent) { tap() }
+    }
+
+    /// 确认内容加可选箭头；箭头与卡片同底色，位于朝向触发元素的一边，by AI.Coding。
     struct Bubble: View {
         static let arrowHeight: CGFloat = 8
+        struct Arrow: Equatable { var edge: Edge; var offset: CGFloat }
         let content: AnyView
-        var arrow: (x: CGFloat, up: Bool)?
+        var arrow: Arrow?
         var body: some View {
-            VStack(spacing: 0) {
-                if let arrow, arrow.up { tip(arrow) }
-                content
-                if let arrow, !arrow.up { tip(arrow) }
+            switch arrow?.edge {
+            case .top?: VStack(spacing: 0) { tip; content }
+            case .bottom?: VStack(spacing: 0) { content; tip }
+            case .leading?: HStack(spacing: 0) { tip; content }
+            case .trailing?: HStack(spacing: 0) { content; tip }
+            case nil: content
             }
         }
-        private func tip(_ arrow: (x: CGFloat, up: Bool)) -> some View {
-            Path { path in
-                let base: CGFloat = arrow.up ? Self.arrowHeight : 0, point: CGFloat = arrow.up ? 0 : Self.arrowHeight
-                path.move(to: .init(x: 0, y: base)); path.addLine(to: .init(x: 9, y: point)); path.addLine(to: .init(x: 18, y: base)); path.closeSubpath()
-            }.fill(Color(nsColor: .windowBackgroundColor)).frame(width: 18, height: Self.arrowHeight)
-                .frame(maxWidth: .infinity, alignment: .leading).padding(.leading, arrow.x - 9)
-                .accessibilityHidden(true)
+        @ViewBuilder private var tip: some View {
+            if let arrow {
+                let h = Self.arrowHeight, vertical = arrow.edge == .top || arrow.edge == .bottom
+                Path { path in
+                    // 三角底边贴住内容，尖端朝向锚点。
+                    let points: [CGPoint] = switch arrow.edge {
+                    case .top: [.init(x: 0, y: h), .init(x: 9, y: 0), .init(x: 18, y: h)]
+                    case .bottom: [.init(x: 0, y: 0), .init(x: 9, y: h), .init(x: 18, y: 0)]
+                    case .leading: [.init(x: h, y: 0), .init(x: 0, y: 9), .init(x: h, y: 18)]
+                    case .trailing: [.init(x: 0, y: 0), .init(x: h, y: 9), .init(x: 0, y: 18)]
+                    }
+                    path.addLines(points); path.closeSubpath()
+                }.fill(Color(nsColor: .windowBackgroundColor))
+                    .frame(width: vertical ? 18 : h, height: vertical ? h : 18)
+                    .padding(vertical ? .leading : .top, arrow.offset - 9)
+                    .frame(maxWidth: vertical ? .infinity : nil, maxHeight: vertical ? nil : .infinity, alignment: .topLeading)
+                    .accessibilityHidden(true)
+            }
         }
     }
 

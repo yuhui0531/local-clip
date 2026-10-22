@@ -21,7 +21,7 @@ import LocalClipCore
         let board = MacPasteboardClient(access: RawBoard()), capture = CaptureCoordinator(board: board, store: store)
         let model = HistoryViewModel(store: store, capture: capture, paste: PasteCoordinator(board: board, applications: FakeApplications(), store: store, capture: capture), derived: DerivedContentService(store: store))
         try await model.start(); capture.stop()
-        let until = ContinuousClock.now + .seconds(5)
+        let until = ContinuousClock.now + .seconds(15)
         while model.categories.count != count, ContinuousClock.now < until { try await Task.sleep(for: .milliseconds(5)) }
         // 与真实popover一致的浅色不透明背景，避免透明像素干扰OCR。
         let host = NSHostingView(rootView: AnyView(FilterEditor(model: model).frame(maxHeight: .infinity, alignment: .top).background(Color(nsColor: .windowBackgroundColor)).environment(\.colorScheme, .light)))

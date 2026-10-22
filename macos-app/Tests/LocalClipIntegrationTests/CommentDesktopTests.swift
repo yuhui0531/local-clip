@@ -38,7 +38,7 @@ import ServiceManagement
         try snapshot(host, "settings-login-refreshed")
     }
     private func wait(line: Int = #line, _ condition: () -> Bool) async throws {
-        let end = ContinuousClock.now + .seconds(5)
+        let end = ContinuousClock.now + .seconds(15)
         while !condition(), ContinuousClock.now < end { try await Task.sleep(for: .milliseconds(10)) }
         try #require(condition(), "wait from line \(line)")
     }

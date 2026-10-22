@@ -92,7 +92,7 @@ import SwiftUI
         #expect(guide.isVisible)
         #expect(guide.state.step == .drag)
         trusted = true
-        let deadline = ContinuousClock.now + .seconds(4)
+        let deadline = ContinuousClock.now + .seconds(15)
         while guide.isVisible, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(30)) }
         #expect(!guide.isVisible)
         #expect(guide.state.step == .done)
@@ -140,7 +140,7 @@ import SwiftUI
         guide.show(skipIntro: false)
         #expect(opened == 0)
         trusted = true
-        let deadline = ContinuousClock.now + .seconds(3)
+        let deadline = ContinuousClock.now + .seconds(15)
         while guide.state.step != .done, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(20)) }
         #expect(guide.state.step == .done)
         guide.close()
@@ -251,7 +251,7 @@ import SwiftUI
 
     /// 有界等待真实主线程任务，避免固定延迟导致并发测试抖动。
     private func eventually(_ condition: () -> Bool) async throws {
-        let deadline = ContinuousClock.now + .seconds(3)
+        let deadline = ContinuousClock.now + .seconds(15)
         while !condition(), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(20)) }
         #expect(condition())
     }

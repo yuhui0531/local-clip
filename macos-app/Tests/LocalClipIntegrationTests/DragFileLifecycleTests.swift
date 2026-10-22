@@ -17,7 +17,7 @@ import Testing
         let raw = MacPasteboardClient(access: RawBoard()), capture = CaptureCoordinator(board: raw, store: store)
         let model = HistoryViewModel(store: store, capture: capture, paste: PasteCoordinator(board: raw, applications: FakeApplications(), store: store, capture: capture), derived: DerivedContentService(store: store))
         try await model.start(); capture.stop()
-        let deadline = ContinuousClock.now + .seconds(5)
+        let deadline = ContinuousClock.now + .seconds(15)
         while (model.items.isEmpty || model.historyBusy), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(5)) }
         let token = model.prepareDrag(id)
         var access: ClipExportAccess?
@@ -199,7 +199,7 @@ import Testing
         let board = MacPasteboardClient(access: RawBoard()), capture = CaptureCoordinator(board: board, store: store)
         let model = HistoryViewModel(store: store, capture: capture, paste: PasteCoordinator(board: board, applications: FakeApplications(), store: store, capture: capture), derived: DerivedContentService(store: store))
         try await model.start(); capture.stop()
-        let until = ContinuousClock.now + .seconds(5)
+        let until = ContinuousClock.now + .seconds(15)
         while (model.items.isEmpty || model.categories.isEmpty || model.historyBusy), ContinuousClock.now < until { try await Task.sleep(for: .milliseconds(5)) }
         #expect(model.items.contains { $0.id == id })
         var oldURL: URL?

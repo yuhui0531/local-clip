@@ -179,7 +179,7 @@ import LocalClipUpdateKit
         now = now.addingTimeInterval(86_401)
         reopened.checkIfDue(enabled: true)
         reopened.checkIfDue(enabled: true)
-        let deadline = ContinuousClock.now + .seconds(2)
+        let deadline = ContinuousClock.now + .seconds(15)
         while requests < 3, ContinuousClock.now < deadline { await Task.yield() }
         await Task.yield()
         #expect(requests == 3 && !reopened.checking)

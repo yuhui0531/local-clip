@@ -39,7 +39,7 @@ import LocalClipCore
         #expect(tiff?.pixelsWide == 640 && tiff?.pixelsHigh == 480)
         capture.tick(); #expect(try await store.detail(id:id,at:SystemClock().now()).summary.copyCount == 1)
         board.clearContents(); #expect(board.setString("USER-AFTER-RESTORE",forType:.string)); capture.tick()
-        let deadline=ContinuousClock.now + .seconds(3)
+        let deadline=ContinuousClock.now + .seconds(15)
         while try await store.search(.init()).items.count < 2, ContinuousClock.now < deadline { try await Task.sleep(for:.milliseconds(10)) }
         #expect(try await store.search(.init()).items.count == 2)
         #expect(await paste.perform(.init(ids:[id],format:.plainText,action:.copy)) == .failed("所选内容包含无文本项目，不能纯文本输出；请使用原格式"))

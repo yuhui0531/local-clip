@@ -8,7 +8,7 @@ import LocalClipCore
 @MainActor struct ClipContentEditorTests {
     /// 等待模型真正完成异步操作，超时明确失败。
     private func wait(_ predicate: () -> Bool) async throws {
-        let end = ContinuousClock.now + .seconds(4)
+        let end = ContinuousClock.now + .seconds(15)
         while !predicate(), ContinuousClock.now < end { try await Task.sleep(for: .milliseconds(5)) }
         #expect(predicate())
     }

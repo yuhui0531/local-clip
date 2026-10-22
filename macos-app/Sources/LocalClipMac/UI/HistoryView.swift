@@ -59,12 +59,6 @@ public struct HistoryView: View {
             }.frame(width: viewport.size.width, height: viewport.size.height, alignment: .top)
                 // 确认期间底层控件对辅助功能隐藏，VoiceOver只操作确认气泡，by AI.Coding。
                 .accessibilityHidden(model.panelConfirmation != nil)
-                // 气泡期间面板吸收点击并视为取消，不冻结面板，点击不会穿透到下层应用或Dock，by AI.Coding。
-                .overlay {
-                    if model.panelConfirmation != nil {
-                        Color.clear.contentShape(Rectangle()).onTapGesture { model.answerPanelConfirmation(false) }.accessibilityHidden(true)
-                    }
-                }
                 .background { ZStack { HistoryBackdrop(); Color(nsColor: .windowBackgroundColor).opacity(LCStyle.panelTint) } }
                 .clipShape(UnevenRoundedRectangle(topLeadingRadius: LCStyle.Radius.panel, topTrailingRadius: LCStyle.Radius.panel))
                 .overlay(UnevenRoundedRectangle(topLeadingRadius: LCStyle.Radius.panel, topTrailingRadius: LCStyle.Radius.panel).strokeBorder(.white.opacity(0.30), lineWidth: 1))
@@ -1736,7 +1730,7 @@ struct LiveTextImage: NSViewRepresentable {
                 // 呈现前已被撤销或替换则不再弹出孤立气泡。
                 guard self?.shown == copy.id else { return }
                 let anchor = PanelConfirmationPresenter.anchor(for: copy.operation, selected: model?.selectedID, in: window)
-                let choice = await confirmation.present(for: window, anchor: anchor, freezesOwner: false)
+                let choice = await confirmation.present(for: window, anchor: anchor)
                 guard let self, self.shown == copy.id else { return }
                 self.confirmation = nil
                 model?.answerPanelConfirmation(choice == .save)

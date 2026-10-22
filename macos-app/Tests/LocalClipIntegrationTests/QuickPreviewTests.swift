@@ -6,7 +6,7 @@ import LocalClipCore
 
 @MainActor struct QuickPreviewTests {
     private func wait(_ predicate: () -> Bool) async throws {
-        let deadline = ContinuousClock.now + .seconds(3)
+        let deadline = ContinuousClock.now + .seconds(15)
         while !predicate(), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(5)) }
         #expect(predicate())
     }

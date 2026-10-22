@@ -484,8 +484,23 @@ import LocalClipCore
     func setFavorite(_ ids: [ClipID], _ value: Bool, selectAll: UUID? = nil) { apply(.favorites(ids, value), ids, selectAll) }
     func setCategory(_ ids: [ClipID], _ categoryID: String, _ included: Bool, selectAll: UUID? = nil) { apply(.category(ids, categoryID, included), ids, selectAll) }
     func delete(_ ids: [ClipID], selectAll: UUID? = nil) { apply(.delete(ids), ids, selectAll) }
-    /// 删除分类沿用预览→窗口附页确认→提交，不借用底栏面板内确认，by AI.Coding。
-    func deleteCategory(_ id: String) { apply(.deleteCategory(id), []) }
+    /// 确认附页挂在管理窗口上；它以非激活方式前置，右键时不一定是key窗口，by AI.Coding。
+    static var window: NSWindow? { NSApp.windows.first { $0 is HistoryManagerWindow && $0.isVisible } }
+    /// 删除分类沿用预览→管理窗口附页确认→提交；与记录内容无关，内容隐藏时也可删除，进行中的写入给出提示，by AI.Coding。
+    func deleteCategory(_ id: String) {
+        guard !changing else { show("正在处理上一个操作"); return }
+        changing = true
+        Task {
+            defer { changing = false }
+            do {
+                guard let result = try await history.commit(.deleteCategory(id), confirm: { await ChangeConfirmation.confirm($0, parent: Self.window) }, willApply: {
+                    // 确认后才作废全选：删除会改变记录归属，避免随后的存储事件以“全选已过期”覆盖成功提示；取消则保留全选。
+                    if allMatching != nil || selectingAll { cancelSelectAll(); allMatching = nil; selection = [] }
+                }) else { return }
+                show(history.changeMessage(.deleteCategory(id), result: result))
+            } catch { show("操作未完成：分类已变化，请重试", failed: true) }
+        }
+    }
     /// 拖动剪贴板只放随机令牌，目标与全选身份留在模型里：其他应用拿不到记录，跨页全选也不把整批ID写入剪贴板，by AI.Coding。
     private var drag: (token: String, ids: [ClipID], selectAll: UUID?)?
     /// 从已选行开始拖作用于完整目标（含跨页全选），与右键一致；否则只拖该行。多选时各行取到同一令牌。
@@ -520,7 +535,7 @@ import LocalClipCore
             do {
                 // 确认期间内容被隐藏则视为取消，by AI.Coding。
                 guard let result = try await history.commit(change, isCurrent: { collected == nil || $0.storeRevision == collected },
-                                                            confirm: { await ChangeConfirmation.confirm($0) && history.canDisplayContents }, willApply: {
+                                                            confirm: { await ChangeConfirmation.confirm($0, parent: Self.window) && history.canDisplayContents }, willApply: {
                     // 自身写入引起的变更事件不再提示全选过期。
                     if collected != nil { allMatching = nil; selection = [] }
                     if case .delete(let ids) = change { allMatching = nil; selection.subtract(ids) }

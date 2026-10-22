@@ -63,7 +63,7 @@ private actor SuspendedStartupRepository: HistoryRepository {
     }
     /// 只等待明确的保存结果，不用固定延时冒充采集成功，by AI.Coding。
     private func waitFor(_ text: String, in store: HistoryStore) async throws {
-        let deadline = ContinuousClock.now + .seconds(3)
+        let deadline = ContinuousClock.now + .seconds(15)
         while try await store.search(.init(text)).items.isEmpty, ContinuousClock.now < deadline {
             try await Task.sleep(for: .milliseconds(5))
         }
@@ -99,7 +99,7 @@ private actor SuspendedStartupRepository: HistoryRepository {
         // 修改无关偏好后等待实际提交，再重开库确认智能粘贴等其它设置没有被整份默认值覆盖。
         model.updateSettings { $0.captureSounds = false }
         saved.captureSounds = false; saved.revision += 1
-        let deadline = ContinuousClock.now + .seconds(3)
+        let deadline = ContinuousClock.now + .seconds(15)
         while model.settings.revision < saved.revision, ContinuousClock.now < deadline {
             try await Task.sleep(for: .milliseconds(5))
         }

@@ -201,7 +201,7 @@ import Testing
         if !afterPresentation {
             model.showingDetail = false; model.detailVisibilityChanged()
         }
-        let deadline = ContinuousClock.now + .seconds(2)
+        let deadline = ContinuousClock.now + .seconds(15)
         while presented == nil && ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
         let menu = try #require(presented)
         var dismissed = false
@@ -224,7 +224,7 @@ import Testing
         menu.choose(.camelCase, modifiers: [.option])
         if invalidation == "none" {
             // 写入等待单独计时；与弹出等待共用截止时间时，满负载并行下会被前一段耗尽，by AI.Coding。
-            let written = ContinuousClock.now + .seconds(3)
+            let written = ContinuousClock.now + .seconds(15)
             while h.raw.count == count && ContinuousClock.now < written { try await Task.sleep(for: .milliseconds(10)) }
             #expect(h.raw.items.first?[SupportedType.string] == Data("userId".utf8))
         } else {

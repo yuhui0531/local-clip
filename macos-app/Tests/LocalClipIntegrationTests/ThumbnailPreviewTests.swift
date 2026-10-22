@@ -150,7 +150,7 @@ struct ThumbnailPreviewTests {
         window.isReleasedWhenClosed = false; window.contentView = host
         defer { window.contentView = nil; window.close() }
         window.orderFront(nil)
-        let deadline = ContinuousClock.now + .seconds(5)
+        let deadline = ContinuousClock.now + .seconds(15)
         var text = "", rendered: NSBitmapImageRep?
         repeat {
             host.layoutSubtreeIfNeeded(); window.displayIfNeeded()

@@ -370,7 +370,7 @@ struct UpdateJanitorTests {
             throw URLError(.notConnectedToInternet)
         }, locations: fixture.locations, cleanup: { _, _ in await cleanupGate.noteEntry() })
         let check = Task { await checker.check(manual: true) }
-        let deadline = ContinuousClock.now + .seconds(3)
+        let deadline = ContinuousClock.now + .seconds(15)
         while await !fetchGate.entered, ContinuousClock.now < deadline { await Task.yield() }
         try #require(await fetchGate.entered)
         await checker.maintain()
