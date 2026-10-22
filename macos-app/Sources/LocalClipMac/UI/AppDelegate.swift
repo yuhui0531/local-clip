@@ -35,9 +35,36 @@ import LocalClipCore
     private var settingsWindow: NSWindow?
     private var managerWindow: HistoryManagerWindow?
     private var manager: HistoryManagerModel?
-    /// 管理窗口打开期间切到常规应用以出现在Dock与⌘Tab，关闭时恢复原策略，by AI.Coding。
-    private var policyBeforeManager: NSApplication.ActivationPolicy?
-    private var managerReveal: Task<Void, Never>?
+    /// 主界面共享单一目标；轻量浏览状态独立于可释放的窗口，by AI.Coding。
+    private var activeSurface: AppSurface?
+    private var requestedSurface: AppSurface?
+    private var surfaceRequestID = UUID()
+    private var surfaceTask: Task<Void, Never>?
+    private let surfaceAnimator = SurfaceAnimator()
+    private var managerBrowsing: HistoryManagerModel.BrowsingState?
+    private var settingsSection = SettingsSection.general
+    #if DEBUG
+    /// 静默集成测试仅绕过可见呈现，查询、保护、动画代次和释放仍使用生产路径。
+    private var hiddenSurfaceTest = false
+    var surfaceWindowsForTesting: (NSWindow?, NSWindow?, NSWindow?) { (panel, settingsWindow, managerWindow) }
+    var surfaceManagerForTesting: HistoryManagerModel? { manager }
+    var surfaceChoiceForTesting: ((String) async -> SurfaceEdits.Choice)?
+    func configureSurfacesForTesting(_ history: HistoryViewModel) {
+        model = history; hiddenSurfaceTest = true
+        history.closePanel = { [weak self] animated in
+            if animated { self?.requestSurface(nil) } else { self?.dismissHistory(animated: false) }
+        }
+    }
+    func switchSurfaceForTesting(_ surface: AppSurface?) { requestSurface(surface) }
+    #endif
+    /// 测试窗口始终隐藏；发布构建不存在替换开关。
+    private var presentsSurfaces: Bool {
+        #if DEBUG
+        if hiddenSurfaceTest { return false }
+        #endif
+        return true
+    }
+
     private var feedbackPanel: NSPanel?
     private var feedbackTask: Task<Void, Never>?
     private var model: HistoryViewModel?
@@ -82,13 +109,8 @@ import LocalClipCore
     }
     /// 在任何历史读写/采集/菜单栏/快捷键之前等待旧进程退出，并持有进程锁。
     public func applicationDidFinishLaunching(_ notification: Notification) {
-        #if DEBUG
-        if GUIAcceptanceProbe.configuration != nil {
-            _ = GUIAcceptanceProbe.launched
-            // 独立验收宿主提供常规应用身份，生产仍为菜单栏非激活面板，by AI.Coding。
-            NSApp.setActivationPolicy(.regular)
-        }
-        #endif
+        // 所有运行入口均维持后台工具身份，验收包也不切成普通应用。
+        NSApp.setActivationPolicy(.accessory)
         startup = Task { [weak self] in
             guard let self else { return }
             do {
@@ -132,7 +154,9 @@ import LocalClipCore
             // 在首次查询前提供屏幕尺寸；SwiftUI随后用实际视口修正，不先读固定50条，by AI.Coding。
             model.configureHistoryViewport(width: NSScreen.main?.frame.width ?? 1400, cardWidth: HistoryView.cardSide(height: initialSettings.panelHeight))
             model.panelVisibilityChanged(false)
-            model.closePanel = { [weak self] animated in self?.dismissHistory(animated: animated) }
+            model.closePanel = { [weak self] animated in
+                if animated { self?.requestSurface(nil) } else { self?.dismissHistory(animated: false) }
+            }
             // 非激活面板不抢前台；置顶时前台应用即当前要粘贴的目标，by AI.Coding。
             model.refreshPinnedTarget = { [weak self, weak model] in
                 guard let self, let model, let target = self.applications.target() else { return }
@@ -221,7 +245,7 @@ import LocalClipCore
     public func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         guard !relaunchRequested else { return false }
         if !Self.installedVersionChanged(running: Bundle.main.infoDictionary, installed: NSDictionary(contentsOf: Bundle.main.bundleURL.appendingPathComponent("Contents/Info.plist")) as? [String: Any]) {
-            showHistory(); return false
+            requestSurface(activeSurface ?? .cards); return false
         }
         relaunchRequested = true
         let configuration = NSWorkspace.OpenConfiguration()
@@ -338,7 +362,6 @@ import LocalClipCore
         item.isEnabled = !updates.checking && updates.phase != .installing
     }
     @objc private func showAbout() {
-        NSApp.activate(ignoringOtherApps: true)
         NSApp.orderFrontStandardAboutPanel(nil)
     }
     /// 用户显式触发，结果用模态弹框告知；设置页按钮仍在页内显示结果，二者共用同一检查流程，by AI.Coding。
@@ -353,7 +376,6 @@ import LocalClipCore
                     alert.messageText = "发现新版本 \(release.version)"
                     alert.informativeText = "当前版本 \(UpdateChecker.currentVersion)。正在后台下载并验签，完成后会提示安装并重启。"
                     alert.addButton(withTitle: "好"); alert.addButton(withTitle: "查看发布页")
-                    NSApp.activate(ignoringOtherApps: true)
                     if alert.runModal() == .alertSecondButtonReturn { NSWorkspace.shared.open(release.page) }
                 }
             }
@@ -383,7 +405,6 @@ import LocalClipCore
                 alert.informativeText = latest ? "当前版本 \(UpdateChecker.currentVersion)。" : "请检查网络连接后重试。"
             } else { return }
             self?.updateMenu()
-            NSApp.activate(ignoringOtherApps: true)
             if alert.runModal() == .alertFirstButtonReturn { primary?() }
         }
     }
@@ -419,11 +440,12 @@ import LocalClipCore
     @objc private func stopPasteQueue() { model?.stopPasteQueue() }
     /// 同一快捷键按实际可见状态切换；关闭不刷新历史或重记粘贴目标。
     private func toggleHistory() {
-        if panelPresented { dismissHistory() }
-        else { showHistory() }
+        requestSurface((requestedSurface ?? activeSurface) == .cards ? nil : .cards)
     }
     /// 记住外部目标后展示面板，铺满当前显示器底边，禁止拖动和缩放。
-    @objc public func showHistory() {
+    @objc public func showHistory() { requestSurface(.cards) }
+    /// 卡片布局与目标记忆沿用原逻辑，透明度由统一切换器控制。
+    private func presentHistory() {
         guard let model else { return }
         let began = ContinuousClock.now
         applications.timingEnabled = model.settings.timingEnabled
@@ -461,19 +483,13 @@ import LocalClipCore
             // 起始位移先于首帧布局写入，随后的动画才有起点，by AI.Coding。
             panelAnimationGeneration += 1; panelFade?.cancel(); panelFade = nil
             panel.ignoresMouseEvents = false
-            if !panel.isVisible { panel.alphaValue = reduceMotion ? 1 : 0 }
+            if !panel.isVisible { panel.alphaValue = 0 }
             panel.contentView?.layoutSubtreeIfNeeded()
             panel.contentView?.displayIfNeeded()
             panelPresented = true
-            panel.makeKeyAndOrderFront(nil)
+            if presentsSurfaces { panel.makeKeyAndOrderFront(nil) }
             // 置前后的首次提交（窗口服务器同步）立即完成，不占用随后淡入与位移动画的前几帧，by AI.Coding。
             CATransaction.flush()
-            if panel.alphaValue < 1 {
-                NSAnimationContext.runAnimationGroup {
-                    $0.duration = 0.18; $0.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 0.9, 0.3, 1)
-                    panel.animator().alphaValue = 1
-                }
-            }
             if model.panelEntrance != 0 { withAnimation(.timingCurve(0.2, 0.9, 0.3, 1, duration: 0.18)) { model.panelEntrance = 0 } }
         }
     }
@@ -495,8 +511,8 @@ import LocalClipCore
         let host = CategoryDropHostingView(rootView: HistoryView(model: model), model: model)
         host.sizingOptions = []
         panel.contentView = host; panel.minSize = NSSize(width: 680, height: 280)
-        panel.onCancel = { [weak self] in if self?.model?.handleEscape() != false { self?.dismissHistory() } }
-        panel.onClose = { [weak self] in self?.dismissHistory() }
+        panel.onCancel = { [weak self] in if self?.model?.handleEscape() != false { self?.requestSurface(nil) } }
+        panel.onClose = { [weak self] in self?.requestSurface(nil) }
         self.panel = panel
         focusObservation = Self.observeHistoryFocus(of: panel, model: model)
         panel.alphaValue = 0
@@ -565,6 +581,7 @@ import LocalClipCore
     private func dismissHistory(animated: Bool = true) {
         guard panelPresented else { return }
         panelPresented = false
+        if activeSurface == .cards { activeSurface = nil; requestedSurface = nil }
         focusState.reset()
         model?.panelVisibilityChanged(false)
         focusDismissal?.cancel(); model?.showingDetail = false; model?.showingCategoryEditor = false; model?.showingFilters = false; model?.showingStatusDetail = false
@@ -592,16 +609,18 @@ import LocalClipCore
     private func scheduleFocusDismissal(externalInteraction: Bool = false, at time: TimeInterval = ProcessInfo.processInfo.systemUptime) {
         if externalInteraction { focusState.externalInteraction(at: time) }
         focusDismissal?.cancel()
-        guard let panel, panelPresented else { return }
+        guard let panel, panelPresented, requestedSurface == nil || requestedSurface == .cards else { return }
         focusDismissal = Task { [weak self] in
             do { try await Task.sleep(for: .milliseconds(60)) } catch { return }
-            guard let self, !Task.isCancelled, self.panelPresented else { return }
+            guard let self, !Task.isCancelled, self.panelPresented, self.requestedSurface == nil || self.requestedSurface == .cards else { return }
             let ownsKey = Self.ownsHistoryWindow(NSApp.keyWindow, panel: panel,
                 settings: self.settingsWindow, feedback: self.feedbackPanel,
                 showingDetail: self.model?.showingDetail == true,
                 showingCategoryEditor: self.model?.showingCategoryEditor == true,
                 showingFilters: self.model?.showingFilters == true || self.model?.showingStatusDetail == true,
                 showingContentEditor: self.model?.contentEditorPresented == true, queue: self.queuePanel, manager: self.managerWindow)
+            // 有未提交输入时外部点击只移开焦点，不能绕过显式关闭的保存保护。
+            guard self.model?.surfaceEdits.hasChanges(.cards) != true, self.model?.surfaceEdits.resolving != true else { return }
             guard self.focusState.shouldDismiss(panelIsKey: panel.isKeyWindow, ownsKeyWindow: ownsKey,
                 dragging: self.model?.dragActive == true, confirming: self.model?.confirmingChange == true || self.model?.contentEditorPresented == true,
                 hasModal: NSApp.modalWindow != nil, pinned: self.model?.pinned == true) else { return }
@@ -797,86 +816,181 @@ import LocalClipCore
         }
     }
     /// 设置使用可取消、失焦隐藏的窗口，不改变已记住的面板目标，by AI.Coding。
-    @objc public func showSettings() {
-        guard let model else { return }
-        if settingsWindow == nil {
-            // 与系统设置类窗口一致：尺寸随分组内容变化，不提供手动缩放，by AI.Coding。
-            let window = SettingsWindow(contentRect: NSRect(x: 0, y: 0, width: 620, height: 500), styleMask: [.titled, .closable], backing: .buffered, defer: false)
-            window.delegate = window
-            window.title = "LocalClip 设置"; window.isReleasedWhenClosed = false
-            let host = NSHostingView(rootView: SettingsView(model: model, login: login)); host.sizingOptions = []
-            window.contentView = host; window.center(); settingsWindow = window
-        }
-        model.settingsVisibilityChanged(true)
-        NSApp.activate(ignoringOtherApps: true); settingsWindow?.makeKeyAndOrderFront(nil)
-    }
+    /// 所有入口只提交目标，保护、准备、动画与释放在一处完成。
+    @objc public func showSettings() { requestSurface(.settings) }
     @objc private func showHistoryManagerFromMenu() { showHistoryManager() }
-    /// 首次打开时创建；再次打开只前置并按需选中记录。管理窗口与底部面板不同时显示：各入口统一收起面板及其浮层，焦点交给管理窗口。
-    /// 面板可见时，管理窗口先以全透明放到面板之下：建窗口、首页数据与行高、首次绘制都在面板原样显示时完成，
-    /// 主线程连续两帧不卡（最多等 0.8s）后面板淡出、管理窗口淡入。淡入淡出由主线程推进，与这些工作重叠会直接跳到终点，by AI.Coding。
-    func showHistoryManager(reveal ids: [ClipID] = []) {
+    func showHistoryManager(reveal ids: [ClipID] = []) { requestSurface(.manager, reveal: ids) }
+
+    /// 已有确认不接受排队；草稿确认期间冻结原目标。普通动画则允许随时改向。
+    private func requestSurface(_ destination: AppSurface?, reveal ids: [ClipID] = []) {
+        guard let model, !model.surfaceEdits.resolving else { return }
+        let windows = [managerWindow, settingsWindow, panel].compactMap { $0 }
+        let contentEditor = manager?.editor ?? (model.contentEditorPresented ? model.contentEditor : nil)
+        let editingWindow = manager?.editor != nil ? managerWindow : panel
+        let editingSheet = contentEditor != nil ? editingWindow?.attachedSheet : nil
+        if let modal = NSApp.modalWindow ?? windows.compactMap({ $0.attachedSheet }).first,
+           modal !== editingSheet || contentEditor?.confirmingDiscard == true || modal.attachedSheet != nil {
+            modal.makeKeyAndOrderFront(nil); return
+        }
+        guard !model.confirmingChange, manager?.editor?.confirmingDiscard != true,
+              model.contentEditor?.confirmingDiscard != true else { return }
+        guard !model.surfaceOperationPending, manager?.surfaceOperationPending != true, contentEditor?.saving != true else { return }
+        if destination == activeSurface, destination == requestedSurface, let destination, let window = window(for: destination), window.alphaValue >= 1 {
+            if window.isMiniaturized { window.deminiaturize(nil) }
+            window.makeKeyAndOrderFront(nil)
+            if destination == .manager, !ids.isEmpty { manager?.reveal(ids) }
+            return
+        }
+        let origin = activeSurface
+        let request = UUID(); surfaceRequestID = request
+        surfaceTask?.cancel()
+        surfaceTask = Task { [weak self] in
+            // 连续同步请求可能在任务开始前取消旧任务，旧任务连确认也不得发起。
+            guard let self, !Task.isCancelled, request == self.surfaceRequestID else { return }
+            if let origin, origin != destination {
+                let owner = editingSheet ?? self.window(for: origin)
+                let contentDraftID = UUID()
+                if let contentEditor {
+                    model.surfaceEdits.register(contentDraftID, surface: origin, draft: .init(title: "内容修改", dirty: { contentEditor.hasChanges }, save: {
+                        guard let saving = contentEditor.save(to: model.store) else { return false }
+                        let saved = await saving.value
+                        if saved {
+                            if self.manager?.editor === contentEditor { self.manager?.editor = nil }
+                            model.finishSavedContentEdit(contentEditor)
+                        }
+                        return saved
+                    }, discard: {}))
+                }
+                defer { model.surfaceEdits.remove(contentDraftID) }
+                let sourceWindow = self.window(for: origin)
+                sourceWindow?.ignoresMouseEvents = true
+                let accepted = await model.surfaceEdits.resolve(origin) { title in
+                    guard let owner else { return .cancel }
+                    return await self.confirmLeaving(title, owner: owner, closing: destination == nil)
+                }
+                guard accepted, !Task.isCancelled, request == self.surfaceRequestID else {
+                    sourceWindow?.ignoresMouseEvents = false; return
+                }
+                self.manager?.discardEdit(); model.discardContentEdit()
+                // 准备目标期间保留原画面，但禁止继续修改已通过保护检查的输入。
+                self.window(for: origin)?.ignoresMouseEvents = true
+            }
+            guard !Task.isCancelled, request == self.surfaceRequestID else { return }
+            self.requestedSurface = destination
+            await self.prepareSurface(destination, reveal: ids, request: request)
+        }
+    }
+    /// 未提交编辑的保存结果决定是否继续；取消后恢复原来的第一响应者。
+    private func confirmLeaving(_ title: String, owner: NSWindow, closing: Bool) async -> SurfaceEdits.Choice {
+        #if DEBUG
+        if let surfaceChoiceForTesting { return await surfaceChoiceForTesting(title) }
+        #endif
+        let responder = owner.firstResponder
+        let alert = NSAlert(); alert.messageText = "\(title)尚未保存"
+        alert.informativeText = "保存后继续，或放弃本次修改。"
+        alert.addButton(withTitle: closing ? "保存并关闭" : "保存并继续")
+        alert.addButton(withTitle: "放弃修改")
+        alert.addButton(withTitle: closing ? "取消关闭" : "取消切换").keyEquivalent = "\u{1b}"
+        alert.window.sharingType = owner.sharingType
+        let response = await alert.beginSheetModal(for: owner)
+        if let responder { owner.makeFirstResponder(responder) }
+        switch response { case .alertFirstButtonReturn: return .save; case .alertSecondButtonReturn: return .discard; default: return .cancel }
+    }
+    /// 仅供窗口路由使用，不将预览浮层误认成主窗口。
+    private func window(for surface: AppSurface) -> NSWindow? {
+        switch surface { case .cards: panel; case .settings: settingsWindow; case .manager: managerWindow }
+    }
+    /// 新窗口在透明状态下完成布局，旧窗口仍保留画面，内容就绪后才开始交接。
+    private func prepareSurface(_ destination: AppSurface?, reveal ids: [ClipID], request: UUID) async {
         guard let model else { return }
-        let window = managerWindow ?? makeHistoryManager(model)
+        let target: NSWindow?
+        switch destination {
+        case .manager:
+            target = managerWindow ?? makeHistoryManager(model)
+            if !ids.isEmpty { manager?.reveal(ids) }
+        case .settings: target = settingsWindow ?? makeSettings(model)
+        case .cards: target = nil
+        case nil: target = nil
+        }
+        if let target, !target.isVisible {
+            target.alphaValue = 0; target.ignoresMouseEvents = true
+            target.contentView?.layoutSubtreeIfNeeded()
+            if presentsSurfaces { target.orderFrontRegardless() }
+            target.contentView?.displayIfNeeded()
+        }
+        if destination == .manager {
+            while manager?.loading == true {
+                do { try await Task.sleep(for: .milliseconds(16)) } catch { return }
+            }
+        }
+        // 给 SwiftUI 首次布局与窗口服务器提交留出稳定帧；取消时新请求接管已有窗口。
+        if destination != nil {
+            do { try await Task.sleep(for: .milliseconds(32)) } catch { return }
+        }
+        guard !Task.isCancelled, request == surfaceRequestID else { return }
+        manager?.closeQuickLook()
+        if destination != .cards { model.closeQuickLookForTransition() }
+        if destination == .cards { presentHistory() }
+        let current = destination.flatMap { window(for: $0) }
+        if let current, presentsSurfaces {
+            if current.isMiniaturized { current.deminiaturize(nil) }
+            current.makeKeyAndOrderFront(nil)
+        }
+        activeSurface = destination
+        for window in [panel, settingsWindow, managerWindow].compactMap({ $0 }) { window.ignoresMouseEvents = window !== current }
+        let transitions = [panel, settingsWindow, managerWindow].compactMap { $0 }.filter(\.isVisible).map { ($0, $0 === current ? 1.0 : 0.0) }
+        surfaceAnimator.animate(transitions, reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion) { [weak self] in
+            guard let self, request == self.surfaceRequestID else { return }
+            self.releaseSurfaces(except: destination)
+        }
+    }
+    /// 释放退出的窗口和异步任务；只保留明确约定的浏览条件。
+    private func releaseSurfaces(except destination: AppSurface?) {
+        if destination != .cards { dismissHistory(animated: false); model?.surfaceEdits.removeAll(.cards) }
+        if destination != .manager, let window = managerWindow {
+            managerBrowsing = manager?.browsingState
+            manager?.stop(); manager = nil; managerWindow = nil
+            window.onClose = nil; window.close()
+            // 主动清空托管根视图，避免 SwiftUI 图缓存继续持有旧管理模型。
+            (window.contentViewController as? NSHostingController<AnyView>)?.rootView = AnyView(EmptyView())
+            window.contentViewController = nil; window.contentView = nil
+            model?.surfaceEdits.removeAll(.manager)
+        }
+        if destination != .settings, let window = settingsWindow {
+            settingsWindow = nil; window.close()
+            (window.contentView as? NSHostingView<AnyView>)?.rootView = AnyView(EmptyView())
+            window.contentView = nil
+            model?.settingsVisibilityChanged(false); model?.surfaceEdits.removeAll(.settings)
+        }
+    }
+    /// 设置窗口非激活、关闭即释放；仅恢复最后访问的分组。
+    private func makeSettings(_ model: HistoryViewModel) -> SettingsWindow {
+        let window = SettingsWindow(contentRect: NSRect(x: 0, y: 0, width: 620, height: 500), styleMask: [.titled, .closable, .nonactivatingPanel], backing: .buffered, defer: false)
+        window.delegate = window; window.title = "LocalClip 设置"; window.isReleasedWhenClosed = false
+        window.hidesOnDeactivate = false; window.isFloatingPanel = false; window.level = .normal; window.animationBehavior = .none
+        window.requestClose = { [weak self] in self?.requestSurface(nil) }
+        var view = SettingsView(model: model, login: login, section: settingsSection, fitWindow: { [weak window] in window?.fitContent(height: $0) })
+        view.sectionChanged = { [weak self] in self?.settingsSection = $0 }
+        let host = NSHostingView(rootView: AnyView(view)); host.sizingOptions = []
+        window.contentView = host; window.center(); settingsWindow = window
         Self.applySharing(model.settings.excludeFromSharing, to: [window])
-        if !ids.isEmpty { manager?.reveal(ids) }
-        managerReveal?.cancel(); managerReveal = nil
-        guard panelPresented, panel?.isVisible == true, !window.isVisible || window.alphaValue < 1,
-              !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { revealHistoryManager(window, fade: false); return }
-        window.alphaValue = 0; window.ignoresMouseEvents = true; window.orderFrontRegardless()
-        managerReveal = Task { [weak self] in
-            // 首页就绪且画完，再激活应用并让透明窗口成为 key（切换激活策略与焦点也会卡主线程约 0.1s），最后才开始淡入淡出。
-            guard await Self.mainThreadSettles(within: .milliseconds(800), until: { self?.manager?.loading == false }), let self else { return }
-            self.activateForManager(window)
-            guard await Self.mainThreadSettles(within: .milliseconds(300), until: { true }, stopEarly: { self.panelPresented != true }) else { return }
-            self.revealHistoryManager(window, fade: true)
-        }
-    }
-    /// 以 16ms 定时器连续两次准点视为主线程空闲；超时也返回 true 照常继续，只有任务取消返回 false。
-    /// ponytail: 启发式判断，需要更准时改用显示链路回调。
-    private static func mainThreadSettles(within limit: Duration, until ready: () -> Bool, stopEarly: () -> Bool = { false }) async -> Bool {
-        var quiet = 0, last = ContinuousClock.now
-        let deadline = last + limit
-        while quiet < 2, ContinuousClock.now < deadline, !stopEarly() {
-            try? await Task.sleep(for: .milliseconds(16))
-            if Task.isCancelled { return false }
-            let now = ContinuousClock.now
-            quiet = now - last < .milliseconds(30) && ready() ? quiet + 1 : 0
-            last = now
-        }
-        return !Task.isCancelled
-    }
-    private func activateForManager(_ window: NSWindow) {
-        if NSApp.activationPolicy() != .regular { NSApp.setActivationPolicy(.regular) }
-        NSApp.activate(ignoringOtherApps: true)
-        window.makeKeyAndOrderFront(nil)
-    }
-    private func revealHistoryManager(_ window: NSWindow, fade: Bool) {
-        managerReveal = nil; window.ignoresMouseEvents = false
-        activateForManager(window)
-        dismissHistory(animated: fade)
-        if fade { NSAnimationContext.runAnimationGroup { $0.duration = 0.18; window.animator().alphaValue = 1 } } else { window.alphaValue = 1 }
-    }
-    private func makeHistoryManager(_ model: HistoryViewModel) -> HistoryManagerWindow {
-        let manager = HistoryManagerModel(history: model)
-        manager.locate = { [weak self] id in self?.showHistory(); self?.model?.jumpToHistory(id: id) }
-        let host = NSHostingController(rootView: HistoryManagerView(model: manager, history: model))
-        host.sceneBridgingOptions = [.toolbars, .title]; host.sizingOptions = []
-        let window = HistoryManagerWindow(content: host)
-        // 独立预览归属于管理窗口，不借用已隐藏的历史面板。
-        manager.previewParent = { [weak window] in window }
-        window.onClose = { [weak self] in self?.historyManagerClosed() }
-        managerWindow = window; self.manager = manager
-        policyBeforeManager = NSApp.activationPolicy()
-        // 立即开始读首页，等待淡入时能据加载状态判断首页是否就绪；视图出现时再调用不会重复读取。
-        manager.start()
-        window.applyInspectorIdealWidth()
+        model.settingsVisibilityChanged(true)
         return window
     }
-    private func historyManagerClosed() {
-        managerReveal?.cancel(); managerReveal = nil
-        manager?.stop(); manager = nil; managerWindow = nil
-        if let policy = policyBeforeManager, policy != .regular { NSApp.setActivationPolicy(policy) }
-        policyBeforeManager = nil
+    /// 管理窗口复用非激活面板能力，保持外部应用菜单和焦点身份。
+    private func makeHistoryManager(_ model: HistoryViewModel) -> HistoryManagerWindow {
+        let manager = HistoryManagerModel(history: model)
+        if let managerBrowsing { manager.restoreBrowsing(managerBrowsing) }
+        manager.locate = { [weak self] id in self?.showHistory(); self?.model?.jumpToHistory(id: id) }
+        let host = NSHostingController(rootView: AnyView(HistoryManagerView(model: manager, history: model)))
+        host.sceneBridgingOptions = [.toolbars, .title]; host.sizingOptions = []
+        let window = HistoryManagerWindow(content: host)
+        manager.previewParent = { [weak window] in window }
+        window.requestClose = { [weak self] in self?.requestSurface(nil) }
+        managerWindow = window; self.manager = manager
+        Self.applySharing(model.settings.excludeFromSharing, to: [window])
+        manager.start(); window.applyInspectorIdealWidth()
+        return window
     }
     /// 按点击时的状态保存明确意图，恢复仍从新计数开始，by AI.Coding。
     @objc private func toggleCapture() {
@@ -973,6 +1087,12 @@ import LocalClipCore
             guard let self else { return event }
             // 本地Cmd-Q先于历史/IME分支，也适用于只有设置窗口或菜单图标隐藏时，by AI.Coding。
             if self.handleQuitShortcut(event) { return nil }
+            if let eventWindow = event.window, eventWindow.ignoresMouseEvents { return nil }
+            let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
+            if modifiers == [.command], event.keyCode == 13,
+               event.window === self.settingsWindow || event.window === self.managerWindow || event.window === self.panel {
+                self.requestSurface(nil); return nil
+            }
             // 管理窗口按键：附页、文字编辑与输入法组字交还系统，其余由窗口模型处理，by AI.Coding。
             // 附页按窗口归属认领，不再落入面板编辑器分支保存或取消另一份草稿，by AI.Coding。
             if let window = self.managerWindow, Self.ownedBy(event.window, window), let manager = self.manager {
@@ -1109,6 +1229,8 @@ import LocalClipCore
     }
     /// 退出释放系统注册；未完成写入靠原子提交协议恢复。
     public func applicationWillTerminate(_ notification: Notification) {
+        surfaceTask?.cancel(); surfaceAnimator.cancel()
+        manager?.stop(); model?.surfaceEdits.removeAll(.cards); model?.surfaceEdits.removeAll(.manager); model?.surfaceEdits.removeAll(.settings)
         sourceObserver?.stop(); sourceObserver = nil
         startup?.cancel(); modelStartup?.cancel()
         model?.capture.stop(); maintenance?.cancel(); hotkeys.stop()

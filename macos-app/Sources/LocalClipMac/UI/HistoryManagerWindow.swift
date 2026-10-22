@@ -1,17 +1,25 @@
 // 独立历史管理窗口：可缩放、记住尺寸位置，关闭即释放查询与订阅，by AI.Coding。
 import AppKit
 
-@MainActor final class HistoryManagerWindow: NSWindow, NSWindowDelegate {
+@MainActor final class HistoryManagerWindow: NSPanel, NSWindowDelegate {
     static let autosaveName = "LocalClipHistoryManagerWindow"
     /// 首次打开的尺寸，与原型一致；已记住位置尺寸的用户不受影响。
     static let defaultSize = NSSize(width: 1180, height: 820)
     var onClose: (() -> Void)?
+    var requestClose: (() -> Void)?
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { false }
+    /// 标准关闭先走草稿保护和淡出；实际释放由宿主调用 close。
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        guard let requestClose else { return true }; requestClose(); return false
+    }
 
     init(content: NSViewController) {
         super.init(contentRect: NSRect(origin: .zero, size: Self.defaultSize),
-                   styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+                   styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView, .nonactivatingPanel],
                    backing: .buffered, defer: false)
         delegate = self
+        hidesOnDeactivate = false; isFloatingPanel = false; level = .normal; animationBehavior = .none
         title = "历史管理"
         isReleasedWhenClosed = false
         tabbingMode = .disallowed

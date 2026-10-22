@@ -3,6 +3,8 @@ import AppKit
 import SwiftUI
 import LocalClipCore
 @MainActor public final class HistoryViewModel: ObservableObject {
+    /// 主界面的未提交输入统一参与关闭与切换保护。
+    let surfaceEdits = SurfaceEdits()
     public let store: HistoryStore
     public let capture: CaptureCoordinator
     public let paste: PasteCoordinator
@@ -338,6 +340,8 @@ import LocalClipCore
     private var selectionGeneration = UUID()
     private var pendingDeletion: Set<ClipID> = []
     private var changingHistory = false
+    /// 在途破坏性操作可能稍后显示确认，主界面此时不得提前释放。
+    var surfaceOperationPending: Bool { changingHistory || savingCategory }
     private var subscription: Task<Void, Never>?
     private var indexRepair: Task<Void, Never>?
     private var visibilityDeadline: Task<Void, Never>?
@@ -1000,9 +1004,13 @@ import LocalClipCore
         guard let editor = contentEditor, let saving = editor.save(to: store) else { return }
         Task {
             guard await saving.value else { return }
-            if contentEditor === editor { contentEditor = nil }
+            finishSavedContentEdit(editor)
             notice("内容已保存"); panelInteractionChanged?()
         }
+    }
+    /// 保存成功时编辑器仍处于锁定态，不能使用只允许未保存态的 discard 入口。
+    func finishSavedContentEdit(_ editor: ClipContentEditorState) {
+        if contentEditor === editor { contentEditor = nil; contentEditRequest = UUID(); panelInteractionChanged?() }
     }
     static let renameFailure = "重命名失败：名称需为单行且不超过1024字节，记录和容量仍须有效"
     /// 只编辑指定卡片的名称，不改变单选/多选与当前滚动窗口，by AI.Coding。
@@ -1037,6 +1045,12 @@ import LocalClipCore
                 if generation == renameGeneration { message = Self.renameFailure }
             }
         }
+    }
+    /// 切换前等待与原入口相同的改名任务；失败继续保留编辑界面。
+    func saveRenameBeforeLeaving(id: ClipID, title: String) async -> Bool {
+        saveRename(id: id, title: title)
+        await renameTask?.value
+        return renamingID == nil
     }
     /// 双击恢复原格式后向原应用焦点粘贴；Finder文件对象仍复制到其当前实际目录。
     public func doubleClick(_ id: ClipID) {
@@ -1074,11 +1088,12 @@ import LocalClipCore
     }
     /// 破坏性操作只能经预览和用户确认；过期token要求再次预览。
     /// 确认位置按调用来源在发起时确定，不在预览返回后读取当时的key窗口，by AI.Coding。
-    public func change(_ change: HistoryChange, fromSettings: Bool = false) {
-        guard !changingHistory else { return }
+    public func change(_ change: HistoryChange, fromSettings: Bool = false, completion: ((Bool) -> Void)? = nil) {
+        guard !changingHistory else { completion?(false); return }
         changingHistory = true
         Task {
-            defer { changingHistory = false }
+            var succeeded = false
+            defer { changingHistory = false; completion?(succeeded) }
             do {
                 let result = try await commit(change, confirm: { preview in
                     confirmingChange = true; panelInteractionChanged?()
@@ -1101,7 +1116,7 @@ import LocalClipCore
                 })
                 guard let result else { return }
                 if case .delete = change { recordUndoQuery = canUndoDeletion ? query : nil }
-                notice(changeMessage(change, result: result))
+                notice(changeMessage(change, result: result)); succeeded = true
             } catch StoreError.stalePreview { pendingDeletion.removeAll(); message = "历史已变化，请重新预览并确认"; refresh() }
             catch { pendingDeletion.removeAll(); message = "变更未完成，旧内容保持或存储不可用，请检查状态"; refresh() }
         }
@@ -1176,23 +1191,32 @@ import LocalClipCore
         return Self.categoryPalette.first { !used.contains($0.hex) }?.hex ?? Self.categoryPalette[categories.count % Self.categoryPalette.count].hex
     }
     /// 分类在面板内编辑，只有持久化成功后才更新标签和归属入口。
+    private let categorySurfaceDraftID = UUID()
     public func editCategory(_ category: ClipCategory? = nil) {
         guard !savingCategory else { return }
         categoryBeingEdited = category; categoryDraft = category?.name ?? ""; categoryColor = category?.colorHex ?? nextCategoryColor; categoryError = ""
         showingDetail = false; showingCategoryEditor = true
+        let initialColor = categoryColor
+        surfaceEdits.register(categorySurfaceDraftID, surface: .cards, draft: .init(title: "分类修改", dirty: { [weak self] in
+            guard let self else { return false }
+            return self.savingCategory || self.categoryDraft != (category?.name ?? "") || self.categoryColor != initialColor
+        }, save: { [weak self] in await self?.saveCategoryBeforeLeaving() ?? false }, discard: { [weak self] in self?.cancelCategoryEditor() }))
     }
+    /// 明确取消分类编辑才清除草稿保护，原生浮层临时失焦不丢输入。
+    func cancelCategoryEditor() { showingCategoryEditor = false; surfaceEdits.remove(categorySurfaceDraftID) }
     /// 只更新共享分类列表；面板筛选裁剪仍在可见刷新时进行，by AI.Coding。
     func reloadCategories() async {
         if let value = try? await store.categories() { assignIfChanged(\.categories, value) }
     }
     static func categoryFailure(_ error: Error) -> String { (error as? CategoryError)?.message ?? "分类保存失败，请检查容量或存储状态" }
-    public func saveCategory() {
-        guard !savingCategory else { return }
+    public func saveCategory() { Task { await saveCategoryBeforeLeaving() } }
+    /// 返回真实保存结果，窗口切换不得早于持久化成功。
+    @discardableResult func saveCategoryBeforeLeaving() async -> Bool {
+        guard !savingCategory else { return false }
         let category = categoryBeingEdited, name = categoryDraft
         savingCategory = true; categoryError = ""
-        Task {
-            defer { savingCategory = false }
-            do {
+        defer { savingCategory = false }
+        do {
                 if let category {
                     try await store.renameCategory(id: category.id, name: name, colorHex: categoryColor)
                     notice("已保存分类")
@@ -1201,9 +1225,8 @@ import LocalClipCore
                     selectCategories([created.id])
                     notice("已创建分类")
                 }
-                showingCategoryEditor = false
-            } catch { categoryError = Self.categoryFailure(error) }
-        }
+                showingCategoryEditor = false; surfaceEdits.remove(categorySurfaceDraftID); return true
+        } catch { categoryError = Self.categoryFailure(error); showingCategoryEditor = true; return false }
     }
     /// 开始拖动只生成短期ID令牌，正文由公开提供者按需读取。
     public func registerDragAccess(_ access: ClipExportAccess) { dragAccesses.append(access) }
@@ -1604,6 +1627,12 @@ import LocalClipCore
         if detailSlow { detailSlow = false }
     }
     /// Space按需预览；读取前后复查展示策略、选择与请求身份；等待反馈从按下起覆盖整个读取，by AI.Coding。
+    /// 主界面交接前取消图片读取，收回所有只读浮层，防止异步预览迟到。
+    func closeQuickLookForTransition() {
+        endQuickLook(); quickPreview.close(); previewFollowsSelection = false
+        showingDetail = false; showingFilters = false; showingStatusDetail = false; showingCategoryEditor = false
+        transformMenu = nil
+    }
     public func quickLook() {
         guard canDisplayContents, let selectedID else { return }
         endQuickLook()

@@ -7,6 +7,7 @@ struct ClipNameField: NSViewRepresentable {
     var fontSize: CGFloat
     var onCommit: () -> Void
     var onCancel: () -> Void
+    var onFocusLost: (() -> Void)? = nil
 
     /// 原生单行文本域保留中文组合、选择与标准编辑快捷键。
     func makeNSView(context: Context) -> Field {
@@ -56,7 +57,9 @@ struct ClipNameField: NSViewRepresentable {
             parent.text = field.stringValue
         }
         /// 主动移开焦点取消改名；提交命令保持编辑到保存结果返回。
-        func controlTextDidEndEditing(_ notification: Notification) { parent.onCancel() }
+        func controlTextDidEndEditing(_ notification: Notification) {
+            if let onFocusLost = parent.onFocusLost { onFocusLost() } else { parent.onCancel() }
+        }
         /// 输入法先处理候选，Return保存、Escape取消，不交给面板粘贴路由。
         func control(_ control: NSControl, textView: NSTextView, doCommandBy command: Selector) -> Bool {
             guard !textView.hasMarkedText() else { return false }

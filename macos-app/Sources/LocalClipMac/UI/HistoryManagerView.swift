@@ -105,20 +105,26 @@ private struct NewCategoryButton: View {
     @State private var color = ""
     @State private var error = ""
     @State private var saving = false
+    @State private var categoryDraftID = UUID()
     var body: some View {
-        Button { name = ""; color = history.nextCategoryColor; error = ""; shown = true } label: { Image(systemName: "plus") }
+        Button { name = ""; color = history.nextCategoryColor; error = ""; shown = true; registerCategoryDraft() } label: { Image(systemName: "plus") }
             .buttonStyle(.borderless).help("新建分类").accessibilityLabel("新建分类")
             .popover(isPresented: $shown, arrowEdge: .trailing) {
-                CategoryEditor(creating: true, name: $name, color: $color, error: error, saving: saving, cancel: { shown = false }, save: save)
+                CategoryEditor(creating: true, name: $name, color: $color, error: error, saving: saving, cancel: { shown = false; history.surfaceEdits.remove(categoryDraftID) }, save: save)
             }
     }
-    private func save() {
-        guard !saving else { return }
+    /// 弹出层临时失焦不丢草稿，显式取消/保存才解除保护。
+    private func registerCategoryDraft() {
+        history.surfaceEdits.register(categoryDraftID, surface: .manager, draft: .init(title: "分类名称", dirty: { !name.isEmpty || saving }, save: saveBeforeLeaving, discard: { shown = false; name = "" }))
+    }
+    private func save() { Task { await saveBeforeLeaving() } }
+    /// 切换等待真实结果；失败重新展示原草稿。
+    @discardableResult private func saveBeforeLeaving() async -> Bool {
+        guard !saving else { return false }
         saving = true; error = ""
-        Task {
-            defer { saving = false }
-            if let failure = await model.createCategory(name, color: color) { error = failure } else { shown = false }
-        }
+        defer { saving = false }
+        if let failure = await model.createCategory(name, color: color) { error = failure; shown = true; return false }
+        shown = false; history.surfaceEdits.remove(categoryDraftID); return true
     }
 }
 
@@ -441,6 +447,7 @@ private struct ManagerDetail: View {
     let row: ClipSummary
     let content: ClipDetailContent
     @State private var draft = HistoryManagerModel.NameDraft(nil)
+    @State private var draftID = UUID()
     /// 自动生成的名称同样是可读标题，占位提示与已保存名称均使用正文颜色，by AI.Coding。
     var body: some View {
         let detail = content.detail
@@ -479,8 +486,19 @@ private struct ManagerDetail: View {
             }
         }
         .padding(12)
-        .onAppear { draft = .init(row.title) }
-        .onChange(of: row.title) { old, title in draft.titleChanged(from: old, to: title) }
+        .onAppear { draft = .init(row.title); registerDraft() }
+        .onChange(of: row.title) { old, title in draft.titleChanged(from: old, to: title); registerDraft() }
+        .onDisappear { history.surfaceEdits.remove(draftID) }
+    }
+    /// 草稿仍由输入框持有，仅登记切换时的校验、保存和放弃操作。
+    private func registerDraft() {
+        history.surfaceEdits.register(draftID, surface: .manager, draft: .init(title: "名称修改", dirty: {
+            draft.text != (row.title ?? "") || !draft.pending.isEmpty
+        }, save: {
+            guard draft.pending.isEmpty else { return false }
+            guard let name = draft.submit(current: row.title) else { return true }
+            let saved = await model.rename(row.id, name); draft.finished(name); return saved
+        }, discard: { draft = .init(row.title) }))
     }
 }
 /// 多选只显示汇总；数量在批量栏，不在此重复，逐条名称见表格勾选行，by AI.Coding。

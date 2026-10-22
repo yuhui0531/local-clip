@@ -1,8 +1,15 @@
 // 设置窗口的取消和失焦生命周期；子弹窗与录制保持原生事件优先级，by AI.Coding。
 import AppKit
 
-@MainActor final class SettingsWindow: NSWindow, NSWindowDelegate {
+@MainActor final class SettingsWindow: NSPanel, NSWindowDelegate {
     private var fitted = false
+    var requestClose: (() -> Void)?
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { false }
+    /// 红色关闭按钮与 Esc 共用宿主的保护、淡出和释放。
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        guard let requestClose else { return true }; requestClose(); return false
+    }
 
     /// 窗口贴合当前分组内容，保持标题栏位置不动；首次直接定尺寸，之后切换分组时动画过渡，by AI.Coding。
     func fitContent(height: CGFloat) {
@@ -17,7 +24,7 @@ import AppKit
     override func cancelOperation(_ sender: Any?) {
         guard attachedSheet == nil, NSApp.modalWindow == nil,
               (firstResponder as? NSTextView)?.hasMarkedText() != true else { return }
-        close()
+        if let requestClose { requestClose() } else { close() }
     }
 
     /// 文本编辑器也可用Esc关闭；快捷键录制的本地监视器先消费Esc，附属窗口单独收事件。

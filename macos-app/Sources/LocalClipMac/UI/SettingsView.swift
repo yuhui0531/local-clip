@@ -14,6 +14,8 @@ public struct SettingsView: View {
     @ObservedObject var model: HistoryViewModel
     let login: LoginItemService
     @State private var section: SettingsSection = .general
+    var sectionChanged: (SettingsSection) -> Void = { _ in }
+    @State private var draftID = UUID()
     @State private var retention = "30"
     @State private var quota = "500"
     @State private var recording = false
@@ -263,14 +265,14 @@ public struct SettingsView: View {
         .onChange(of: windowHeight, initial: true) { _, height in if headerHeight > 0, footerHeight > 0 { fitWindow(height) } }
         .frame(maxHeight: .infinity)
         .background(Color(nsColor: .windowBackgroundColor))
-        .onChange(of: section) { _, _ in stopRecording() }
+        .onChange(of: section) { _, value in stopRecording(); sectionChanged(value) }
         .onChange(of: model.settings.retentionDays) { _, value in retention = String(value) }
         .onChange(of: model.settings.quotaBytes) { _, value in quota = String(value / MiB) }
         .onExitCommand {
             if recording { stopRecording() }
             else { (NSApp.keyWindow as? SettingsWindow)?.cancelOperation(nil) }
         }
-        .onAppear { model.settingsVisibilityChanged(true); model.actualPanelHeight = max(280, model.settings.panelHeight); retention = String(model.settings.retentionDays); quota = String(model.settings.quotaBytes / MiB); refreshLogin(); permitted = MacApplicationClient().permitted }
+        .onAppear { model.settingsVisibilityChanged(true); model.actualPanelHeight = max(280, model.settings.panelHeight); retention = String(model.settings.retentionDays); quota = String(model.settings.quotaBytes / MiB); refreshLogin(); permitted = MacApplicationClient().permitted; registerStorageDraft() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in refreshLogin(); permitted = MacApplicationClient().permitted }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { notification in
             // 复用设置窗口重开时应用可能一直激活；仅刷新系统登录项，不覆盖未应用草稿或改动权限。
@@ -284,7 +286,26 @@ public struct SettingsView: View {
             // 切出设置停止录制，但保留页面和未应用输入，by AI.Coding。
             if notification.object is SettingsWindow { stopRecording() }
         }
-        .onDisappear { model.settingsVisibilityChanged(false); stopRecording() }
+        .onDisappear { model.settingsVisibilityChanged(false); stopRecording(); model.surfaceEdits.remove(draftID) }
+    }
+    /// 手动应用的存储限制也受草稿保护；保留原有可能删除记录的二次确认。
+    private func registerStorageDraft() {
+        model.surfaceEdits.register(draftID, surface: .settings, draft: .init(title: "存储设置", dirty: {
+            retention != String(model.settings.retentionDays) || quota != String(model.settings.quotaBytes / MiB)
+        }, save: {
+            let changeRetention = retention != String(model.settings.retentionDays)
+            let changeQuota = quota != String(model.settings.quotaBytes / MiB)
+            guard !changeRetention || Int(retention).map({ (1...365).contains($0) }) == true else { feedback = "保留天数需为1–365"; return false }
+            guard !changeQuota || Int64(quota).map({ (100...4096).contains($0) }) == true else { feedback = "容量需为100–4096MiB"; return false }
+            if changeRetention, let days = Int(retention) {
+                let ok = await withCheckedContinuation { continuation in model.change(.retention(days), fromSettings: true) { continuation.resume(returning: $0) } }
+                guard ok else { return false }
+            }
+            if changeQuota, let value = Int64(quota) {
+                return await withCheckedContinuation { continuation in model.change(.quota(value * MiB), fromSettings: true) { continuation.resume(returning: $0) } }
+            }
+            return true
+        }, discard: { retention = String(model.settings.retentionDays); quota = String(model.settings.quotaBytes / MiB) }))
     }
     /// 普通偏好直接读写快照字段，保存仍走updateSettings。
     private func setting<Value>(_ key: WritableKeyPath<SettingsSnapshot, Value>) -> Binding<Value> {

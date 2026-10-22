@@ -614,7 +614,7 @@ private struct PanelCategoryEditor: View {
     @ObservedObject var model: HistoryViewModel
     var body: some View {
         CategoryEditor(creating: model.categoryBeingEdited == nil, name: $model.categoryDraft, color: $model.categoryColor, error: model.categoryError,
-                       saving: model.savingCategory, cancel: { model.showingCategoryEditor = false }, save: model.saveCategory)
+                       saving: model.savingCategory, cancel: { model.cancelCategoryEditor() }, save: model.saveCategory)
     }
 }
 /// 分类名称与颜色编辑弹窗；面板与历史管理共用，状态与保存由调用方提供，by AI.Coding。
@@ -661,6 +661,7 @@ struct ClipCard: View, Equatable {
     let quickModifiers: UInt32
     @State private var headerRect: CGRect = .zero
     @State private var infoRect: CGRect = .zero
+    @State private var surfaceDraftID = UUID()
     @State private var nameDraft = ""
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
@@ -875,7 +876,8 @@ struct ClipCard: View, Equatable {
                     if nameDraft != $0 { nameDraft = $0; model.renameDraftChanged(id: item.id) }
                 }), fontSize: tiny ? 10 : height < 150 ? 12 : 14,
                     onCommit: { model.saveRename(id: item.id, title: nameDraft) },
-                    onCancel: { model.cancelRename(id: item.id) })
+                    onCancel: { model.cancelRename(id: item.id) },
+                    onFocusLost: { if nameDraft == (item.title ?? "") { model.cancelRename(id: item.id) } })
                     .frame(height: tiny ? 13 : height < 150 ? 15 : 17)
                     .background(Color.white.opacity(0.2), in: RoundedRectangle(cornerRadius: LCStyle.Radius.control))
             } else { Text(item.title ?? languageTitle ?? HistoryView.kindName(item.kind)).help("双击标题重命名 · ⌘R") }
@@ -1117,8 +1119,19 @@ struct ClipCard: View, Equatable {
                 Divider(); Button("删除", role: .destructive) { model.change(.delete(model.selectedIDs.contains(item.id) ? model.orderedSelection : [item.id])) }
             }
     }
+    /// 改名失焦不丢弃已输入文本；窗口切换前走统一保存/放弃确认。
+    private func registerNameDraft() {
+        model.surfaceEdits.register(surfaceDraftID, surface: .cards, draft: .init(title: "名称修改", dirty: {
+            editing && nameDraft != (item.title ?? "")
+        }, save: { await model.saveRenameBeforeLeaving(id: item.id, title: nameDraft) }, discard: { model.cancelRename(id: item.id) }))
+    }
     var body: some View {
         menuCard
+            .onChange(of: editing, initial: true) { _, active in
+                if active { registerNameDraft() } else { model.surfaceEdits.remove(surfaceDraftID) }
+            }
+            .onChange(of: item.title) { _, _ in if editing { registerNameDraft() } }
+            .onDisappear { model.surfaceEdits.remove(surfaceDraftID) }
             // LazyHStack可能提前创建邻近卡片；正文/图片任务只在真实可见时运行，离屏释放解码图，by AI.Coding。
             .onScrollVisibilityChange(threshold: 0.01) { visible in
                 isOnscreen = visible

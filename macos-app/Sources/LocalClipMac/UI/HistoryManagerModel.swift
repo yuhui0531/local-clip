@@ -5,6 +5,15 @@ import LocalClipCore
 
 @MainActor final class HistoryManagerModel: ObservableObject {
     enum Scope: Hashable { case all, favorites, kind(ClipKind), category(String) }
+    /// 只保存约定的轻量条件，页码、多选、滚动和预览不跨窗口恢复。
+    struct BrowsingState { var scope: Scope; var literal: String; var sort: HistorySortOrder }
+    var browsingState: BrowsingState { .init(scope: scope, literal: literal, sort: sort) }
+    /// 已删除分类退回全部，避免恢复到永远空白的失效范围。
+    func restoreBrowsing(_ state: BrowsingState) {
+        if case .category(let id) = state.scope, !history.categories.contains(where: { $0.id == id }) { scope = .all }
+        else { scope = state.scope }
+        literal = state.literal; sort = state.sort
+    }
     enum TimeRange: String, CaseIterable, Identifiable {
         case all = "全部", today = "今天", week = "近 7 天", month = "近 30 天"
         var id: Self { self }
@@ -68,6 +77,8 @@ import LocalClipCore
     #endif
     /// 写入在途时忽略重复操作，连按⌫不会对同一批再次预览提交，by AI.Coding。
     private var changing = false
+    /// 预览确认尚在途时保留所属窗口，避免出现脱离原窗口的迟到确认。
+    var surfaceOperationPending: Bool { changing || editor?.saving == true }
     /// 来源列表只在出现未知来源后重读，不在每次采集时全库扫描；scannedFor 防止同一条件反复重读，by AI.Coding。
     private var sourcesStale = true
     private var scannedFor: String?
@@ -185,7 +196,8 @@ import LocalClipCore
     func stop() {
         closeQuickLook(); previewSettings?.cancel(); previewSettings = nil
         subscription?.cancel(); subscription = nil; history.onCaptureSource = nil
-        loadTask?.cancel(); detailTask?.cancel(); toastTask?.cancel(); cancelSelectAll(); pendingReveal = []
+        loadTask?.cancel(); loadTask = nil; detailTask?.cancel(); detailTask = nil; toastTask?.cancel(); toastTask = nil; cancelSelectAll(); pendingReveal = []
+        rows = []; detail = nil; memberships = [:]; editor = nil
     }
     /// 显示指定记录：清除筛选回到全部历史，跳到记录所在页后选中。
     func reveal(_ ids: [ClipID]) {
