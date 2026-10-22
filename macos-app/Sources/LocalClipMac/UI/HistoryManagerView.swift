@@ -80,6 +80,16 @@ private struct ManagerSidebar: View {
                     let tint = Color(nsColor: RichContent.colorValue(category.colorHex))
                     Label { Text(category.name) } icon: { CategoryDot(category: category, size: 9) }
                         .frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+                        // 保留List的即时单击选择；双击只给自定义分类增加改名入口。
+                        .simultaneousGesture(TapGesture(count: 2).onEnded { model.beginCategoryRename(category) })
+                        .help("单击切换分类，双击重命名")
+                        .contextMenu { Button("重命名…") { model.beginCategoryRename(category) } }
+                        .accessibilityAction(named: Text("重命名")) { model.beginCategoryRename(category) }
+                        .popover(isPresented: Binding(get: { model.categoryEditorShown && model.categoryBeingEdited?.id == category.id }, set: { if !$0, model.categoryBeingEdited?.id == category.id { model.categoryEditorShown = false } }), arrowEdge: .trailing) {
+                            CategoryEditor(creating: false, name: $model.categoryName, color: $model.categoryColor,
+                                           error: model.categoryError, saving: model.savingCategory,
+                                           cancel: model.cancelCategoryRename, save: { Task { await model.saveCategoryRename() } })
+                        }
                         // 拖入只加入分类，不切换浏览范围；悬停时按分类色高亮，与面板分类标签一致，by AI.Coding。
                         .background { if dropTarget == category.id { RoundedRectangle(cornerRadius: 5).fill(tint.opacity(0.18)).strokeBorder(tint, lineWidth: 1.5).padding(-3) } }
                         .dropDestination(for: ManagerDragToken.self) { items, _ in model.drop(items.map(\.value), into: category.id) }

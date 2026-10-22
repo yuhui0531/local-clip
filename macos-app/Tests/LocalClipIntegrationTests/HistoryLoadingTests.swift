@@ -10,6 +10,40 @@ extension HistoryStore {
 }
 
 @MainActor struct HistoryLoadingTests {
+    /// 直接派发给未挂窗按钮，不注入桌面输入；双击不能撤销第一次选择或改写分类。
+    @Test func categorySingleSelectsAndDoubleClickRenames() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try HistoryStore(location: root)
+        let category = try await store.createCategory(name: "备忘", colorHex: "007AFF")
+        let other = try await store.createCategory(name: "工作", colorHex: "34C759")
+        let model = makeModel(store)
+        await model.reloadCategories()
+        model.toggleCategory(category.id, modifiers: [])
+        model.toggleCategory(category.id, modifiers: [])
+        #expect(model.activeCategories == [category.id])
+        model.toggleCategory(other.id, modifiers: [.command])
+        #expect(model.activeCategories == [category.id, other.id])
+        model.toggleCategory(other.id, modifiers: [.command])
+        #expect(model.activeCategories == [category.id])
+        let button = CategoryDropTarget.CategoryButton()
+        button.model = model; button.category = category
+        let double = try #require(NSEvent.mouseEvent(with: .leftMouseDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil, eventNumber: 2, clickCount: 2, pressure: 1))
+        button.mouseDown(with: double)
+        #expect(model.showingCategoryEditor && model.categoryBeingEdited?.id == category.id)
+        #expect(model.categoryDraft == "备忘" && model.activeCategories == [category.id])
+        #expect(try await store.categories().first { $0.id == category.id }?.name == "备忘")
+        model.showingCategoryEditor = false; model.editCategory(other)
+        #expect(model.categoryBeingEdited?.id == other.id)
+        model.categoryDraft = "未保存草稿"; model.showingCategoryEditor = false
+        button.mouseDown(with: double)
+        #expect(model.categoryBeingEdited?.id == other.id && model.categoryDraft == "未保存草稿")
+        #expect(model.showingCategoryEditor && model.surfaceEdits.hasChanges(.cards))
+        model.cancelCategoryEditor()
+        button.mouseDown(with: double)
+        #expect(model.categoryBeingEdited?.id == category.id && model.categoryDraft == "备忘")
+        model.cancelCategoryEditor()
+    }
     private func makeModel(_ store: HistoryStore) -> HistoryViewModel {
         let board = MacPasteboardClient(access: RawBoard()), capture = CaptureCoordinator(board: board, store: store)
         return HistoryViewModel(store: store, capture: capture, paste: PasteCoordinator(board: board, applications: FakeApplications(), store: store, capture: capture), derived: DerivedContentService(store: store))

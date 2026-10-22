@@ -35,7 +35,7 @@ struct CategoryDropTarget: NSViewRepresentable {
             return true
         }
         button.setAccessibilityLabel(category.name)
-        button.toolTip = "把历史卡片拖到这里加入分类；右键重命名"
+        button.toolTip = "单击切换分类，双击重命名；拖入历史卡片加入分类"
         button.updateAppearance(); button.invalidateIntrinsicContentSize()
     }
 
@@ -81,6 +81,14 @@ struct CategoryDropTarget: NSViewRepresentable {
 
         /// 点击与拖放使用不同入口，拖入不会切换浏览范围或清掉多选。
         @objc func choose() { if let category { model?.toggleCategory(category.id) } }
+        /// 第二次按下直接进入编辑，不再触发按钮选择；避免双击被当成两次分类切换。
+        override func mouseDown(with event: NSEvent) {
+            guard event.clickCount == 1 else {
+                if event.clickCount == 2 { renameCategory() }
+                return
+            }
+            super.mouseDown(with: event)
+        }
         /// 名称与颜色继续使用统一编辑弹层。
         @objc private func renameCategory() { if let category { model?.editCategory(category) } }
         /// 向前调整分类的持久顺序。

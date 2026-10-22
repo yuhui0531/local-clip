@@ -62,6 +62,14 @@ import LocalClipCore
     @Published var editor: ClipContentEditorState?
     @Published var toast: Toast?
     @Published var canUndo = false
+    /// 分类草稿属于管理窗口；不得借用底栏弹层，否则隐藏面板会抢走编辑入口。
+    @Published private(set) var categoryBeingEdited: ClipCategory?
+    @Published var categoryEditorShown = false
+    @Published var categoryName = ""
+    @Published var categoryColor = ""
+    @Published private(set) var categoryError = ""
+    @Published private(set) var savingCategory = false
+    private let categoryDraftID = UUID()
     /// 由宿主在面板中定位记录。
     var locate: ((ClipID) -> Void)?
     /// 等待首页时再选中的记录（来自“在历史管理中显示”）。
@@ -78,7 +86,7 @@ import LocalClipCore
     /// 写入在途时忽略重复操作，连按⌫不会对同一批再次预览提交，by AI.Coding。
     private var changing = false
     /// 预览确认尚在途时保留所属窗口，避免出现脱离原窗口的迟到确认。
-    var surfaceOperationPending: Bool { changing || editor?.saving == true }
+    var surfaceOperationPending: Bool { changing || editor?.saving == true || savingCategory }
     /// 来源列表只在出现未知来源后重读，不在每次采集时全库扫描；scannedFor 防止同一条件反复重读，by AI.Coding。
     private var sourcesStale = true
     private var scannedFor: String?
@@ -543,6 +551,41 @@ import LocalClipCore
         // 面板隐藏时不会走可见刷新，创建后立即更新共享分类，侧栏、in:解析与下一个默认颜色随之生效，by AI.Coding。
         do { _ = try await store.createCategory(name: name, colorHex: color ?? history.nextCategoryColor); await history.reloadCategories(); return nil }
         catch { return HistoryViewModel.categoryFailure(error) }
+    }
+    /// 只有仍存在的自定义分类可以编辑；浮层失焦后的重复入口保留未保存草稿。
+    func beginCategoryRename(_ category: ClipCategory) {
+        guard !savingCategory, !history.surfaceEdits.resolving,
+              history.categories.contains(where: { $0.id == category.id }) else { return }
+        if let previous = categoryBeingEdited,
+           categoryName != previous.name || categoryColor != previous.colorHex {
+            categoryEditorShown = true; return
+        }
+        scope = .category(category.id)
+        categoryBeingEdited = category; categoryName = category.name; categoryColor = category.colorHex
+        categoryError = ""; categoryEditorShown = true
+        history.surfaceEdits.register(categoryDraftID, surface: .manager, draft: .init(title: "分类修改", dirty: { [weak self] in
+            guard let self else { return false }
+            return self.savingCategory || self.categoryName != category.name || self.categoryColor != category.colorHex
+        }, save: { [weak self] in await self?.saveCategoryRename() ?? false }, discard: { [weak self] in self?.cancelCategoryRename() }))
+    }
+    /// 取消只释放草稿，名称、颜色与分类归属均不写入。
+    func cancelCategoryRename() {
+        guard !savingCategory else { return }
+        categoryEditorShown = false; categoryBeingEdited = nil
+        history.surfaceEdits.remove(categoryDraftID)
+    }
+    /// 使用同一存储校验并立即刷新共享分类，底栏隐藏时也能同步新名称。
+    @discardableResult func saveCategoryRename() async -> Bool {
+        guard let category = categoryBeingEdited, !savingCategory else { return false }
+        savingCategory = true; categoryError = ""
+        defer { savingCategory = false }
+        do {
+            try await store.renameCategory(id: category.id, name: categoryName, colorHex: categoryColor)
+            await history.reloadCategories()
+            categoryEditorShown = false; categoryBeingEdited = nil
+            history.surfaceEdits.remove(categoryDraftID)
+            return true
+        } catch { categoryError = HistoryViewModel.categoryFailure(error); categoryEditorShown = true; return false }
     }
     func beginEdit(_ id: ClipID) {
         guard history.canDisplayContents, editor == nil else { return }

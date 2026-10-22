@@ -225,6 +225,39 @@ import LocalClipCore
         #expect(await model.createCategory("  ") == "请输入分类名称")
         #expect(await model.createCategory("红", color: "FF3B30") == nil && model.history.categories.first { $0.name == "红" }?.colorHex.uppercased() == "FF3B30")
     }
+    /// 分类改名使用临时库与模型，不打开浮层；验证共享刷新、失败保留和离开保护。
+    @Test func categoryRenamePreservesIdentityAndDraftProtection() async throws {
+        let (model, store, _, ids, root) = try await make(1)
+        defer { model.stop(); try? FileManager.default.removeItem(at: root) }
+        #expect(await model.createCategory("备忘", color: "007AFF") == nil)
+        #expect(await model.createCategory("工作") == nil)
+        let category = try #require(model.history.categories.first { $0.name == "备忘" })
+        let other = try #require(model.history.categories.first { $0.name == "工作" })
+        _ = try await store.apply(try await store.preview(.category(ids, category.id, true)).token)
+        model.beginCategoryRename(category)
+        #expect(model.scope == .category(category.id) && !model.history.surfaceEdits.hasChanges(.manager))
+        model.categoryEditorShown = false; model.beginCategoryRename(other)
+        #expect(model.categoryBeingEdited?.id == other.id && model.scope == .category(other.id))
+        model.beginCategoryRename(category)
+        model.categoryName = "临时草稿"; model.categoryEditorShown = false
+        model.beginCategoryRename(other)
+        #expect(model.categoryBeingEdited?.id == category.id && model.categoryName == "临时草稿" && model.categoryEditorShown)
+        #expect(model.history.surfaceEdits.hasChanges(.manager) && !model.history.surfaceEdits.hasChanges(.cards))
+        #expect(await model.history.surfaceEdits.resolve(.manager, choose: { _ in .cancel }) == false)
+        #expect(model.categoryName == "临时草稿")
+        model.categoryName = "工作"
+        #expect(await model.saveCategoryRename() == false)
+        #expect(!model.categoryError.isEmpty && model.categoryEditorShown)
+        model.categoryName = "新备忘"
+        #expect(await model.history.surfaceEdits.resolve(.manager, choose: { _ in .save }))
+        #expect(model.categoryBeingEdited == nil && !model.history.surfaceEdits.hasChanges(.manager))
+        let saved = try #require(model.history.categories.first { $0.id == category.id })
+        #expect(saved.name == "新备忘" && saved.colorHex == category.colorHex)
+        #expect(try await store.search(.init(categoryIDs: [category.id])).items.map(\.id) == ids)
+        model.beginCategoryRename(saved); model.categoryName = "不保存"
+        #expect(await model.history.surfaceEdits.resolve(.manager, choose: { _ in .discard }))
+        #expect(try await store.categories().first { $0.id == category.id }?.name == "新备忘")
+    }
     // #4 定位失败给出准确提示；途中换条件即放弃定位。
     @Test func revealMissingAndInterrupted() async throws {
         let (model, _, _, newest, root) = try await make(60)

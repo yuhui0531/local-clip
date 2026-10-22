@@ -1192,9 +1192,15 @@ import LocalClipCore
     }
     /// 分类在面板内编辑，只有持久化成功后才更新标签和归属入口。
     private let categorySurfaceDraftID = UUID()
+    private var categoryDraftBaseline: (name: String, color: String)?
     public func editCategory(_ category: ClipCategory? = nil) {
-        guard !savingCategory else { return }
+        guard !savingCategory, !surfaceEdits.resolving else { return }
+        // 双击和右键遵循同一保护规则：未保存的旧稿只能重开，不能被另一分类覆盖。
+        if let baseline = categoryDraftBaseline, categoryDraft != baseline.name || categoryColor != baseline.color {
+            showingCategoryEditor = true; return
+        }
         categoryBeingEdited = category; categoryDraft = category?.name ?? ""; categoryColor = category?.colorHex ?? nextCategoryColor; categoryError = ""
+        categoryDraftBaseline = (categoryDraft, categoryColor)
         showingDetail = false; showingCategoryEditor = true
         let initialColor = categoryColor
         surfaceEdits.register(categorySurfaceDraftID, surface: .cards, draft: .init(title: "分类修改", dirty: { [weak self] in
@@ -1203,7 +1209,7 @@ import LocalClipCore
         }, save: { [weak self] in await self?.saveCategoryBeforeLeaving() ?? false }, discard: { [weak self] in self?.cancelCategoryEditor() }))
     }
     /// 明确取消分类编辑才清除草稿保护，原生浮层临时失焦不丢输入。
-    func cancelCategoryEditor() { showingCategoryEditor = false; surfaceEdits.remove(categorySurfaceDraftID) }
+    func cancelCategoryEditor() { showingCategoryEditor = false; categoryDraftBaseline = nil; surfaceEdits.remove(categorySurfaceDraftID) }
     /// 只更新共享分类列表；面板筛选裁剪仍在可见刷新时进行，by AI.Coding。
     func reloadCategories() async {
         if let value = try? await store.categories() { assignIfChanged(\.categories, value) }
@@ -1225,7 +1231,7 @@ import LocalClipCore
                     selectCategories([created.id])
                     notice("已创建分类")
                 }
-                showingCategoryEditor = false; surfaceEdits.remove(categorySurfaceDraftID); return true
+                showingCategoryEditor = false; categoryDraftBaseline = nil; surfaceEdits.remove(categorySurfaceDraftID); return true
         } catch { categoryError = Self.categoryFailure(error); showingCategoryEditor = true; return false }
     }
     /// 开始拖动只生成短期ID令牌，正文由公开提供者按需读取。
@@ -1536,9 +1542,11 @@ import LocalClipCore
         categoryID = values.count == 1 ? values.first : nil
     }
     /// 普通点击切换单分类，Command允许分类并集；两种方式都退出类型筛选。
-    public func toggleCategory(_ id: String) {
+    public func toggleCategory(_ id: String, modifiers: NSEvent.ModifierFlags = NSEvent.modifierFlags) {
+        // 普通单击只切换，不把已选分类反向取消；双击的第一次点击因此也保持原范围。
+        guard modifiers.contains(.command) else { selectCategories([id]); return }
         var next = activeCategories
-        if next.contains(id) { next.remove(id) } else if NSEvent.modifierFlags.contains(.command) { next.insert(id) } else { next = [id] }
+        if next.contains(id) { next.remove(id) } else { next.insert(id) }
         selectCategories(next)
     }
     /// 快捷键切换与分类点击使用同一范围契约。
