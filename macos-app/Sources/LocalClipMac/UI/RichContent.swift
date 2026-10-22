@@ -12,10 +12,13 @@ public enum RichContent {
     private static let colorPattern = try? NSRegularExpression(pattern: "(?i)(?:color\\s*:\\s*|color=[\"']?)(#[0-9a-f]{6})")
     /// RTF使用原生解码；HTML仅处理本地样式文字，不调用Web或HTML导入器。
     public static func attributed(_ item: PasteboardItemValue) -> NSAttributedString {
-        if let rtf = item.representations.first(where: { $0.type == SupportedType.rtf }), let value = NSAttributedString(rtf: rtf.data, documentAttributes: nil) { return value }
-        guard let html = item.representations.first(where: { $0.type == SupportedType.html }), let source = String(data: html.data, encoding: .utf8) else { return NSAttributedString(string: item.plainText ?? "") }
+        // 来源可能同时提供空白RTF/HTML和有效纯文本；空格式不能盖掉真实正文，原始表示保持不变。
+        let plain = item.plainText ?? item.representations.first(where: { [SupportedType.string, SupportedType.url].contains($0.type) }).flatMap(BasicTextDecoder.extract) ?? ""
+        let fallback = NSAttributedString(string: plain)
+        if let rtf = item.representations.first(where: { $0.type == SupportedType.rtf }), let value = NSAttributedString(rtf: rtf.data, documentAttributes: nil), !value.string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return value }
+        guard let html = item.representations.first(where: { $0.type == SupportedType.html }), let source = String(data: html.data, encoding: .utf8) else { return fallback }
         let safe = source.replacingOccurrences(of: "(?is)<(script|style|head)[^>]*>.*?</\\1>", with: "", options: .regularExpression)
-        guard let regex = tokenPattern else { return NSAttributedString(string: item.plainText ?? "") }
+        guard let regex = tokenPattern else { return fallback }
         let result = NSMutableAttributedString(string: "")
         var stack: [(String, [NSAttributedString.Key: Any])] = []
         var attributes: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 14)]
@@ -45,7 +48,7 @@ public enum RichContent {
                 result.append(NSAttributedString(string: text, attributes: attributes))
             }
         }
-        return result
+        return result.string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? fallback : result
     }
     /// 颜色字段仅接受本地RGB，不解析URL或可执行样式。
     public static func colorValue(_ hex: String) -> NSColor {
@@ -110,9 +113,26 @@ enum FilePreviewContent: Equatable, Sendable {
     }
 }
 
+/// 管理窗口复用卡片的原生预览器；测试替身只记录呈现意图，不创建可见窗口，by AI.Coding。
+@MainActor protocol ClipPreviewPresenting: AnyObject {
+    var isVisible: Bool { get }
+    func show(_ values: [QuickPreview.Item], parent: NSWindow?, excludeFromSharing: Bool)
+    func close()
+    func setSharing(excluded: Bool)
+}
+
 // 空格与“预览”菜单共用的类Quick Look窗口：作为历史面板的子窗口，打开时不抢key，面板不会因失焦被收起，by AI.Coding。
-@MainActor final class QuickPreview: NSObject, NSWindowDelegate {
+@MainActor final class QuickPreview: NSObject, NSWindowDelegate, ClipPreviewPresenting {
     enum Item { case file(URL), image(NSImage, bytes: Int) }
+    /// 两处入口共享文件/纯图片规则、40MP限制及多图顺序；后台只返回可发送的图片字节。
+    static func loadItems(_ detail: ClipDetail) async -> [Item] {
+        if let urls = detail.payload.fileURLs { return urls.map(Item.file) }
+        guard detail.summary.kind == .image else { return [] }
+        let bytes = await Task.detached(priority: .userInitiated) {
+            detail.payload.items.compactMap { RichContent.fullImage(.init([$0])) }
+        }.value
+        return bytes.compactMap { data in NSImage(data: data).map { Item.image($0, bytes: data.count) } }
+    }
     /// 正文与编辑器共用的着色范围上限；超出部分保持纯文字，长文件滚动与选择不受影响。
     static let highlightLimit = 200_000
     private var items: [Item] = []

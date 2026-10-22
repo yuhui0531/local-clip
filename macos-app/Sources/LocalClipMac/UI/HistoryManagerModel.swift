@@ -1,5 +1,6 @@
 // 历史管理窗口自有查询、页码与选择；写入复用面板的预览→确认→提交，存储事件驱动刷新，by AI.Coding。
 import AppKit
+import Combine
 import LocalClipCore
 
 @MainActor final class HistoryManagerModel: ObservableObject {
@@ -76,7 +77,56 @@ import LocalClipCore
     var readHook: ((Read, SearchRequest?) async throws -> Void)?
     #endif
 
-    init(history: HistoryViewModel) { self.history = history }
+    private let quickPreview: any ClipPreviewPresenting
+    private var previewTask: Task<Void, Never>?
+    private var previewID = UUID()
+    private(set) var previewFollowsSelection = false
+    private var previewSettings: AnyCancellable?
+    var previewParent: (() -> NSWindow?)?
+    /// 每个窗口独立持有预览状态，不能借用底部卡片的选择或要求底部面板保持可见。
+    init(history: HistoryViewModel, preview: any ClipPreviewPresenting = QuickPreview()) {
+        self.history = history; self.quickPreview = preview
+    }
+    /// 空格只对可独立预览的图片/文件生效，重复按键不会反复开关；正文继续在检查器显示。
+    @discardableResult func toggleQuickLook() -> Bool {
+        if previewTask != nil || quickPreview.isVisible { closeQuickLook(); return true }
+        guard let row = selectedRow, row.kind == .image || row.kind == .file, history.canDisplayContents else { return false }
+        previewFollowsSelection = true; loadQuickLook(row.id); return true
+    }
+    /// 右键菜单与检查器按钮沿用卡片的显式预览语义：先选中目标再打开，不误关已有预览。
+    func preview(_ id: ClipID) {
+        guard history.canDisplayContents, let row = rows.first(where: { $0.id == id }), row.kind == .image || row.kind == .file else { return }
+        closeQuickLook(); selection = [id]
+        previewFollowsSelection = true; loadQuickLook(id)
+    }
+    /// 取消在途请求并收回预览，不影响检查器选择。
+    func closeQuickLook() {
+        previewTask?.cancel(); previewTask = nil; previewID = UUID()
+        previewFollowsSelection = false; quickPreview.close()
+    }
+    /// 与卡片一致：按需读原件，呈现前复查选择、内容指纹及隐藏策略，过期请求绝不弹窗。
+    private func loadQuickLook(_ id: ClipID) {
+        previewTask?.cancel(); previewID = UUID()
+        let generation = previewID
+        previewTask = Task {
+            do {
+                let value = try await store.detail(id: id, at: clock.now())
+                let items = await QuickPreview.loadItems(value)
+                let latest = try await store.metadata(id: id, at: clock.now())
+                let settings = try await store.settings()
+                guard !Task.isCancelled, generation == previewID else { return }
+                previewTask = nil
+                guard history.canDisplayContents, !settings.hideContents, selectedRow?.id == id,
+                      latest.summary.contentFingerprint == value.summary.contentFingerprint else { closeQuickLook(); return }
+                guard !items.isEmpty else { closeQuickLook(); show("图片预览不可用：数据无法解码或超过40MP，原始数据已保留", failed: true); return }
+                // 等待数据库期间共享策略可能已经收紧，不能用旧快照覆盖刚生效的隐藏共享状态。
+                quickPreview.show(items, parent: previewParent?(), excludeFromSharing: history.settings.excludeFromSharing || settings.excludeFromSharing)
+            } catch {
+                guard !Task.isCancelled, generation == previewID else { return }
+                closeQuickLook(); show("预览不可用，记录已变化", failed: true)
+            }
+        }
+    }
 
     var pageCount: Int { max(1, (total + pageSize - 1) / pageSize) }
     var hasFilters: Bool { time != .all || source != nil }
@@ -98,6 +148,12 @@ import LocalClipCore
     /// 窗口打开时开始订阅；关闭时停止，不在后台持续查询。
     func start() {
         guard subscription == nil else { return }
+        // 使用通知携带的新设置，不在Published的willSet阶段回读旧值；隐藏立即取消待弹出的预览。
+        previewSettings = history.$settings.sink { [weak self] settings in
+            guard let self else { return }
+            self.quickPreview.setSharing(excluded: settings.excludeFromSharing)
+            if settings.hideContents { self.closeQuickLook() }
+        }
         history.onCaptureSource = { [weak self] source in
             guard let self, !self.sources.contains(where: { $0.bundleID == source.bundleID }) else { return }
             self.sourcesStale = true
@@ -127,6 +183,7 @@ import LocalClipCore
         }
     }
     func stop() {
+        closeQuickLook(); previewSettings?.cancel(); previewSettings = nil
         subscription?.cancel(); subscription = nil; history.onCaptureSource = nil
         loadTask?.cancel(); detailTask?.cancel(); toastTask?.cancel(); cancelSelectAll(); pendingReveal = []
     }
@@ -354,6 +411,11 @@ import LocalClipCore
     private func selectionChanged() {
         cancelSelectAll()
         if allMatching != nil, !selection.isSuperset(of: rows.map(\.id)) { allMatching = nil }
+        // 持续预览随本页单选更新；多选、取消选择、切页或换筛选都关闭旧内容。
+        if previewFollowsSelection, previewTask != nil || quickPreview.isVisible {
+            if let row = selectedRow, row.kind == .image || row.kind == .file { loadQuickLook(row.id) }
+            else { closeQuickLook() }
+        }
         loadDetail()
     }
     func loadDetail() {
@@ -371,7 +433,9 @@ import LocalClipCore
                 let value = try await ClipDetailContent.load(try await store.detail(id: id, at: clock.now()), inspect: false)
                 guard !Task.isCancelled, selectedRow?.id == id else { return }
                 if detail?.detail.summary == value.detail.summary, detail?.detail.categoryIDs == value.detail.categoryIDs, fingerprint == value.detail.summary.contentFingerprint { return }
+                let contentChanged = detail?.detail.summary.id == id && detail?.detail.summary.contentFingerprint != value.detail.summary.contentFingerprint
                 detail = value
+                if contentChanged, previewFollowsSelection, quickPreview.isVisible { loadQuickLook(id) }
             } catch is CancellationError {
             } catch { if selectedRow?.id == id { detailFailed = true } }
         }
@@ -534,6 +598,7 @@ import LocalClipCore
         let ids = targetIDs
         switch (flags, code) {
         // 没有选择时交还系统，⌘C 仍可复制其他控件里的文字。
+        case ([], 49): return isRepeat ? (previewTask != nil || quickPreview.isVisible) : toggleQuickLook()
         case ([], 36), ([], 76), ([.command], 8): copy(ids); return !ids.isEmpty
         case ([.command], 14): if let id = selectedRow?.id { beginEdit(id) }; return true
         case ([.command], 2):
@@ -547,6 +612,7 @@ import LocalClipCore
         case ([], 116): go(toPage: page - 1); return true
         case ([], 121): go(toPage: page + 1); return true
         case ([], 53):
+            if previewTask != nil || quickPreview.isVisible { closeQuickLook(); return true }
             guard selection.count > 1 || allMatching != nil else { return false }
             clearSelection(); return true
         default: return false

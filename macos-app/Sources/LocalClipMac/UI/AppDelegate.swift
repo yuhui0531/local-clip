@@ -862,6 +862,8 @@ import LocalClipCore
         let host = NSHostingController(rootView: HistoryManagerView(model: manager, history: model))
         host.sceneBridgingOptions = [.toolbars, .title]; host.sizingOptions = []
         let window = HistoryManagerWindow(content: host)
+        // 独立预览归属于管理窗口，不借用已隐藏的历史面板。
+        manager.previewParent = { [weak window] in window }
         window.onClose = { [weak self] in self?.historyManagerClosed() }
         managerWindow = window; self.manager = manager
         policyBeforeManager = NSApp.activationPolicy()

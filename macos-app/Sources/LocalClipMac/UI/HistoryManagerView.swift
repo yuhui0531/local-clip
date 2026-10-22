@@ -377,6 +377,10 @@ private struct ManagerRowMenu: View {
         if !ids.isEmpty {
             Button("复制") { model.copy(ids) }.keyboardShortcut("c")
             Button("纯文本复制") { model.copy(ids, plain: true) }
+            // 与卡片一致提供显式入口，Space处理仍由窗口级键盘路由负责。
+            if let single, single.kind == .image || single.kind == .file {
+                Button("预览") { model.preview(single.id) }
+            }
             Divider()
             Button("编辑…") { if let single { model.beginEdit(single.id) } }.keyboardShortcut("e")
                 .disabled(single.map { ![ClipKind.text, .url].contains($0.kind) } ?? true)
@@ -464,6 +468,9 @@ private struct ManagerDetail: View {
                 .frame(maxHeight: .infinity, alignment: .top)
             ManagerCategoryChips(model: model, history: history, row: row, included: detail.categoryIDs)
             HStack {
+                if row.kind == .image || row.kind == .file {
+                    Button("预览") { model.preview(row.id) }.help("空格预览，再按空格或Esc关闭")
+                }
                 if hasOCR { Button("复制图中文字") { history.copyImageText(id: row.id) } }
                 if !urls.isEmpty { Button("在访达中显示") { NSWorkspace.shared.activateFileViewerSelecting(urls.filter { FileManager.default.fileExists(atPath: $0.path) }) } }
                 if urls.isEmpty, let link = HistoryViewModel.openTargets(detail.payload).first { Button("打开链接") { NSWorkspace.shared.open(link) } }
