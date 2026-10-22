@@ -34,6 +34,23 @@ import LocalClipCore
         #expect(rect.midX == parent.midX && rect.midY == parent.midY)
         #expect(screen.contains(rect))
     }
+    /// 气泡贴近触发元素：优先在上方并指向锚点中线；顶部放不下翻到下方，贴边时箭头夹在圆角内，by AI.Coding。
+    @Test func anchoredConfirmationPlacement() {
+        let screen = NSRect(x: -1920, y: -1080, width: 1920, height: 1080)
+        let size = NSSize(width: 440, height: 240)
+        let tab = NSRect(x: -1500, y: -840, width: 80, height: 28)
+        let above = SurfaceConfirmation.frame(size: size, anchor: tab, screen: screen)
+        #expect(above.frame.minY == tab.maxY + 4 && above.frame.height == size.height + SurfaceConfirmation.Bubble.arrowHeight)
+        #expect(!above.arrowUp && above.frame.minX + above.arrowX == tab.midX && screen.contains(above.frame))
+        let top = NSRect(x: -1910, y: -40, width: 40, height: 28)
+        let below = SurfaceConfirmation.frame(size: size, anchor: top, screen: screen)
+        #expect(below.arrowUp && below.frame.maxY == top.minY - 4 && screen.contains(below.frame))
+        #expect(below.frame.minX == screen.minX + 12 && below.arrowX == 24)
+        // 卡片边长超过面板一半仍是有效锚点，箭头指向其上沿；整块面板大小的视图回退居中。
+        let panel = NSRect(x: 0, y: 0, width: 1440, height: 340), card = NSRect(x: 100, y: 20, width: 268, height: 268)
+        #expect(SurfaceConfirmation.anchorEdge(card, owner: panel) == NSRect(x: 100, y: 286, width: 268, height: 2))
+        #expect(SurfaceConfirmation.anchorEdge(panel, owner: panel) == nil)
+    }
     /// 使用真实宿主路由和隐藏窗口，证明退出会释放模型而只恢复轻量查询条件。
     @Test func hiddenWindowSwitchingAndRelease() async throws {
         _ = NSApplication.shared

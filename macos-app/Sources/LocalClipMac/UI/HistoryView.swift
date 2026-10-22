@@ -57,22 +57,15 @@ public struct HistoryView: View {
                     target: model.target, draggedIDs: model.draggedIDs, hideContents: model.settings.hideContents, focusRequest: model.focusRequest, renamingID: model.renamingID, showingDetail: model.showingDetail && model.detail != nil, detailPending: model.detailSlow, quickBadges: model.quickBadgesVisible)
             // 顶部保留圆角，底边与屏幕贴合，不留可拖动的悬浮窗口边距。
             }.frame(width: viewport.size.width, height: viewport.size.height, alignment: .top)
-                // 确认期间底层控件对辅助功能隐藏，VoiceOver不能越过遮罩操作，by AI.Coding。
+                // 确认期间底层控件对辅助功能隐藏，VoiceOver只操作确认气泡，by AI.Coding。
                 .accessibilityHidden(model.panelConfirmation != nil)
-                .background { ZStack { HistoryBackdrop(); Color(nsColor: .windowBackgroundColor).opacity(LCStyle.panelTint) } }
-                // 变更确认在面板内遮罩弹出，不用系统附页抬起或撑高底栏面板，by AI.Coding。
+                // 气泡期间面板吸收点击并视为取消，不冻结面板，点击不会穿透到下层应用或Dock，by AI.Coding。
                 .overlay {
-                    if let copy = model.panelConfirmation {
-                        ZStack {
-                            Color.black.opacity(0.16).contentShape(Rectangle()).onTapGesture {}.accessibilityHidden(true)
-                            ChangeConfirmation.Content(copy: copy, answer: model.answerPanelConfirmation)
-                                .background(Color(nsColor: .windowBackgroundColor), in: RoundedRectangle(cornerRadius: 14))
-                                .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(.primary.opacity(0.08)))
-                                .shadow(color: .black.opacity(0.18), radius: 18, y: 6)
-                                .accessibilityAddTraits(.isModal)
-                        }.transition(.opacity)
+                    if model.panelConfirmation != nil {
+                        Color.clear.contentShape(Rectangle()).onTapGesture { model.answerPanelConfirmation(false) }.accessibilityHidden(true)
                     }
                 }
+                .background { ZStack { HistoryBackdrop(); Color(nsColor: .windowBackgroundColor).opacity(LCStyle.panelTint) } }
                 .clipShape(UnevenRoundedRectangle(topLeadingRadius: LCStyle.Radius.panel, topTrailingRadius: LCStyle.Radius.panel))
                 .overlay(UnevenRoundedRectangle(topLeadingRadius: LCStyle.Radius.panel, topTrailingRadius: LCStyle.Radius.panel).strokeBorder(.white.opacity(0.30), lineWidth: 1))
                 .clipped()
@@ -93,6 +86,8 @@ public struct HistoryView: View {
         }.frame(maxWidth: .infinity, maxHeight: .infinity)
             // 编辑气泡贴靠目标卡片顶部弹出，独立于滚动卡片存活，不作为Sheet撑高或抬起底栏面板，by AI.Coding。
             .background { ClipContentEditorPopover(model: model) }
+            // 变更确认以气泡子窗贴近被操作的分类或卡片弹出，不压暗也不撑高底栏面板，by AI.Coding。
+            .background { PanelConfirmationPresenter(model: model) }
     }
     /// 占位按当前范围说明搜索对象；不写已加载条数，避免误读为总数，by AI.Coding。
     private var searchPlaceholder: String {
@@ -602,6 +597,7 @@ private struct HistoryMoreMenu: View {
         } label: { HistoryActionSymbol(symbol: "ellipsis").foregroundStyle(.secondary).frame(width: 28, height: 28).contentShape(Circle()) }
             // borderlessButton 由 AppKit 按自身尺寸绘制图标，改用 SwiftUI 渲染标签以与相邻按钮同尺寸，by AI.Coding。
             .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize().help("更多").accessibilityLabel("更多")
+            .background { PanelConfirmationPresenter.Marker() }
             // 只有真实换选/内容变化才重查能力；不能沿用旧组结果，也不因分页或元数据回填闪烁。
             .task(id: value.textCapability) {
                 canCopyText = false
@@ -1677,6 +1673,74 @@ struct LiveTextImage: NSViewRepresentable {
             configuration.locales = ["zh-Hans", "zh-Hant", "en-US"]
             guard let analysis = try? await ImageAnalyzer().analyze(image, orientation: .up, configuration: configuration), !Task.isCancelled else { return }
             overlay.analysis = analysis
+        }
+    }
+}
+
+/// 面板确认的呈现器：模型只持有确认状态与答案，子窗位置由当前窗口内的触发元素决定，by AI.Coding。
+@MainActor struct PanelConfirmationPresenter: NSViewRepresentable {
+    @ObservedObject var model: HistoryViewModel
+    func makeCoordinator() -> Coordinator { Coordinator() }
+    func makeNSView(context: Context) -> ClipContentEditorPopover.AnchorView { .init() }
+    func updateNSView(_ view: ClipContentEditorPopover.AnchorView, context: Context) { context.coordinator.sync(model: model, view: view) }
+    static func dismantleNSView(_ view: ClipContentEditorPopover.AnchorView, coordinator: Coordinator) { coordinator.sync(model: nil, view: view) }
+
+    /// “更多”菜单等SwiftUI按钮没有NSView身份，挂此不可点标记供气泡定位，by AI.Coding。
+    struct Marker: NSViewRepresentable {
+        final class View: NSView { override func hitTest(_ point: NSPoint) -> NSView? { nil } }
+        func makeNSView(context: Context) -> View { .init() }
+        func updateNSView(_ view: View, context: Context) {}
+    }
+
+    /// 分类操作指向分类标签，清空历史指向“更多”按钮；记录操作优先指向鼠标下（右键）的目标卡片，其次所选卡片，找不到可见元素时居中。
+    static func anchor(for operation: HistoryChange, selected: ClipID?, in window: NSWindow) -> NSView? {
+        func card(_ ids: [ClipID]) -> NSView? {
+            let targets = Set(ids), mouse = NSEvent.mouseLocation
+            let cards = HistoryDragBridge.DragView.views(in: window).filter { targets.contains($0.id) }
+            return cards.first { SurfaceConfirmation.screenRect(of: $0)?.contains(mouse) == true }
+                ?? cards.first { $0.id == selected } ?? cards.first { $0.id == ids.first }
+        }
+        func find(_ view: NSView, _ match: (NSView) -> Bool) -> NSView? {
+            if match(view) { return view }
+            for child in view.subviews { if let found = find(child, match) { return found } }
+            return nil
+        }
+        switch operation {
+        case .deleteCategory(let id): return window.contentView.flatMap { find($0) { ($0 as? CategoryDropTarget.CategoryButton)?.category?.id == id } }
+        case .clearOrdinary: return window.contentView.flatMap { find($0) { $0 is Marker.View } }
+        case .favorite(let id, _): return card([id])
+        case .favorites(let ids, _), .delete(let ids), .category(let ids, _, _): return card(ids)
+        case .retention, .quota: return nil
+        }
+    }
+
+    @MainActor final class Coordinator {
+        private var confirmation: SurfaceConfirmation?
+        private var shown: UUID?
+        /// 确认标识变化时先登记新标识再撤下旧气泡，旧气泡的取消不会回答新确认。
+        func sync(model: HistoryViewModel?, view: NSView) {
+            let copy = model?.panelConfirmation
+            guard copy?.id != shown else { return }
+            shown = copy?.id
+            let previous = confirmation; confirmation = nil
+            previous?.cancelImmediately()
+            guard let model, let copy else { return }
+            // 无法呈现时立即取消，不让看不见的确认挂起并接收Return。
+            guard let window = view.window, window.isVisible else {
+                Task { [weak self, weak model] in if self?.shown == copy.id { model?.answerPanelConfirmation(false) } }
+                return
+            }
+            let confirmation = SurfaceConfirmation(change: copy)
+            self.confirmation = confirmation
+            Task { [weak self, weak model] in
+                // 呈现前已被撤销或替换则不再弹出孤立气泡。
+                guard self?.shown == copy.id else { return }
+                let anchor = PanelConfirmationPresenter.anchor(for: copy.operation, selected: model?.selectedID, in: window)
+                let choice = await confirmation.present(for: window, anchor: anchor, freezesOwner: false)
+                guard let self, self.shown == copy.id else { return }
+                self.confirmation = nil
+                model?.answerPanelConfirmation(choice == .save)
+            }
         }
     }
 }

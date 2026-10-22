@@ -80,10 +80,7 @@ private struct ManagerSidebar: View {
                     let tint = Color(nsColor: RichContent.colorValue(category.colorHex))
                     Label { Text(category.name) } icon: { CategoryDot(category: category, size: 9) }
                         .frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
-                        // 保留List的即时单击选择；双击只给自定义分类增加改名入口。
-                        .simultaneousGesture(TapGesture(count: 2).onEnded { model.beginCategoryRename(category) })
                         .help("单击切换分类，双击重命名")
-                        .contextMenu { Button("重命名…") { model.beginCategoryRename(category) } }
                         .accessibilityAction(named: Text("重命名")) { model.beginCategoryRename(category) }
                         .popover(isPresented: Binding(get: { model.categoryEditorShown && model.categoryBeingEdited?.id == category.id }, set: { if !$0, model.categoryBeingEdited?.id == category.id { model.categoryEditorShown = false } }), arrowEdge: .trailing) {
                             CategoryEditor(creating: false, name: $model.categoryName, color: $model.categoryColor,
@@ -104,6 +101,21 @@ private struct ManagerSidebar: View {
             }
         }
         .listStyle(.sidebar)
+        // 行内点按手势会截走List的单击选择；双击与右键改用List原生入口，单击始终切换范围，by AI.Coding。
+        .contextMenu(forSelectionType: HistoryManagerModel.Scope.self) { scopes in
+            if case .category(let id) = scopes.first, let category = history.categories.first(where: { $0.id == id }) {
+                Button("重命名…") { model.beginCategoryRename(category) }
+                Button("删除分类…", role: .destructive) { model.deleteCategory(id) }
+            }
+        } primaryAction: { scopes in
+            if case .category(let id) = scopes.first, let category = history.categories.first(where: { $0.id == id }) { model.beginCategoryRename(category) }
+        }
+        // 分类被删除（本窗口或底栏）后不停留在已不存在的范围，by AI.Coding。
+        .onChange(of: history.categories) { _, categories in
+            if case .category(let id) = model.scope, !categories.contains(where: { $0.id == id }) { model.scope = .all }
+            // 正在改名的分类被删后释放草稿，否则其他分类的改名入口会被卡住。
+            if let editing = model.categoryBeingEdited, !categories.contains(where: { $0.id == editing.id }) { model.cancelCategoryRename() }
+        }
     }
 }
 /// 新建分类沿用面板的分类编辑弹窗：弹窗自带焦点与取消，不在侧栏列表里嵌输入框，by AI.Coding。

@@ -20,17 +20,32 @@ import SwiftUI
     private var blockedWindows: [(NSWindow, Bool)] = []
     private let animator = SurfaceAnimator()
 
+    private var bodySize: NSSize = .zero
+
     /// 紧凑横排按钮使确认内容能放入最低高度的卡片区域，不撑开父窗。
-    init(title: String, closing: Bool) {
+    convenience init(title: String, closing: Bool) {
+        self.init(title: "未保存的修改") { answer in AnyView(Content(title: title, closing: closing, answer: answer)) }
+    }
+    /// 面板发起的历史变更确认沿用同一子窗，取消与确认分别映射为cancel/save，by AI.Coding。
+    convenience init(change copy: ChangeConfirmationCopy) {
+        self.init(title: copy.title) { answer in
+            AnyView(ChangeConfirmation.Content(copy: copy) { answer($0 ? .save : .cancel) }
+                .background(Color(nsColor: .windowBackgroundColor), in: RoundedRectangle(cornerRadius: 14))
+                .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(.primary.opacity(0.08)))
+                .accessibilityAddTraits(.isModal))
+        }
+    }
+    private init(title: String, content: (@escaping (SurfaceEdits.Choice) -> Void) -> AnyView) {
         let panel = Panel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.isReleasedWhenClosed = false; panel.isMovable = false
         panel.hidesOnDeactivate = false; panel.isFloatingPanel = false
         panel.backgroundColor = .clear; panel.isOpaque = false; panel.hasShadow = true
-        panel.animationBehavior = .none; panel.title = "未保存的修改"
+        panel.animationBehavior = .none; panel.title = title
         super.init(window: panel)
         panel.delegate = self; panel.cancel = { [weak self] in self?.finish(.cancel) }
-        let host = NSHostingView(rootView: Content(title: title, closing: closing) { [weak self] in self?.finish($0) })
-        panel.contentView = host; panel.setContentSize(host.fittingSize)
+        let host = NSHostingView(rootView: Bubble(content: content { [weak self] in self?.finish($0) }))
+        bodySize = host.fittingSize
+        panel.contentView = host; panel.setContentSize(bodySize)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) is unavailable") }
 
@@ -40,22 +55,56 @@ import SwiftUI
         let y = min(max(owner.midY - size.height / 2, screen.minY + 12), screen.maxY - size.height - 12)
         return NSRect(origin: NSPoint(x: x, y: y), size: size)
     }
+    /// 气泡优先在触发元素上方，放不下翻到下方；箭头指向锚点中线并避开圆角，by AI.Coding。
+    static func frame(size: NSSize, anchor: NSRect, screen: NSRect) -> (frame: NSRect, arrowX: CGFloat, arrowUp: Bool) {
+        let height = size.height + Bubble.arrowHeight
+        let x = min(max(anchor.midX - size.width / 2, screen.minX + 12), screen.maxX - size.width - 12)
+        let above = anchor.maxY + 4 + height <= screen.maxY - 12
+        let y = above ? anchor.maxY + 4 : max(screen.minY + 12, anchor.minY - 4 - height)
+        let arrowX = min(max(anchor.midX - x, 24), size.width - 24)
+        return (NSRect(x: x, y: y, width: size.width, height: height), arrowX, !above)
+    }
+    /// 箭头指向目标上沿细条（卡片、编辑框本身都很高）；几乎覆盖整块父窗的视图指不出触发元素，返回nil回退居中，by AI.Coding。
+    static func anchorEdge(_ rect: NSRect, owner: NSRect) -> NSRect? {
+        rect.height >= owner.height * 0.9 ? nil : NSRect(x: rect.minX, y: rect.maxY - 2, width: rect.width, height: 2)
+    }
+    /// 锚点只取视图在屏幕上的可见部分；已滚出或隐藏时返回nil，回退为居中。
+    static func screenRect(of view: NSView) -> NSRect? {
+        guard let window = view.window, !view.isHiddenOrHasHiddenAncestor else { return nil }
+        let visible = view.bounds.intersection(view.visibleRect)
+        guard !visible.isEmpty else { return nil }
+        return window.convertToScreen(view.convert(visible, to: nil))
+    }
 
     /// 子窗关系保留层级与归属；不调用beginSheet，系统没有移动父面板的机会。
-    func present(for owner: NSWindow, visible: Bool = true) async -> SurfaceEdits.Choice {
+    /// 有锚点时贴近触发元素弹出并以箭头指向它；无锚点时居中于父窗。
+    /// freezesOwner为false时父窗自行吸收点击（面板确认用透明层），避免点击穿透到下层应用或Dock，by AI.Coding。
+    func present(for owner: NSWindow, anchor: NSView? = nil, freezesOwner: Bool = true, visible: Bool = true) async -> SurfaceEdits.Choice {
         guard let window else { return .cancel }
         parentWindow = owner
         // 内容编辑气泡也属于父面板；确认期间一并冻结，避免从背后的编辑器提交草稿。
         func descendants(_ window: NSWindow) -> [NSWindow] {
             [window] + (window.childWindows ?? []).flatMap { descendants($0) }
         }
-        blockedWindows = descendants(owner).map { ($0, $0.ignoresMouseEvents) }
-        previousKeyWindow = blockedWindows.first(where: { $0.0.isKeyWindow })?.0 ?? owner
+        let family = descendants(owner)
+        blockedWindows = family.filter { freezesOwner || $0 !== owner }.map { ($0, $0.ignoresMouseEvents) }
+        previousKeyWindow = family.first(where: \.isKeyWindow) ?? owner
         previousResponder = previousKeyWindow?.firstResponder
         blockedWindows.forEach { $0.0.ignoresMouseEvents = true }
         window.sharingType = owner.sharingType; window.appearance = owner.effectiveAppearance
         window.level = owner.level
-        window.setFrame(Self.frame(size: window.frame.size, owner: owner.frame, screen: owner.screen?.frame ?? owner.frame), display: false)
+        // 底栏覆盖Dock，下沿取整屏；上沿避开菜单栏。
+        let full = owner.screen?.frame ?? owner.frame
+        let screen = NSRect(x: full.minX, y: full.minY, width: full.width, height: (owner.screen?.visibleFrame.maxY ?? full.maxY) - full.minY)
+        // 锚点须属于父窗或其子窗，且不能是几乎整块面板的大视图，否则箭头指不出触发元素。
+        let target = anchor.flatMap { view in family.contains { $0 === view.window } ? Self.screenRect(of: view) : nil }
+        if let edge = target.flatMap({ Self.anchorEdge($0, owner: owner.frame) }), let host = window.contentView as? NSHostingView<Bubble> {
+            let placed = Self.frame(size: bodySize, anchor: edge, screen: screen)
+            host.rootView.arrow = (placed.arrowX, placed.arrowUp)
+            window.setFrame(placed.frame, display: false)
+        } else {
+            window.setFrame(Self.frame(size: bodySize, owner: owner.frame, screen: screen), display: false)
+        }
         ownerClose = NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: owner, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.cancelImmediately() }
         }
@@ -101,6 +150,28 @@ import SwiftUI
         answer.resume(returning: choice)
     }
     func windowWillClose(_ notification: Notification) { cancelImmediately() }
+
+    /// 确认内容加可选箭头；箭头与卡片同底色，指向触发元素，by AI.Coding。
+    struct Bubble: View {
+        static let arrowHeight: CGFloat = 8
+        let content: AnyView
+        var arrow: (x: CGFloat, up: Bool)?
+        var body: some View {
+            VStack(spacing: 0) {
+                if let arrow, arrow.up { tip(arrow) }
+                content
+                if let arrow, !arrow.up { tip(arrow) }
+            }
+        }
+        private func tip(_ arrow: (x: CGFloat, up: Bool)) -> some View {
+            Path { path in
+                let base: CGFloat = arrow.up ? Self.arrowHeight : 0, point: CGFloat = arrow.up ? 0 : Self.arrowHeight
+                path.move(to: .init(x: 0, y: base)); path.addLine(to: .init(x: 9, y: point)); path.addLine(to: .init(x: 18, y: base)); path.closeSubpath()
+            }.fill(Color(nsColor: .windowBackgroundColor)).frame(width: 18, height: Self.arrowHeight)
+                .frame(maxWidth: .infinity, alignment: .leading).padding(.leading, arrow.x - 9)
+                .accessibilityHidden(true)
+        }
+    }
 
     /// 三个明确选项沿用原有保存语义，键盘默认动作与Esc仍由确认窗接管。
     private struct Content: View {

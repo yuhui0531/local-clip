@@ -9,10 +9,13 @@ import LocalClipCore
     var action: String
     var impact: String
     var destructive: Bool
+    /// 面板气泡按操作对象定位；每次确认独立标识，避免旧气泡回答新确认，by AI.Coding。
+    let operation: HistoryChange
+    let id = UUID()
 
     /// 文案按操作表达后果；零删除明确显示，不把文件计量细节放进用户确认，by AI.Coding。
     init(_ preview: ChangePreview) {
-        destructive = preview.affectedCount > 0
+        destructive = preview.affectedCount > 0; operation = preview.operation
         impact = destructive ? "将删除 \(preview.affectedCount) 条记录" : "当前不会删除任何记录"
         switch preview.operation {
         case .retention(let days):

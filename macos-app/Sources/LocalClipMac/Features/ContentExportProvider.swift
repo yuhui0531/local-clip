@@ -373,6 +373,8 @@ struct HistoryDragBridge: NSViewRepresentable {
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
         /// ⌘T转换菜单定位到所选卡片；只取仍在窗口中的卡片，by AI.Coding。
         static func view(for id: ClipID) -> NSView? { views.allObjects.first { $0.id == id && $0.window != nil } }
+        /// 确认气泡在窗口内已挂载的卡片中挑选锚点，by AI.Coding。
+        static func views(in window: NSWindow) -> [DragView] { views.allObjects.filter { $0.window === window } }
         /// 托管目的地按实际卡片裁剪范围选插入锚点，间距也归最近卡片；不以拖动预览位置命中。
         static func dropTarget(at point: NSPoint, in window: NSWindow, model: HistoryViewModel) -> (view: DragView, after: Bool)? {
             let candidates = views.allObjects.filter { view in

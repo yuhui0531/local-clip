@@ -484,6 +484,8 @@ import LocalClipCore
     func setFavorite(_ ids: [ClipID], _ value: Bool, selectAll: UUID? = nil) { apply(.favorites(ids, value), ids, selectAll) }
     func setCategory(_ ids: [ClipID], _ categoryID: String, _ included: Bool, selectAll: UUID? = nil) { apply(.category(ids, categoryID, included), ids, selectAll) }
     func delete(_ ids: [ClipID], selectAll: UUID? = nil) { apply(.delete(ids), ids, selectAll) }
+    /// 删除分类沿用预览→窗口附页确认→提交，不借用底栏面板内确认，by AI.Coding。
+    func deleteCategory(_ id: String) { apply(.deleteCategory(id), []) }
     /// 拖动剪贴板只放随机令牌，目标与全选身份留在模型里：其他应用拿不到记录，跨页全选也不把整批ID写入剪贴板，by AI.Coding。
     private var drag: (token: String, ids: [ClipID], selectAll: UUID?)?
     /// 从已选行开始拖作用于完整目标（含跨页全选），与右键一致；否则只拖该行。多选时各行取到同一令牌。

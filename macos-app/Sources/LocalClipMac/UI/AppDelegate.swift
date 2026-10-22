@@ -891,7 +891,9 @@ import LocalClipCore
             let confirmation = SurfaceConfirmation(title: title, closing: closing)
             surfaceConfirmation = confirmation
             defer { surfaceConfirmation = nil }
-            return await confirmation.present(for: owner, visible: presentsSurfaces)
+            // 气泡指向正在编辑的输入框（重命名框或内容编辑气泡），by AI.Coding。
+            let anchor = NSApp.keyWindow?.firstResponder as? NSView ?? responder as? NSView
+            return await confirmation.present(for: owner, anchor: anchor, visible: presentsSurfaces)
         }
         let alert = NSAlert(); alert.messageText = "\(title)尚未保存"
         alert.informativeText = "保存后继续，或放弃本次修改。"
