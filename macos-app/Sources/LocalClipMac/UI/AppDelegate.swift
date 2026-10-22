@@ -41,6 +41,7 @@ import LocalClipCore
     private var surfaceRequestID = UUID()
     private var surfaceTask: Task<Void, Never>?
     private let surfaceAnimator = SurfaceAnimator()
+    private var surfaceConfirmation: SurfaceConfirmation?
     private var managerBrowsing: HistoryManagerModel.BrowsingState?
     private var settingsSection = SettingsSection.general
     #if DEBUG
@@ -830,14 +831,13 @@ import LocalClipCore
         let editingSheet = contentEditor != nil ? editingWindow?.attachedSheet : nil
         if let modal = NSApp.modalWindow ?? windows.compactMap({ $0.attachedSheet }).first,
            modal !== editingSheet || contentEditor?.confirmingDiscard == true || modal.attachedSheet != nil {
-            modal.makeKeyAndOrderFront(nil); return
+            if presentsSurfaces { Self.presentWithoutActivation(modal) }; return
         }
         guard !model.confirmingChange, manager?.editor?.confirmingDiscard != true,
               model.contentEditor?.confirmingDiscard != true else { return }
         guard !model.surfaceOperationPending, manager?.surfaceOperationPending != true, contentEditor?.saving != true else { return }
         if destination == activeSurface, destination == requestedSurface, let destination, let window = window(for: destination), window.alphaValue >= 1 {
-            if window.isMiniaturized { window.deminiaturize(nil) }
-            window.makeKeyAndOrderFront(nil)
+            if presentsSurfaces { Self.presentWithoutActivation(window) }
             if destination == .manager, !ids.isEmpty { manager?.reveal(ids) }
             return
         }
@@ -886,6 +886,13 @@ import LocalClipCore
         if let surfaceChoiceForTesting { return await surfaceChoiceForTesting(title) }
         #endif
         let responder = owner.firstResponder
+        // 底栏面板不能承载系统Sheet：系统会为较高的确认框移动父窗，产生整条面板弹跳。
+        if owner === panel {
+            let confirmation = SurfaceConfirmation(title: title, closing: closing)
+            surfaceConfirmation = confirmation
+            defer { surfaceConfirmation = nil }
+            return await confirmation.present(for: owner, visible: presentsSurfaces)
+        }
         let alert = NSAlert(); alert.messageText = "\(title)尚未保存"
         alert.informativeText = "保存后继续，或放弃本次修改。"
         alert.addButton(withTitle: closing ? "保存并关闭" : "保存并继续")
@@ -899,6 +906,13 @@ import LocalClipCore
     /// 仅供窗口路由使用，不将预览浮层误认成主窗口。
     private func window(for surface: AppSurface) -> NSWindow? {
         switch surface { case .cards: panel; case .settings: settingsWindow; case .manager: managerWindow }
+    }
+    /// 后台应用的普通orderFront可能排在前台应用后面；最终前置须明确忽略应用激活状态。
+    /// 不激活NSApp、不提升窗口常驻层级，外部应用之后仍可正常覆盖本窗口。
+    static func presentWithoutActivation(_ window: NSWindow) {
+        if window.isMiniaturized { window.deminiaturize(nil) }
+        window.makeKeyAndOrderFront(nil)
+        window.orderFrontRegardless()
     }
     /// 新窗口在透明状态下完成布局，旧窗口仍保留画面，内容就绪后才开始交接。
     private func prepareSurface(_ destination: AppSurface?, reveal ids: [ClipID], request: UUID) async {
@@ -933,8 +947,7 @@ import LocalClipCore
         if destination == .cards { presentHistory() }
         let current = destination.flatMap { window(for: $0) }
         if let current, presentsSurfaces {
-            if current.isMiniaturized { current.deminiaturize(nil) }
-            current.makeKeyAndOrderFront(nil)
+            Self.presentWithoutActivation(current)
         }
         activeSurface = destination
         for window in [panel, settingsWindow, managerWindow].compactMap({ $0 }) { window.ignoresMouseEvents = window !== current }
@@ -968,6 +981,7 @@ import LocalClipCore
         let window = SettingsWindow(contentRect: NSRect(x: 0, y: 0, width: 620, height: 500), styleMask: [.titled, .closable, .nonactivatingPanel], backing: .buffered, defer: false)
         window.delegate = window; window.title = "LocalClip 设置"; window.isReleasedWhenClosed = false
         window.hidesOnDeactivate = false; window.isFloatingPanel = false; window.level = .normal; window.animationBehavior = .none
+        window.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
         window.requestClose = { [weak self] in self?.requestSurface(nil) }
         var view = SettingsView(model: model, login: login, section: settingsSection, fitWindow: { [weak window] in window?.fitContent(height: $0) })
         view.sectionChanged = { [weak self] in self?.settingsSection = $0 }
@@ -1088,6 +1102,8 @@ import LocalClipCore
             // 本地Cmd-Q先于历史/IME分支，也适用于只有设置窗口或菜单图标隐藏时，by AI.Coding。
             if self.handleQuitShortcut(event) { return nil }
             if let eventWindow = event.window, eventWindow.ignoresMouseEvents { return nil }
+            // 子确认窗自行处理Return/Esc/Tab，不能落入卡片重命名或内容编辑的快捷键分支。
+            if event.window is SurfaceConfirmation.Panel { return event }
             let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
             if modifiers == [.command], event.keyCode == 13,
                event.window === self.settingsWindow || event.window === self.managerWindow || event.window === self.panel {
@@ -1229,6 +1245,7 @@ import LocalClipCore
     }
     /// 退出释放系统注册；未完成写入靠原子提交协议恢复。
     public func applicationWillTerminate(_ notification: Notification) {
+        surfaceConfirmation?.cancelImmediately()
         surfaceTask?.cancel(); surfaceAnimator.cancel()
         manager?.stop(); model?.surfaceEdits.removeAll(.cards); model?.surfaceEdits.removeAll(.manager); model?.surfaceEdits.removeAll(.settings)
         sourceObserver?.stop(); sourceObserver = nil

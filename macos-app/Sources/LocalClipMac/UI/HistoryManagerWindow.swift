@@ -20,6 +20,8 @@ import AppKit
                    backing: .buffered, defer: false)
         delegate = self
         hidesOnDeactivate = false; isFloatingPanel = false; level = .normal; animationBehavior = .none
+        // 从状态栏或快捷键请求时进入当前桌面，避免窗口仍留在其他Space造成“未打开”的错觉。
+        collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
         title = "历史管理"
         isReleasedWhenClosed = false
         tabbingMode = .disallowed

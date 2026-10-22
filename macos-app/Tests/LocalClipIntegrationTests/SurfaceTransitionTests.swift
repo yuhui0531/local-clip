@@ -5,6 +5,35 @@ import LocalClipCore
 @testable import LocalClipMac
 
 @MainActor struct SurfaceTransitionTests {
+    /// 贴底父窗不参与确认布局；回答一次后恢复原交互状态，且不创建系统Sheet。
+    @Test func cardConfirmationDoesNotMoveParent() async throws {
+        _ = NSApplication.shared
+        let frame = NSRect(x: 0, y: 0, width: 1440, height: 280)
+        let parent = NSPanel(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        parent.isReleasedWhenClosed = false
+        // 隐藏测试不排序窗口；只检查控制器在父窗上的操作与continuation生命周期。
+        let confirmation = SurfaceConfirmation(title: "名称修改", closing: false)
+        let task = Task { await confirmation.present(for: parent, visible: false) }
+        for _ in 0..<20 where !parent.ignoresMouseEvents { await Task.yield() }
+        #expect(parent.frame == frame && parent.attachedSheet == nil)
+        #expect(parent.ignoresMouseEvents)
+        #expect(confirmation.window?.styleMask.contains(.nonactivatingPanel) == true)
+        #expect((confirmation.window?.frame.height ?? 1000) < 240)
+        confirmation.finish(.cancel)
+        confirmation.finish(.save)
+        #expect(await task.value == .cancel)
+        #expect(!parent.ignoresMouseEvents && parent.frame == frame)
+        #expect(confirmation.window?.contentView == nil)
+        parent.close()
+    }
+    /// 屏幕坐标可为负数；确认始终可见且居中，不依赖系统自动搬动父窗。
+    @Test func cardConfirmationPlacement() {
+        let screen = NSRect(x: -1920, y: -1080, width: 1920, height: 1080)
+        let parent = NSRect(x: -1920, y: -1080, width: 1920, height: 280)
+        let rect = SurfaceConfirmation.frame(size: .init(width: 420, height: 150), owner: parent, screen: screen)
+        #expect(rect.midX == parent.midX && rect.midY == parent.midY)
+        #expect(screen.contains(rect))
+    }
     /// 使用真实宿主路由和隐藏窗口，证明退出会释放模型而只恢复轻量查询条件。
     @Test func hiddenWindowSwitchingAndRelease() async throws {
         _ = NSApplication.shared
@@ -21,6 +50,10 @@ import LocalClipCore
         weak var firstModel = app.surfaceManagerForTesting
         #expect(firstWindow != nil && firstWindow?.isVisible == false)
         #expect(firstWindow?.styleMask.contains(.nonactivatingPanel) == true)
+        #expect(firstWindow?.collectionBehavior.contains(.moveToActiveSpace) == true)
+        // 重复入口在静默宿主中也不能意外排序窗口到真实桌面。
+        app.switchSurfaceForTesting(.manager); try await settle()
+        #expect(firstWindow?.isVisible == false)
         firstModel?.literal = "saved-query"; firstModel?.sort = .recentAsc; firstModel?.scope = .favorites
         app.switchSurfaceForTesting(.settings); try await settle()
         #expect(firstWindow == nil && firstModel == nil)
