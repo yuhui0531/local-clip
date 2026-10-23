@@ -27,6 +27,14 @@ import LocalClipCore
 }
 
 @MainActor struct CategoryDropRoutingTests {
+    /// 新建分类弹窗锚在加号上；加号滚出可见范围时贴边，未布局时退回整段导航区，by AI.Coding。
+    @Test func categoryEditorAnchorsAtPlus() {
+        let plus = CGRect(x: 300, y: 2, width: 28, height: 28)
+        #expect(HistoryView.categoryEditorAnchor(plus: plus, width: 900) == plus)
+        #expect(HistoryView.categoryEditorAnchor(plus: plus.offsetBy(dx: 700, dy: 0), width: 900) == CGRect(x: 899, y: 2, width: 1, height: 28))
+        #expect(HistoryView.categoryEditorAnchor(plus: plus.offsetBy(dx: -400, dy: 0), width: 900) == CGRect(x: 0, y: 2, width: 1, height: 28))
+        #expect(HistoryView.categoryEditorAnchor(plus: .zero, width: 900) == CGRect(x: 0, y: 0, width: 900, height: 32))
+    }
     /// 必须经过实际托管层级，直接调用接收函数无法发现SwiftUI拦截原生目的地，by AI.Coding。
     @Test(.enabled(if: ProcessInfo.processInfo.environment["LOCALCLIP_NAMED_TEST"] == "1"))
     func hostedCategoryRouting() async throws {

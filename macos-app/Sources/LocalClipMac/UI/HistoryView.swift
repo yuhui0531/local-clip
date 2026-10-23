@@ -8,6 +8,8 @@ public struct HistoryView: View {
     @State private var categoryContentWidth: CGFloat = 0
     @State private var categoryFadeLeading = false
     @State private var categoryFadeTrailing = false
+    @State private var categoryPlusFrame: CGRect = .zero
+    @State private var categoryNavigationWidth: CGFloat = 0
     @State private var resizingHeight: Double?
     public init(model: HistoryViewModel) { self.model = model }
     /// 几何常量各只定义一次；卡片区、滚轮、分页和编辑气泡共用，by AI.Coding。
@@ -125,6 +127,13 @@ public struct HistoryView: View {
             }.buttonStyle(ToolbarTabStyle(selected: true)).fixedSize().help("筛选（\(count) 项生效）").accessibilityLabel("筛选，\(count) 项生效")
         }
     }
+    static let categoryNavigationSpace = "categoryNavigation"
+    /// 新建分类弹窗锚点：加号可见时取加号；部分或全部滚出时夹到导航区可见范围内；尚未布局时退回整段导航区，by AI.Coding。
+    static func categoryEditorAnchor(plus: CGRect, width: CGFloat) -> CGRect {
+        guard plus.width > 0, width > 0 else { return CGRect(x: 0, y: 0, width: max(width, 1), height: 32) }
+        let minX = min(max(plus.minX, 0), width - 1), maxX = max(min(plus.maxX, width), minX + 1)
+        return CGRect(x: minX, y: plus.minY, width: maxX - minX, height: plus.height)
+    }
     /// 类型与分类共享工具栏剩余宽度；溢出只滚动这段，主入口与搜索保持可见，by AI.Coding。
     private func categoryNavigation(compact: Bool) -> some View {
         GeometryReader { geometry in
@@ -138,6 +147,7 @@ public struct HistoryView: View {
                             if !model.categories.isEmpty { Divider().frame(height: 14).padding(.horizontal, 8) }
                             ForEach(model.categories) { categoryTab($0).id($0.id) }
                             ToolbarIconButton(symbol: "plus", help: "新建分类") { model.editCategory() }
+                                .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(Self.categoryNavigationSpace)) } action: { categoryPlusFrame = $0 }
                         // 标签从收藏右侧依次排列，剩余空间不能把分类推到第二行，by AI.Coding。
                         }.fixedSize(horizontal: true, vertical: false)
                             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { categoryContentWidth = $0 }
@@ -170,9 +180,10 @@ public struct HistoryView: View {
                     }
                 }.frame(width: geometry.size.width, alignment: .leading)
             }
-        }.frame(height: 32)
-            // 弹窗锚定可见导航区域；加号滚出视口时，溢出菜单和快捷键仍能打开编辑器。
-            .popover(isPresented: $model.showingCategoryEditor, arrowEdge: .top) { PanelCategoryEditor(model: model) }
+        }.coordinateSpace(.named(Self.categoryNavigationSpace)).frame(height: 32)
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { categoryNavigationWidth = $0 }
+            // 弹窗锚定加号；加号滚出视口时贴到最近的可见边缘，溢出菜单和快捷键仍能打开编辑器，by AI.Coding。
+            .popover(isPresented: $model.showingCategoryEditor, attachmentAnchor: .rect(.rect(Self.categoryEditorAnchor(plus: categoryPlusFrame, width: categoryNavigationWidth))), arrowEdge: .top) { PanelCategoryEditor(model: model) }
     }
     /// 类型菜单与类型标签同一选择规则；选中时显示类型名并高亮，by AI.Coding。
     private var kindMenu: some View {
