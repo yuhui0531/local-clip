@@ -728,7 +728,8 @@ public actor HistoryStore: HistoryRepository {
         let settings = try settings(), at = clock.now()
         var condition = "1", values: [SQLValue] = []
         if let cutoff = retentionCutoff(settings: settings, at: at) { condition = "((\(protectedSQL)) OR clips.lastCopiedAtMs>?)"; values.append(.integer(cutoff)) }
-        if let since { condition += " AND clips.lastCopiedAtMs>=?"; values.append(.integer(since)) }
+        // 清除索引会把起点移到现在；调用方可能还持有旧起点（设置保存的变更事件先于界面状态到达），以已持久化的较晚起点为准。
+        if let since { condition += " AND clips.lastCopiedAtMs>=?"; values.append(.integer(max(since, settings.imageTextSearchSince ?? since))) }
         let images = ImageTextJob.imageTypes.map { "'\($0)'" }.joined(separator: ",")
         return try strategy.read { db in
             try db.rows("""

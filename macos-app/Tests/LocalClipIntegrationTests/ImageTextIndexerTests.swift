@@ -86,10 +86,15 @@ private final class Calls: @unchecked Sendable {
         try await until { try await ids(h.store, "old receipt") == [older] }
         try await until { h.model.imageTextStatus?.hasPrefix("已有图片文字索引完成") == true }
         // 开启状态下清除：之后的变更不会把已清除的图片自动重新识别。
-        h.model.clearImageTextIndex()
-        try await until { h.model.imageTextStatus == "已清除图片文字索引" && (h.model.settings.imageTextSearchSince ?? 0) > 1 }
+        // 设置保存自身的变更事件可能先于新起点写回界面状态到达：此刻按旧起点触发同步，也不能重新识别。
+        let enabledAt = try #require(h.model.settings.imageTextSearchSince)
+        h.model.clearImageTextIndex(); h.model.syncImageTextIndex()
+        try await until { h.model.imageTextStatus == "已清除图片文字索引" && (h.model.settings.imageTextSearchSince ?? 0) > enabledAt && h.model.imageTextIndexer.task == nil }
+        #expect(try await ids(h.store, "launch plan").isEmpty)
+        // 与存储变更事件同一入口触发并等本轮跑完，不靠固定sleep猜事件循环时序。
         _ = try await h.store.apply(try await h.store.preview(.favorite(older, true)).token)
-        try await Task.sleep(for: .milliseconds(200))
+        h.model.syncImageTextIndex()
+        try await until { h.model.imageTextIndexer.task == nil }
         #expect(try await ids(h.store, "launch plan").isEmpty && h.model.imageTextStatus == "已清除图片文字索引")
         h.model.indexExistingImages()
         try await until { try await ids(h.store, "launch plan") == [shot] }
