@@ -51,6 +51,8 @@ Whether you are copying plain text, rich formats (RTF/HTML), code snippets, high
 - Page-by-page browsing, sorting, search and batch actions; drag one or many records onto a sidebar category to file them.
 - Categories in the sidebar support rename and delete from the context menu. The bottom drawer hides while the manager is open.
 
+![History Manager](macos-app/docs/images/history-manager.png)
+
 #### 🪄 Smart Paste & Frictionless Workflow
 - **Double-Click Direct Paste**: Single-click to select; double-click a card to restore its original formats and paste into the previously focused app. `Return` performs the default action (direct paste or copy only), `⇧Return` pastes plain text.
 - **Quick Paste by Number**: Hold the quick-paste modifier (default `⌘`) to reveal number badges, then press `1`–`9` to paste that card from the current list.
