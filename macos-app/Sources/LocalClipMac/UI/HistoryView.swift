@@ -11,6 +11,7 @@ public struct HistoryView: View {
     @State private var categoryPlusFrame: CGRect = .zero
     @State private var categoryNavigationWidth: CGFloat = 0
     @State private var resizingHeight: Double?
+    @Environment(\.colorScheme) private var colorScheme
     public init(model: HistoryViewModel) { self.model = model }
     /// 几何常量各只定义一次；卡片区、滚轮、分页和编辑气泡共用，by AI.Coding。
     static let dragHandleHeight: CGFloat = 8
@@ -98,24 +99,16 @@ public struct HistoryView: View {
         if let kind = model.kind { return "搜索" + Self.kindName(kind) }
         return "搜索剪贴板"
     }
-    /// 筛选按钮携带生效条件数；单项清除与“清除筛选”仍在FilterEditor中，by AI.Coding。
-    /// 外观快捷切换：跟随系统→浅色→深色循环，写入与设置页同一字段，by AI.Coding。
+    /// 外观快捷切换：按当前实际显示在深浅之间切换，每次点击都有可见变化；图标显示点击后的主题。“跟随系统”只在设置页选择，by AI.Coding。
     private var themeButton: some View {
-        let current = model.settings.appearance, next = Self.nextAppearance(current)
-        // 实心圆/太阳光芒视觉上比细线关闭图标大，缩到 12pt 与置顶、关闭的视觉高度对齐，by AI.Coding。
-        return ToolbarIconButton(symbol: Self.appearanceSymbol(current), iconSize: 12, help: "外观：\(Self.appearanceName(current))，点击切换为\(Self.appearanceName(next))", label: "外观：\(Self.appearanceName(current))") {
-            model.updateSettings { $0.appearance = next }
+        let target = Self.toggledAppearance(showingDark: colorScheme == .dark)
+        // 太阳光芒视觉上比细线关闭图标大，缩到 12pt 与置顶、关闭的视觉高度对齐，by AI.Coding。
+        return ToolbarIconButton(symbol: target == .dark ? "moon" : "sun.max", iconSize: 12, help: target == .dark ? "切换到深色" : "切换到浅色") {
+            model.updateSettings { $0.appearance = target }
         }
     }
-    static func nextAppearance(_ value: AppAppearance) -> AppAppearance {
-        switch value { case .system: .light; case .light: .dark; case .dark: .system }
-    }
-    static func appearanceName(_ value: AppAppearance) -> String {
-        switch value { case .system: "跟随系统"; case .light: "浅色"; case .dark: "深色" }
-    }
-    static func appearanceSymbol(_ value: AppAppearance) -> String {
-        switch value { case .system: "circle.lefthalf.filled"; case .light: "sun.max"; case .dark: "moon" }
-    }
+    static func toggledAppearance(showingDark: Bool) -> AppAppearance { showingDark ? .light : .dark }
+    /// 筛选按钮携带生效条件数；单项清除与“清除筛选”仍在FilterEditor中，by AI.Coding。
     @ViewBuilder private var filterButton: some View {
         let count = model.filterCount
         if count == 0 {

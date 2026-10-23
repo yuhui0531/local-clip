@@ -473,7 +473,8 @@ import LocalClipCore
         // 显示周期与入场起点必须在挂载/布局前确定；首帧后改代次会重启文件预览并再次请求焦点，by AI.Coding。
         let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         model.actualPanelHeight = panelHeight
-        model.focusRequest = UUID(); model.searchFocusRequest = UUID()
+        // 呼出时焦点在结果区（默认选中首张卡片）；直接键入仍由结果区转入搜索框，⌘F 单独聚焦搜索，by AI.Coding。
+        model.focusRequest = UUID()
         if panel?.isVisible != true { model.panelEntrance = reduceMotion ? 0 : 12 }
         prepareHistoryPanel(frame: rect, height: panelHeight)
         if let panel {
@@ -489,6 +490,8 @@ import LocalClipCore
             panel.contentView?.displayIfNeeded()
             panelPresented = true
             if presentsSurfaces { panel.makeKeyAndOrderFront(nil) }
+            // 上次关闭时若停在搜索框，重新呼出也回到结果区。
+            panel.makeFirstResponder(panel)
             // 置前后的首次提交（窗口服务器同步）立即完成，不占用随后淡入与位移动画的前几帧，by AI.Coding。
             CATransaction.flush()
             if model.panelEntrance != 0 { withAnimation(.timingCurve(0.2, 0.9, 0.3, 1, duration: 0.18)) { model.panelEntrance = 0 } }

@@ -29,12 +29,10 @@ import Testing
         #expect(closed)
     }
 
-    /// 工具栏外观按钮按跟随系统→浅色→深色循环，三态图标互不相同，by AI.Coding。
-    @Test func toolbarThemeButtonCycles() {
-        #expect(HistoryView.nextAppearance(.system) == .light)
-        #expect(HistoryView.nextAppearance(.light) == .dark)
-        #expect(HistoryView.nextAppearance(.dark) == .system)
-        #expect(Set(AppAppearance.allCases.map(HistoryView.appearanceSymbol)).count == 3)
+    /// 工具栏外观按钮按当前实际显示切到相反的深浅色，不经过“跟随系统”，by AI.Coding。
+    @Test func toolbarThemeButtonToggles() {
+        #expect(HistoryView.toggledAppearance(showingDark: false) == .dark)
+        #expect(HistoryView.toggledAppearance(showingDark: true) == .light)
     }
 
     /// 旧JSON缺少新字段时保留默认值；所有主题与紧凑选择可往返保存。
