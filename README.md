@@ -43,7 +43,7 @@ Whether you are copying plain text, rich formats (RTF/HTML), code snippets, high
   - **Files**: Content-based previews (extension-less images, PDF/Office thumbnails, source files), "Show in Finder" and "Open With...".
   - **Links & Colors**: Domain badges for URLs; color values render as swatches.
 - **Source-Colored Headers**: Each card header uses the source app's icon color, contrast-corrected to WCAG ≥ 4.5:1.
-- **Toolbar**: **Clipboard (All)**, **Favorites**, type filters (Text, Link, Image, File) and custom categories in one row. Single-click a custom category to switch, double-click to rename; ⌘-click to combine categories.
+- **Toolbar**: **Clipboard (All)**, **Favorites**, type filters (Text, Link, Image, File, Mixed) and custom categories in one row. Single-click a custom category to switch, double-click to rename; ⌘-click to combine categories.
 - **Preview & Detail**: `Space` opens a preview window for text, images (fit / actual size / zoom) and files that follows arrow-key selection; `⌘I` shows the detail inspector with recognized content and collapsible record info.
 
 #### 🗂️ History Manager Window
@@ -72,9 +72,13 @@ Whether you are copying plain text, rich formats (RTF/HTML), code snippets, high
 
 ### 🖥️ Interface Preview
 
-| Light Mode | Dark Mode | Compact Mode |
-| :---: | :---: | :---: |
-| ![Light Mode](macos-app/docs/images/light.png) | ![Dark Mode](macos-app/docs/images/dark.png) | ![Compact Mode](macos-app/docs/images/compact.png) |
+**Light Mode**
+
+![Light Mode](macos-app/docs/images/light.png)
+
+**Dark Mode**
+
+![Dark Mode](macos-app/docs/images/dark.png)
 
 ---
 
