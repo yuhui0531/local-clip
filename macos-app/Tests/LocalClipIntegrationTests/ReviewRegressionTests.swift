@@ -106,7 +106,7 @@ import LocalClipCore
         } while request.cursor != nil
         return result
     }
-    /// 正好50/100条的页尾选择，单次复制及隐藏期间超过一页的新复制都保留窗口与详情。
+    /// 正好50/100条的页尾选择与单次复制保留窗口与详情；隐藏期间超过一页的新复制在关闭后备好首屏，重开回到首卡，by AI.Coding。
     @Test(arguments: [50, 100])
     func pageBoundaryAndHiddenBurstPreserveSelection(window: Int) async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -126,10 +126,10 @@ import LocalClipCore
         model.panelVisibilityChanged(false)
         let previousCount = model.items.count
         for index in 0..<75 { _ = try await store.ingest(.init(payload: .init([.init([.init(SupportedType.string, Data("burst-\(index)".utf8))])])), at: at + 2000 + Int64(index)) }
-        model.panelVisibilityChanged(true)
+        model.showFirstCard(); model.panelVisibilityChanged(true)
         try await until { model.items.first?.preview == "burst-74" && !model.historyBusy }
-        #expect(model.items.count >= previousCount + 75)
-        #expect(model.selectedID == selected); #expect(model.detail?.summary.id == selected)
+        #expect(previousCount >= window && model.items.count == 50)
+        #expect(model.selectedID == model.items.first?.id && model.selectedIDs.count == 1)
         let deletion = try await store.preview(.delete([selected])); _ = try await store.apply(deletion.token)
         try await until { !model.items.contains { $0.id == selected } && !model.historyBusy }
         #expect(model.selectedID != selected); #expect(!model.selectedIDs.contains(selected))

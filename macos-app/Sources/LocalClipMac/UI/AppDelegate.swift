@@ -216,7 +216,7 @@ import LocalClipCore
                     #endif
                     // 等首屏查询完成再隐藏预热；若用户已经打开，则复用其面板，不重复创建或夺取焦点。
                     let preparationDeadline = ContinuousClock.now + .seconds(2)
-                    while model.historyBusy && panel == nil && ContinuousClock.now < preparationDeadline && !Task.isCancelled {
+                    while (model.historyBusy || model.preparingFirstScreen) && panel == nil && ContinuousClock.now < preparationDeadline && !Task.isCancelled {
                         try? await Task.sleep(for: .milliseconds(20))
                     }
                     if !Task.isCancelled, !model.historyBusy, panel == nil {
@@ -939,6 +939,8 @@ import LocalClipCore
                 do { try await Task.sleep(for: .milliseconds(16)) } catch { return }
             }
         }
+        // 隐藏期间的首屏准备未完成时至多等80ms，首帧即最新列表；超时由打开后的首屏刷新兜底，by AI.Coding。
+        if destination == .cards, panel?.isVisible != true { await model.awaitHiddenFirstScreen(timeout: .milliseconds(80)) }
         // 给 SwiftUI 首次布局与窗口服务器提交留出稳定帧；取消时新请求接管已有窗口。
         if destination != nil {
             do { try await Task.sleep(for: .milliseconds(32)) } catch { return }

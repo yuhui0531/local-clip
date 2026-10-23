@@ -230,7 +230,9 @@ import Testing
         if hidden { model.panelVisibilityChanged(false) }
         _ = try await store.apply(store.preview(.deleteCategory(category.id)).token)
         if hidden {
-            try await Task.sleep(for: .milliseconds(30)); model.panelVisibilityChanged(true)
+            // 超过300ms静默：首屏已在隐藏期间备好，重开不再查询，仍须裁掉已删分类，by AI.Coding。
+            try await Task.sleep(for: .milliseconds(30)); try await until { !model.preparingFirstScreen && !model.historyBusy }
+            model.showFirstCard(); model.panelVisibilityChanged(true)
         }
         try await until { model.activeCategories.isEmpty && model.items.count == 2 && !model.historyBusy }
     }

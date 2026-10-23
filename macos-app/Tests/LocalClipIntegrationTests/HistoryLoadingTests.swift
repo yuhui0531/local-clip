@@ -263,6 +263,74 @@ extension HistoryStore {
         try await until { !model.historyBusy && model.items.first?.preview == "hidden-head" }
         #expect(model.selectedID == model.items.first?.id && model.selectedIDs.count == 1)
     }
+    /// 关闭即裁回首屏；隐藏期间新增在后台备好最新首屏，打开不再查询也不露出旧列表，by AI.Coding。
+    @Test func hiddenCapturesPrepareFirstScreenBeforeOpen() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try HistoryStore(location: root); try await seed(store, count: 80)
+        let model = makeModel(store); model.configureHistoryViewport(width: 1300, cardWidth: HistoryView.cardSide(height: 340))
+        model.hiddenRefreshDelay = .milliseconds(30)
+        try await model.start(); model.capture.stop(); model.panelVisibilityChanged(true)
+        try await until { !model.historyBusy && model.items.count == 5 }
+        model.historyScrolled(offset: 500, epoch: model.listState.snapshot.scrollEpoch); try await until { !model.historyBusy && model.items.count > 5 }
+        model.panelVisibilityChanged(false)
+        try await until { !model.preparingFirstScreen && !model.historyBusy && model.items.count == 5 }
+        #expect(model.scrollRestoration?.offset == 0 && model.selectedID == model.items.first?.id)
+        let at = SystemClock().now() + 1000
+        for index in 0..<60 { _ = try await store.ingest(.init(payload: .init([.init([.init(SupportedType.string, Data("hidden-\(index)".utf8))])])), at: at + Int64(index)) }
+        try await until { !model.preparingFirstScreen && !model.historyBusy && model.items.first?.preview == "hidden-59" }
+        #expect(!model.hiddenChanges && model.items.count == 5 && model.hasMore)
+        #expect(model.selectedID == model.items.first?.id && model.selectedIDs.count == 1)
+        let queries = model.historyWindowQueryCount
+        model.showFirstCard(); model.panelVisibilityChanged(true)
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(model.historyWindowQueryCount == queries && model.items.first?.preview == "hidden-59")
+    }
+    /// 静默等待未到就打开：先立即准备并等待；仍未备好时打开后只查首屏兜底，by AI.Coding。
+    @Test func openBeforeHiddenPreparationWaitsOrFallsBack() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try HistoryStore(location: root); try await seed(store, count: 80)
+        let model = makeModel(store); model.configureHistoryViewport(width: 1300, cardWidth: HistoryView.cardSide(height: 340))
+        model.hiddenRefreshDelay = .seconds(60)
+        try await model.start(); model.capture.stop(); model.panelVisibilityChanged(true)
+        try await until { !model.historyBusy && model.items.count == 5 }
+        model.panelVisibilityChanged(false)
+        // 关闭后的准备仍在静默等待：打开前立即开始而不是等满60秒。
+        #expect(model.preparingFirstScreen)
+        await model.awaitHiddenFirstScreen(timeout: .seconds(5))
+        #expect(!model.preparingFirstScreen && !model.historyBusy)
+        let at = SystemClock().now() + 1000
+        _ = try await store.ingest(.init(payload: .init([.init([.init(SupportedType.string, Data("waited".utf8))])])), at: at)
+        try await until { model.hiddenChanges }
+        await model.awaitHiddenFirstScreen(timeout: .seconds(5))
+        #expect(!model.preparingFirstScreen && model.items.first?.preview == "waited" && model.items.count == 5)
+        for index in 0..<60 { _ = try await store.ingest(.init(payload: .init([.init([.init(SupportedType.string, Data("late-\(index)".utf8))])])), at: at + 1 + Int64(index)) }
+        try await until { model.hiddenChanges }
+        model.showFirstCard(); model.panelVisibilityChanged(true)
+        try await until { !model.historyBusy && model.items.first?.preview == "late-59" }
+        #expect(model.items.count == 5 && model.hasMore)
+        #expect(model.selectedID == model.items.first?.id && model.selectedIDs.count == 1)
+    }
+    /// 关闭后首屏图片在隐藏期间预解码，打开首帧直接命中缓存，by AI.Coding。
+    @Test func hiddenPreparationPrewarmsFirstScreenThumbnails() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try HistoryStore(location: root); try await seed(store, count: 80)
+        var images: [ClipID] = []
+        for side in 4...6 {
+            let payload = ClipboardPayload([.init([.init(SupportedType.png, try ImageFixtures.image(width: side, height: side))])])
+            if case .inserted(let id) = try await store.ingest(.init(payload: payload), at: SystemClock().now() + 1000 + Int64(side)) { images.append(id) }
+        }
+        #expect(images.count == 3)
+        let model = makeModel(store); model.configureHistoryViewport(width: 1300, cardWidth: HistoryView.cardSide(height: 340))
+        try await model.start(); model.capture.stop(); model.panelVisibilityChanged(true)
+        try await until { !model.historyBusy && model.items.count == 5 }
+        #expect(images.allSatisfy { model.thumbnails.object(forKey: $0 as NSString) == nil })
+        model.panelVisibilityChanged(false)
+        try await until { !model.preparingFirstScreen }
+        #expect(images.allSatisfy { model.thumbnails.object(forKey: $0 as NSString) != nil })
+    }
     /// 捕获插入不能移动正在浏览的卡片；详情和多选仍以原ID保存，by AI.Coding。
     @Test func viewportRefreshPreservesScrollAndSelection() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

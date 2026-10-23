@@ -965,7 +965,8 @@ struct ClipCard: View, Equatable {
             .overlay {
                 if selected { RoundedRectangle(cornerRadius: cardRadius + 4, style: .continuous).strokeBorder(Color.accentColor, lineWidth: 2).padding(-4) }
             }
-            .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: selected)
+            // 隐藏期间备首屏时的选中切换不播淡变，紧接着打开的首帧不残留旧选中环，by AI.Coding。
+            .animation(reduceMotion || !model.panelVisible ? nil : .easeOut(duration: 0.12), value: selected)
             .shadow(color: .black.opacity(cardShadow.opacity), radius: cardShadow.radius, y: cardShadow.y)
             .onHover { hovering = $0 }
             .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: hovering)
@@ -1125,7 +1126,6 @@ struct ClipCard: View, Equatable {
             // LazyHStack可能提前创建邻近卡片；正文/图片任务只在真实可见时运行，离屏释放解码图，by AI.Coding。
             .onScrollVisibilityChange(threshold: 0.01) { visible in
                 isOnscreen = visible
-                model.thumbnailVisibilityChanged(id: item.id, visible: visible)
                 if !visible { if item.kind == .file { checkedFileGeneration = nil; contentSize = .loading; fileIcon = nil }; model.cancelRename(id: item.id); thumbnailState = .loading; Task { await model.derived.cancel(id: item.id) } }
             }
             .task(id: [String(isOnscreen), item.kind == .file ? previewGeneration.uuidString : item.contentFingerprint ?? "immutable"]) {
@@ -1206,7 +1206,6 @@ struct ClipCard: View, Equatable {
                 if thumbnail != nil { GUIAcceptanceProbe.imageReadyIDs.insert(item.id) }
                 #endif
             }.onDisappear {
-                model.thumbnailVisibilityChanged(id: item.id, visible: false)
                 model.cancelRename(id: item.id); thumbnailState = .loading; characterCount = nil
                 Task { await model.derived.cancel(id: item.id) }
             }

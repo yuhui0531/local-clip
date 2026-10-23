@@ -28,9 +28,14 @@ import LocalClipCore
         filePreviewVersions[id] = version
         return unchanged
     }
-    private var visibleThumbnailIDs: Set<ClipID> = []
     private var thumbnailCleanup: Task<Void, Never>?
     var thumbnailCleanupDelay: Duration = .seconds(30)
+    /// 隐藏期间新增静默300ms后预备首屏；打开前至多等待在途准备80ms，by AI.Coding。
+    var hiddenRefreshDelay: Duration = .milliseconds(300)
+    private var hiddenRefresh: Task<Void, Never>?
+    private var hiddenRefreshGeneration = UUID()
+    private(set) var preparingFirstScreen = false
+    private var hiddenRefreshDelayed = false
     let queryState = HistoryQueryState()
     let listState = HistoryListState()
     public var query: String { get { queryState.literal } set { queryState.literal = newValue } }
@@ -421,7 +426,7 @@ import LocalClipCore
                 // 删除可能来自历史管理窗口；面板的⌘Z入口跟随存储里的真实撤销状态，by AI.Coding。
                 self.assignIfChanged(\.canUndoDeletion, await self.store.undoAvailable())
                 if !self.panelVisible {
-                    self.hiddenChanges = true
+                    self.hiddenChanges = true; self.prepareHiddenFirstScreen(after: self.hiddenRefreshDelay)
                     // 历史管理窗口可在面板隐藏时增删分类；只刷新共享分类，不改面板筛选与选择，by AI.Coding。
                     await self.reloadCategories()
                     do { self.acceptSettings(try await self.store.settings()) }
@@ -446,7 +451,8 @@ import LocalClipCore
             let edits = pendingSettingsEdits; pendingSettingsEdits.removeAll()
             updateSettings { value in for edit in edits { edit(&value) } }
         }
-        refresh()
+        // 启动时面板隐藏：直接备好首次打开的首屏与图片，by AI.Coding。
+        if panelVisible { refresh() } else { prepareHiddenFirstScreen() }
         if showingFilters { requestSourceSuggestions() }
         syncImageTextIndex()
         // 旧版缺索引只在后台有界修复；空间不足仍从原格式检索，不删除历史。
@@ -458,24 +464,57 @@ import LocalClipCore
             }
         }
     }
-    /// 记录真正可见的卡片；窗口隐藏产生的离屏通知不丢掉最后一屏的热缓存，by AI.Coding。
-    func thumbnailVisibilityChanged(id: ClipID, visible: Bool) {
-        guard panelVisible else { return }
-        if visible { visibleThumbnailIDs.insert(id) } else { visibleThumbnailIDs.remove(id) }
-    }
-    /// 隐藏期间只记失效，30秒后回收离屏图片；快速重开取消清理，by AI.Coding。
-    /// 打开面板显示第一张卡片：回到最左并选中首项；隐藏期间有新记录时，随后的刷新也选中新的首项，by AI.Coding。
+    /// 打开面板显示第一张卡片：回到最左并选中首项；隐藏期间有新记录或首屏仍在准备时，随后的刷新也选中新的首项，by AI.Coding。
     func showFirstCard() {
-        scrollAnchor = nil; historyOffset = 0; firstCardPending = hiddenChanges
+        scrollAnchor = nil; historyOffset = 0; firstCardPending = firstCardPending || hiddenChanges
         listState.update { scrollRestoration = .init(offset: 0); select(items.first?.id) }
     }
     private var firstCardPending = false
+    /// 隐藏时把下次打开的首帧备好：回到首卡、只取最新首屏并预解码其图片，打开不再先露出旧列表，by AI.Coding。
+    private func prepareHiddenFirstScreen(after delay: Duration = .zero) {
+        guard started, !panelVisible else { return }
+        hiddenRefresh?.cancel()
+        let generation = UUID(); hiddenRefreshGeneration = generation; preparingFirstScreen = true; hiddenRefreshDelayed = delay > .zero
+        hiddenRefresh = Task { [weak self] in
+            defer { if self?.hiddenRefreshGeneration == generation { self?.preparingFirstScreen = false; self?.hiddenRefreshDelayed = false; self?.hiddenRefresh = nil } }
+            if delay > .zero { do { try await Task.sleep(for: delay) } catch { return } }
+            guard let self, !Task.isCancelled, !self.panelVisible else { return }
+            self.hiddenRefreshDelayed = false
+            self.hiddenChanges = false; self.firstCardPending = true
+            // 隐藏期间可能删除了筛选中的分类：先过廉价元数据屏障裁剪筛选，再取首屏，by AI.Coding。
+            _ = self.prepareEventMetadata(); self.showFirstCard(); self.refresh()
+            await self.searching?.value
+            guard !Task.isCancelled, !self.panelVisible else { return }
+            await self.prewarmFirstScreenThumbnails()
+        }
+    }
+    /// 首屏图片在隐藏期间解码进内存缓存，打开首帧直接命中而不经过加载占位；文件预览仍按每次打开的代次校验，by AI.Coding。
+    private func prewarmFirstScreenThumbnails() async {
+        for item in items.prefix(viewportPageSize) where item.kind == .image || item.kind == .mixed {
+            guard !Task.isCancelled, !panelVisible else { return }
+            let key = item.id as NSString
+            guard thumbnails.object(forKey: key) == nil else { continue }
+            let result = await derived.thumbnail(id: item.id)
+            guard contains(item.id), case .image(let data) = result, let image = ThumbnailPreviewState(result).image else { continue }
+            thumbnails.setObject(image, forKey: key, encodedBytes: data.count)
+        }
+    }
+    /// 打开前首屏仍在准备时立即开始（跳过静默等待）并至多等待timeout；超时由打开后的首屏刷新兜底，by AI.Coding。
+    func awaitHiddenFirstScreen(timeout: Duration) async {
+        guard started, !panelVisible else { return }
+        if hiddenChanges || hiddenRefreshDelayed { prepareHiddenFirstScreen() }
+        let deadline = ContinuousClock.now + timeout
+        // ponytail: 2ms轮询至多80ms，与历史管理窗口等待加载同一做法；需要更精确时改为续体通知。
+        while preparingFirstScreen, ContinuousClock.now < deadline {
+            do { try await Task.sleep(for: .milliseconds(2)) } catch { return }
+        }
+    }
     public func panelVisibilityChanged(_ visible: Bool) {
         panelVisible = visible
         refreshPastePermissionNotice()
         thumbnailCleanup?.cancel(); thumbnailCleanup = nil
+        hiddenRefresh?.cancel()
         if !visible {
-            firstCardPending = false
             // 尚未打开的编辑请求与Space预览不在隐藏面板上弹出；已经输入的草稿保留到下次打开。
             contentEditRequest = UUID(); if quickLookTask != nil { endQuickLook() }
             answerPanelConfirmation(false)
@@ -486,13 +525,17 @@ import LocalClipCore
             thumbnailCleanup = Task { [weak self] in
                 do { try await Task.sleep(for: delay) } catch { return }
                 guard let self, !Task.isCancelled, !self.panelVisible else { return }
-                // 仅释放可再生的离屏缓存，保留视口、选择、SwiftUI树和语法引擎，避免重开变慢。
-                self.thumbnails.retainOnly(self.visibleThumbnailIDs)
+                // 仅释放可再生的离屏缓存；重开总回到首卡，保留首屏而非关闭前所在屏，by AI.Coding。
+                self.thumbnails.retainOnly(Set(self.items.prefix(self.viewportPageSize).map(\.id)))
                 self.thumbnailCleanup = nil
                 await self.store.releaseThumbnailMemoryCache()
             }
+            // 等关闭淡出结束再替换列表，淡出期间画面不跳变，by AI.Coding。
+            prepareHiddenFirstScreen(after: hiddenRefreshDelay)
         }
-        guard visible, hiddenChanges else { return }
+        guard visible else { return }
+        // 隐藏期间已备好首屏时不再查询；来源建议留到打开筛选时读取，by AI.Coding。
+        guard hiddenChanges else { return }
         hiddenChanges = false
         refresh()
         let metadata = prepareEventMetadata()
@@ -615,11 +658,13 @@ import LocalClipCore
         #if DEBUG
         if preserveWindow { historyWindowRefreshCount += 1 }
         #endif
-        let windowSize = preserveWindow ? max(viewportPageSize, items.count) : viewportPageSize
+        // 隐藏期间有新增的重开总回到首卡：只查首屏，不逐页读到旧窗口尾部，by AI.Coding。
+        let keepsWindow = preserveWindow && !firstCardPending
+        let windowSize = keepsWindow ? max(viewportPageSize, items.count) : viewportPageSize
         let previousSelection = selectedID
         let previousIndex = items.firstIndex { $0.id == previousSelection } ?? 0
-        let tailCandidates = preserveWindow ? items.suffix(50).map(\.id) : []
-        let previousSelections = preserveWindow ? selectedIDs.union(Set(previousSelection.map { [$0] } ?? [])) : []
+        let tailCandidates = keepsWindow ? items.suffix(50).map(\.id) : []
+        let previousSelections = keepsWindow ? selectedIDs.union(Set(previousSelection.map { [$0] } ?? [])) : []
         searching?.cancel(); paging?.cancel(); paging = nil; pendingPageNavigation = nil; queryID = UUID(); let id = queryID
         if !preserveWindow { scrollAnchor = nil; historyOffset = 0 }
         activeSearchSignature = currentSearchSignature; beginQueryLoading(id)
@@ -640,12 +685,12 @@ import LocalClipCore
                 // 廉价元数据裁剪完成后才固定请求，避免已删分类发布旧空结果，by AI.Coding。
                 if querySources.isEmpty, query.range(of: "(^|\\s)app:", options: [.regularExpression, .caseInsensitive]) != nil { prefixSources = (try? await store.sources()) ?? [] }
                 guard id == queryID else { return }
-                let request = searchRequest(sources: querySources, queryID: id, pageSize: preserveWindow ? min(50, max(viewportPageSize, windowSize)) : viewportPageSize)
+                let request = searchRequest(sources: querySources, queryID: id, pageSize: keepsWindow ? min(50, max(viewportPageSize, windowSize)) : viewportPageSize)
                 let parsed = SearchQueryParser.parse(query, sources: querySources, categories: categories, now: clock.now())
                 assignIfChanged(\.queryConditions, parsed.labels); assignIfChanged(\.queryProblems, parsed.problems)
                 activeSearchSignature = request.signature
                 let started = ContinuousClock.now
-                let matching = preserveWindow ? try await store.matchingIDs(Set(tailCandidates).union(previousSelections), in: request) : nil
+                let matching = keepsWindow ? try await store.matchingIDs(Set(tailCandidates).union(previousSelections), in: request) : nil
                 var anchors = previousSelections.intersection(matching?.ids ?? [])
                 let tail = tailCandidates.last(where: { matching?.ids.contains($0) == true })
                 if let tail { anchors.insert(tail) }
@@ -697,7 +742,7 @@ import LocalClipCore
                         else if let selectedID, contains(selectedID) { select(selectedID, preserveSelection: true) }
                         else { select(items.isEmpty ? nil : items[min(previousIndex, items.count - 1)].id) }
                     } else {
-                        select(items.first?.id)
+                        firstCardPending = false; select(items.first?.id)
                     }
                 }
                 queryPending = false
@@ -1460,7 +1505,8 @@ import LocalClipCore
             var valid = Set<ClipID>()
             for id in ids { if (try? await store.metadata(id: id, at: clock.now())) != nil { valid.insert(id) } }
             guard generation == queryID else { return }
-            selectedIDs.formIntersection(valid)
+            // 只移除已失效的快照ID；校验期间同一查询发布的新选择不能被旧快照清掉，by AI.Coding。
+            selectedIDs.subtract(ids.subtracting(valid))
         }
     }
     /// 分类被删除后清理筛选身份，不能困在已经不存在的空分类中。
