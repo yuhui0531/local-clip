@@ -29,6 +29,14 @@ import Testing
         #expect(closed)
     }
 
+    /// 工具栏外观按钮按跟随系统→浅色→深色循环，三态图标互不相同，by AI.Coding。
+    @Test func toolbarThemeButtonCycles() {
+        #expect(HistoryView.nextAppearance(.system) == .light)
+        #expect(HistoryView.nextAppearance(.light) == .dark)
+        #expect(HistoryView.nextAppearance(.dark) == .system)
+        #expect(Set(AppAppearance.allCases.map(HistoryView.appearanceSymbol)).count == 3)
+    }
+
     /// 旧JSON缺少新字段时保留默认值；所有主题与紧凑选择可往返保存。
     @Test func appearanceDefaultsAndPersistence() async throws {
         let original = try JSONEncoder().encode(SettingsSnapshot())

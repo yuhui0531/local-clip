@@ -50,6 +50,7 @@ public struct HistoryView: View {
                     // 状态槽与多选操作条共用同一位置；导航区和搜索在多选时保持可用，by AI.Coding。
                     HistoryToolbarStatus(model: model, footer: model.listState.footerState, input: model.queryState, compact: compact)
                     HStack(spacing: 2) {
+                        themeButton
                         HistoryMoreMenu(model: model, footer: model.listState.footerState)
                         ToolbarIconButton(symbol: model.pinned ? "pin.fill" : "pin", iconSize: 12, tint: model.pinned ? .accentColor : nil, help: model.pinned ? "取消置顶" : "置顶（失焦不隐藏）", label: model.pinned ? "取消置顶" : "置顶") { model.pinned.toggle(); model.panelInteractionChanged?() }
                         ToolbarIconButton(symbol: "xmark", help: "关闭 · Esc") { model.closePanel?(true) }
@@ -96,6 +97,22 @@ public struct HistoryView: View {
         return "搜索剪贴板"
     }
     /// 筛选按钮携带生效条件数；单项清除与“清除筛选”仍在FilterEditor中，by AI.Coding。
+    /// 外观快捷切换：跟随系统→浅色→深色循环，写入与设置页同一字段，by AI.Coding。
+    private var themeButton: some View {
+        let current = model.settings.appearance, next = Self.nextAppearance(current)
+        return ToolbarIconButton(symbol: Self.appearanceSymbol(current), help: "外观：\(Self.appearanceName(current))，点击切换为\(Self.appearanceName(next))", label: "外观：\(Self.appearanceName(current))") {
+            model.updateSettings { $0.appearance = next }
+        }
+    }
+    static func nextAppearance(_ value: AppAppearance) -> AppAppearance {
+        switch value { case .system: .light; case .light: .dark; case .dark: .system }
+    }
+    static func appearanceName(_ value: AppAppearance) -> String {
+        switch value { case .system: "跟随系统"; case .light: "浅色"; case .dark: "深色" }
+    }
+    static func appearanceSymbol(_ value: AppAppearance) -> String {
+        switch value { case .system: "circle.lefthalf.filled"; case .light: "sun.max"; case .dark: "moon" }
+    }
     @ViewBuilder private var filterButton: some View {
         let count = model.filterCount
         if count == 0 {
