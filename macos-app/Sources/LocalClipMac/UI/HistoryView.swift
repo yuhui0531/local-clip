@@ -34,6 +34,12 @@ public struct HistoryView: View {
                     }.onEnded { value in model.resizePanel?((resizingHeight ?? 340) - value.translation.height, true); resizingHeight = nil })
                 // 品牌由菜单栏、关于与设置窗口承担，工具栏只放导航与操作，by AI.Coding。
                 HStack(spacing: compact ? 12 : 18) {
+                    // 搜索与筛选置于最左，靠近视线起点和首张卡片；右侧只留面板级操作，by AI.Coding。
+                    HStack(spacing: 4) {
+                        HistorySearchInput(model: model, input: model.queryState, footer: model.listState.footerState, focus: model.searchFocusRequest, placeholder: searchPlaceholder, focused: model.historyFocus == .search, compact: compact)
+                        filterButton
+                            .popover(isPresented: $model.showingFilters) { FilterEditor(model: model) }
+                    }
                     // 全部/收藏固定可见，类型与分类紧随其后，避免重复历史入口，by AI.Coding。
                     // 范围与类型之间用和分类前相同的分隔线，间距与标签一致，by AI.Coding。
                     HStack(spacing: 2) {
@@ -43,10 +49,7 @@ public struct HistoryView: View {
                     }
                     // 状态槽与多选操作条共用同一位置；导航区和搜索在多选时保持可用，by AI.Coding。
                     HistoryToolbarStatus(model: model, footer: model.listState.footerState, input: model.queryState, compact: compact)
-                    HistorySearchInput(model: model, input: model.queryState, footer: model.listState.footerState, focus: model.searchFocusRequest, placeholder: searchPlaceholder).frame(width: compact ? 160 : 200, height: 30)
                     HStack(spacing: 2) {
-                        filterButton
-                            .popover(isPresented: $model.showingFilters) { FilterEditor(model: model) }
                         HistoryMoreMenu(model: model, footer: model.listState.footerState)
                         ToolbarIconButton(symbol: model.pinned ? "pin.fill" : "pin", iconSize: 12, tint: model.pinned ? .accentColor : nil, help: model.pinned ? "取消置顶" : "置顶（失焦不隐藏）", label: model.pinned ? "取消置顶" : "置顶") { model.pinned.toggle(); model.panelInteractionChanged?() }
                         ToolbarIconButton(symbol: "xmark", help: "关闭 · Esc") { model.closePanel?(true) }
@@ -221,14 +224,21 @@ private struct HistorySearchInput: View {
     let focus: UUID
     /// 占位由 HistoryView 按范围传入；本视图不观察 model，不能自行读取范围，by AI.Coding。
     let placeholder: String
+    let focused: Bool
+    let compact: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body: some View {
         let value = footer.snapshot
+        // 聚焦或有内容时加宽，容纳搜索语法；宽度从可滚动的分类区借，by AI.Coding。
+        let expanded = focused || !input.literal.isEmpty
         SearchField(text: $input.literal, focus: focus, onChange: { model.searchChanged() },
             onNavigate: model.navigate, onEnter: { model.focusResults?() }, onEscape: { if model.handleEscape() { model.closePanel?(true) } },
             placeholder: placeholder, onRegister: { model.searchField = $0 })
             .overlay(alignment: .trailing) {
                 if value.loading { ProgressView().controlSize(.mini).padding(.trailing, 26).accessibilityLabel("正在读取") }
             }
+            .frame(width: expanded ? (compact ? 240 : 320) : (compact ? 160 : 200), height: 30)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: expanded)
     }
 }
 private struct HistoryStrip: View {
