@@ -240,9 +240,20 @@ private struct ManagerTable: View {
                     .toggleStyle(.checkbox).labelsHidden()
             }.width(min: 22, ideal: 22, max: 22)
             // 名称是唯一伸缩列；类型图标并入名称，其余列窄而锁定。理想宽度之和不超过默认窗口（1180，检查器400）下的表格宽度，首次打开不溢出，by AI.Coding。
-            TableColumn("名称") { row in NameCell(row: row, categories: history.categories, memberships: model.memberships[row.id] ?? [], showsContent: history.canDisplayContents, history: history) }
+            TableColumn("名称") { row in NameCell(row: row, showsContent: history.canDisplayContents, history: history) }
                 .width(min: 220, ideal: 240)
-            TableColumn("来源") { row in Text(row.source.name).foregroundStyle(.secondary).lineLimit(1) }.width(min: 88, ideal: 88, max: 88)
+            TableColumn("分类") { row in CategoryCell(categories: history.categories.filter { (model.memberships[row.id] ?? []).contains($0.id) }) }
+                .width(min: 88, ideal: 88, max: 88)
+            // 来源只显示应用图标，名称放悬停提示和读屏标签；图标走 SourceApplicationObserver 缓存，与历史卡片头部一致，by AI.Coding。
+            TableColumn("来源") { row in
+                Group {
+                    if let icon = row.source.bundleID.flatMap(SourceApplicationObserver.icon(for:)) {
+                        Image(nsImage: icon).resizable().interpolation(.high).frame(width: 20, height: 20)
+                    } else {
+                        Image(systemName: "questionmark.app.dashed").foregroundStyle(.secondary)
+                    }
+                }.frame(maxWidth: .infinity).help(row.source.name).accessibilityLabel(row.source.name)
+            }.width(min: 40, ideal: 40, max: 40)
             TableColumn("最近复制", value: \.lastCopiedAt) { row in
                 CopyAge(copiedAt: row.lastCopiedAt).foregroundStyle(.secondary)
                     .help(Date(timeIntervalSince1970: Double(row.lastCopiedAt) / 1000).formatted(date: .abbreviated, time: .standard))
@@ -297,8 +308,6 @@ extension ManagerTable {
 }
 private struct NameCell: View {
     let row: ClipSummary
-    let categories: [ClipCategory]
-    let memberships: Set<String>
     let showsContent: Bool
     let history: HistoryViewModel
     @State private var preview: RowPreview?
@@ -309,12 +318,6 @@ private struct NameCell: View {
                 HStack(spacing: 6) {
                     if row.isFavorite { Image(systemName: "star.fill").foregroundStyle(.yellow).font(.caption) }
                     Text(title).lineLimit(1)
-                    Spacer(minLength: 4)
-                    HStack(spacing: 3) {
-                        ForEach(categories.filter { memberships.contains($0.id) }) { category in
-                            CategoryDot(category: category).help(category.name)
-                        }
-                    }
                 }
                 if showsContent, let snippet {
                     Text(snippet).font(preview?.text != nil ? .system(size: 11, design: .monospaced) : .system(size: 11))
@@ -596,6 +599,18 @@ struct ManagerDragToken: Transferable {
     static var transferRepresentation: some TransferRepresentation {
         DataRepresentation(contentType: UTType(exportedAs: HistoryViewModel.categoryDragType)) { Data($0.value.utf8) }
             importing: { ManagerDragToken(value: String(decoding: $0, as: UTF8.self)) }
+    }
+}
+/// 分类列：每个分类一行色点加名称，最多两行，其余折成“+N”，悬停列出全部，by AI.Coding。
+private struct CategoryCell: View {
+    let categories: [ClipCategory]
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(categories.prefix(2)) { category in
+                HStack(spacing: 5) { CategoryDot(category: category); Text(category.name).lineLimit(1) }
+            }
+            if categories.count > 2 { Text("+\(categories.count - 2)").foregroundStyle(.secondary) }
+        }.font(.system(size: 11)).help(categories.map(\.name).joined(separator: "、"))
     }
 }
 private struct CategoryDot: View {
