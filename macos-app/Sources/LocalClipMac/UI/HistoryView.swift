@@ -127,7 +127,7 @@ public struct HistoryView: View {
             }.buttonStyle(ToolbarTabStyle(selected: true)).fixedSize().help("筛选（\(count) 项生效）").accessibilityLabel("筛选，\(count) 项生效")
         }
     }
-    static let categoryNavigationSpace = "categoryNavigation"
+    nonisolated static let categoryNavigationSpace = "categoryNavigation"
     /// 新建分类弹窗锚点：加号可见时取加号；部分或全部滚出时夹到导航区可见范围内；尚未布局时退回整段导航区，by AI.Coding。
     static func categoryEditorAnchor(plus: CGRect, width: CGFloat) -> CGRect {
         guard plus.width > 0, width > 0 else { return CGRect(x: 0, y: 0, width: max(width, 1), height: 32) }
