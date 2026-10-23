@@ -100,7 +100,8 @@ public struct HistoryView: View {
     /// 外观快捷切换：跟随系统→浅色→深色循环，写入与设置页同一字段，by AI.Coding。
     private var themeButton: some View {
         let current = model.settings.appearance, next = Self.nextAppearance(current)
-        return ToolbarIconButton(symbol: Self.appearanceSymbol(current), help: "外观：\(Self.appearanceName(current))，点击切换为\(Self.appearanceName(next))", label: "外观：\(Self.appearanceName(current))") {
+        // 实心圆/太阳光芒视觉上比细线关闭图标大，缩到 12pt 与置顶、关闭的视觉高度对齐，by AI.Coding。
+        return ToolbarIconButton(symbol: Self.appearanceSymbol(current), iconSize: 12, help: "外观：\(Self.appearanceName(current))，点击切换为\(Self.appearanceName(next))", label: "外观：\(Self.appearanceName(current))") {
             model.updateSettings { $0.appearance = next }
         }
     }
