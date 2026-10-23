@@ -12,7 +12,7 @@ import LocalClipCore
         let model: HistoryViewModel, capture: CaptureCoordinator, ids: [ClipID], output: URL
     }
 
-    /// 六种内容各一条，最后一条最新；收藏代码片段，建两个分类。
+    /// 十条规整的合成记录（ids[0] 最新），带名称、收藏与“工作/设计”分类。
     private func seed(_ root: URL) async throws -> Seeded {
         _ = NSApplication.shared
         let output = URL(fileURLWithPath: try #require(ProcessInfo.processInfo.environment["LOCALCLIP_REVIEW_VISUAL_OUTPUT"]))
@@ -32,29 +32,36 @@ import LocalClipCore
             return try #require(bitmap.representation(using: .png, properties: [:]))
         }
         func text(_ value: String) -> ClipboardPayload { .init([.init([.init(SupportedType.string, Data(value.utf8))])]) }
+        func link(_ value: String) -> ClipboardPayload { .init([.init([.init(SupportedType.url, Data(value.utf8)), .init(SupportedType.string, Data(value.utf8))])]) }
         func source(_ id: String, _ name: String) -> SourceAttribution { .init(bundleID: id, name: name) }
         let notes = root.appendingPathComponent("发布说明.md")
-        try Data("# LocalClip 0.3.64\n\n- 打开面板首帧即最新\n- 第一屏图片即时显示\n".utf8).write(to: notes)
-        let link = "https://developer.apple.com/documentation/appkit/nspasteboard"
-        // 先插入的排在后面；最后一条是选中的首张卡片。
-        let records: [(ClipboardPayload, SourceAttribution)] = [
-            (text("#34C759"), source("com.apple.Notes", "备忘录")),
-            (.init([.init([.init(SupportedType.fileURL, Data(notes.absoluteString.utf8))])]), source("com.apple.finder", "访达")),
-            (.init([.init([.init(SupportedType.png, try artwork())])]), source("com.apple.Preview", "预览")),
-            (text("func restore(_ clip: Clip) {\n    guard clip.isVisible else {\n        return\n    }\n    pasteboard.write(clip.payload)\n}"), source("com.microsoft.VSCode", "Visual Studio Code")),
-            (.init([.init([.init(SupportedType.url, Data(link.utf8)), .init(SupportedType.string, Data(link.utf8))])]), source("com.apple.Safari", "Safari")),
-            (text("今天整理需求，明天处理代码。\n\n好的工具应该让工作流动起来。\nLocalClip · 只保存在这台 Mac"), source("com.apple.TextEdit", "文本编辑")),
+        try Data("# LocalClip 0.3.64\n\n- 打开面板首帧即最新\n- 第一屏图片即时显示\n- 修复多选偶尔被清空\n".utf8).write(to: notes)
+        let code = source("com.microsoft.VSCode", "Visual Studio Code"), safari = source("com.apple.Safari", "Safari")
+        // 一位开发者一天里的复制，按时间从新到旧；分钟数决定“x分钟前/x小时前/昨天”。
+        let records: [(payload: ClipboardPayload, source: SourceAttribution, minutesAgo: Int64, title: String?)] = [
+            (text("登录改版本周完成，下周一进入灰度测试；回归问题统一记在发布清单里。"), source("com.apple.Notes", "备忘录"), 3, "周会纪要"),
+            (link("https://developer.apple.com/documentation/appkit/nspasteboard"), safari, 12, "NSPasteboard 文档"),
+            (text("func restore(_ clip: Clip) {\n  board.clearContents()\n  board.write(clip.payload)\n}"), code, 26, "恢复剪贴板"),
+            (.init([.init([.init(SupportedType.png, try artwork())])]), source("com.apple.Preview", "预览"), 48, "首页配色草图"),
+            (.init([.init([.init(SupportedType.fileURL, Data(notes.absoluteString.utf8))])]), source("com.apple.finder", "访达"), 95, "发布说明"),
+            (text("#0A84FF"), source("com.apple.Notes", "备忘录"), 140, "品牌主色"),
+            (text("git log --oneline -5"), source("com.apple.Terminal", "终端"), 210, "查看最近提交"),
+            (text("{\n  \"version\": \"0.3.64\",\n  \"build\": 86,\n  \"channel\": \"stable\"\n}"), code, 320, "版本配置"),
+            (text("您好，附件是 10 月版本的验收清单，请在周五前确认。"), source("com.apple.mail", "邮件"), 26 * 60, "验收清单邮件"),
+            (link("https://www.swift.org/documentation/"), safari, 30 * 60, "Swift 文档"),
         ]
         let now = SystemClock().now()
         var ids: [ClipID] = []
-        for (index, record) in records.enumerated() {
-            guard case .inserted(let id) = try await store.ingest(.init(payload: record.0, source: record.1), at: now + Int64(index)) else { throw StoreError.notFound }
-            ids.append(id)
+        // 先插入最旧的，列表按最近复制排在前面；ids 与 records 同序。
+        for record in records.reversed() {
+            guard case .inserted(let id) = try await store.ingest(.init(payload: record.payload, source: record.source), at: now - record.minutesAgo * 60_000) else { throw StoreError.notFound }
+            if let title = record.title { try await store.renameClip(id: id, title: title) }
+            ids.insert(id, at: 0)
         }
-        let favorite = try await store.preview(.favorite(ids[3], true)); _ = try await store.apply(favorite.token)
+        for index in [2, 7] { let favorite = try await store.preview(.favorite(ids[index], true)); _ = try await store.apply(favorite.token) }
         let work = try await store.createCategory(name: "工作", colorHex: "34C759")
-        let ideas = try await store.createCategory(name: "灵感", colorHex: "AF52DE")
-        for (members, category) in [([ids[3], ids[5]], work), ([ids[2]], ideas)] {
+        let design = try await store.createCategory(name: "设计", colorHex: "AF52DE")
+        for (members, category) in [([ids[0], ids[2], ids[7], ids[8]], work), ([ids[3], ids[5]], design)] {
             let change = try await store.preview(.category(members, category.id, true)); _ = try await store.apply(change.token)
         }
         try await model.start(); capture.stop()
@@ -77,9 +84,9 @@ import LocalClipCore
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let seeded = try await seed(root), model = seeded.model
-        model.select(seeded.ids.last)
-        // 宽度容纳全部六张卡片，不出现半张截断。
-        let width = 1860.0, height = 360.0
+        model.select(seeded.ids.first)
+        // 宽度恰好放下六张卡片，右侧不露出半张。
+        let width = 1840.0, height = 360.0
         let host = NSHostingView(rootView: HistoryView(model: model)); host.sizingOptions = []
         let window = NSPanel(contentRect: .init(x: 0, y: 0, width: width, height: height), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false; window.contentView = host
@@ -105,10 +112,10 @@ import LocalClipCore
         defer { manager.stop(); seeded.capture.stop() }
         let until = ContinuousClock.now + .seconds(15)
         while manager.rows.count < seeded.ids.count, ContinuousClock.now < until { try await Task.sleep(for: .milliseconds(10)) }
-        manager.selection = [seeded.ids[3]]
+        manager.selection = [seeded.ids[2]]
         while manager.detail == nil, ContinuousClock.now < until { try await Task.sleep(for: .milliseconds(10)) }
-        // 默认宽度；高度收到六行数据刚好铺满，避免大片空行。
-        let size = NSSize(width: HistoryManagerWindow.defaultSize.width, height: 520)
+        // 默认宽度；高度收到十行数据刚好铺满，避免大片空行。
+        let size = NSSize(width: HistoryManagerWindow.defaultSize.width, height: 680)
         let host = NSHostingView(rootView: HistoryManagerView(model: manager, history: seeded.model)); host.sizingOptions = []
         let window = NSPanel(contentRect: .init(origin: .zero, size: size), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false; window.contentView = host; window.appearance = NSAppearance(named: .aqua)
