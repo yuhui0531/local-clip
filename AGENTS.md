@@ -16,3 +16,17 @@
   and windows that stay hidden can run by default. Report skipped interactive
   coverage separately from passing tests. Do not change production Accessibility
   behavior to make tests quiet.
+
+## Agent skills
+
+### Issue tracker
+
+Issue 以本地 Markdown 形式放在 `.scratch/<feature>/` 下。See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+使用默认五个角色标签（needs-triage / needs-info / ready-for-agent / ready-for-human / wontfix），记录为 issue 文件里的 `Status:` 行。See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+single-context：根目录 `GLOSSARY.md` + `docs/adr/`。See `docs/agents/domain.md`.
