@@ -198,7 +198,7 @@ struct ClipContentEditor: View {
                         .font(.system(size: LCStyle.FontSize.meta))
                         .foregroundStyle(.red)
                     Text(state.error)
-                        .font(.system(size: 11.5))
+                        .font(.system(size: LCStyle.FontSize.meta))
                         .foregroundStyle(.red)
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
@@ -219,16 +219,10 @@ struct ClipContentEditor: View {
                         state.confirmingDiscard = false
                         focused = true
                     }
-                    .buttonStyle(ToolbarTabStyle(selected: true))
-                    Button(role: .destructive, action: discard) {
-                        Text("放弃修改")
-                            .font(.system(size: 12.5, weight: .semibold))
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 12)
-                            .frame(height: 28)
-                            .background(Color.red, in: RoundedRectangle(cornerRadius: LCStyle.Radius.control))
-                    }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.bordered).controlSize(.large)
+                    // 系统按钮自带按下态、焦点环与增强对比度，by AI.Coding。
+                    Button("放弃修改", role: .destructive, action: discard)
+                        .buttonStyle(.borderedProminent).tint(.red).controlSize(.large)
                 }
                 .padding(.horizontal, 10).padding(.vertical, 6)
                 .background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
@@ -237,20 +231,12 @@ struct ClipContentEditor: View {
                     Text("⌘S / ⌘↩ 保存 · Esc 取消").font(.system(size: LCStyle.FontSize.meta)).foregroundStyle(.secondary)
                     Spacer()
                     Button("取消", action: cancel)
-                        .buttonStyle(ToolbarTabStyle(selected: true))
+                        .buttonStyle(.bordered).controlSize(.large)
                         .disabled(state.saving)
-                    Button(action: save) {
-                        Text(state.saving ? "正在保存…" : "保存")
-                            .font(.system(size: LCStyle.FontSize.body, weight: .semibold))
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 14)
-                            .frame(height: 28)
-                            .background(Color.accentColor, in: RoundedRectangle(cornerRadius: LCStyle.Radius.control))
-                    }
-                    .buttonStyle(.plain)
-                    .keyboardShortcut("s", modifiers: .command)
-                    .disabled(!state.canSave)
-                    .opacity(state.canSave ? 1 : 0.45)
+                    Button(state.saving ? "正在保存…" : "保存", action: save)
+                        .buttonStyle(.borderedProminent).controlSize(.large)
+                        .keyboardShortcut("s", modifiers: .command)
+                        .disabled(!state.canSave)
                 }
             }
         }

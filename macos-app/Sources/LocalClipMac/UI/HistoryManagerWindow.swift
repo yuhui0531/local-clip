@@ -28,7 +28,8 @@ import AppKit
         // 先给内容默认尺寸再挂上：否则窗口先缩到内容的初始尺寸，检查器按窄窗口落在最小宽度，放大后不再回到理想宽度，by AI.Coding。
         content.view.setFrameSize(Self.defaultSize)
         contentViewController = content
-        minSize = NSSize(width: 900, height: 560)
+        // 三栏最小宽度之和；小于它时检查器或操作列会被裁出窗口，by AI.Coding。
+        minSize = NSSize(width: Self.minimumWidth, height: 560)
         // 内容控制器会按首选尺寸改窗口，之后再恢复记住的位置。
         if !setFrameUsingName(Self.autosaveName) { setContentSize(Self.defaultSize); center() }
         setFrameAutosaveName(Self.autosaveName)
@@ -43,8 +44,14 @@ import AppKit
         super.beginSheet(sheetWindow, completionHandler: handler)
     }
 
-    /// 与视图里 inspectorColumnWidth 的 ideal 一致。
+    /// 三栏宽度的唯一来源，视图列宽与窗口 minSize 共用，by AI.Coding。
+    static let sidebarMinWidth: CGFloat = 160
+    /// 放下全部表格列（含悬停操作列）与列间距的实测宽度；改列宽时同步。
+    static let tableMinWidth: CGFloat = 560
+    static let inspectorMinWidth: CGFloat = 300
     static let inspectorIdealWidth: CGFloat = 400
+    /// 另加两条分隔线与取整余量。
+    static let minimumWidth = sidebarMinWidth + tableMinWidth + inspectorMinWidth + 4
     /// SwiftUI（macOS 15）的检查器首次出现总落在最小宽度，忽略 ideal；分栏就绪后把分隔条放到理想宽度一次。
     /// 之后的拖动与最小、最大宽度照旧由 SwiftUI 约束，也不持久化宽度，by AI.Coding。
     /// 分栏建好后 SwiftUI 还会在随后几轮布局里把检查器定到最小宽度，所以放好后复核，被改回则再放，次数有限。

@@ -10,13 +10,14 @@ struct HistoryManagerView: View {
     @State private var inspectorShown = true
     var body: some View {
         NavigationSplitView {
-            ManagerSidebar(model: model, history: history).navigationSplitViewColumnWidth(min: 180, ideal: 200, max: 280)
+            ManagerSidebar(model: model, history: history).navigationSplitViewColumnWidth(min: HistoryManagerWindow.sidebarMinWidth, ideal: 200, max: 280)
         } detail: {
             VStack(spacing: 0) {
                 if model.selection.count > 1 || model.allMatching != nil { ManagerBatchBar(model: model, history: history) }
                 else { ManagerFilterBar(model: model) }
                 Divider()
-                ManagerTable(model: model, history: history)
+                // 表格区至少放下全部列（含列间距），窗口变窄时先压侧栏和检查器，by AI.Coding。
+                ManagerTable(model: model, history: history).frame(minWidth: HistoryManagerWindow.tableMinWidth)
                 Divider()
                 ManagerPager(model: model)
             }
@@ -24,7 +25,7 @@ struct HistoryManagerView: View {
                 // 检查器不向窗口报最小尺寸：文件说明纵向固定，测最小尺寸时按极窄宽度排版会高过窗口，整页被居中上移、侧栏钻到标题栏下，by AI.Coding。
                 ManagerInspector(model: model, history: history)
                     .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .top)
-                    .inspectorColumnWidth(min: 300, ideal: 400, max: 640)
+                    .inspectorColumnWidth(min: HistoryManagerWindow.inspectorMinWidth, ideal: HistoryManagerWindow.inspectorIdealWidth, max: 640)
             }
         }
         .searchable(text: $model.literal, placement: .toolbar, prompt: "搜索历史")
@@ -153,19 +154,24 @@ private struct NewCategoryButton: View {
 // MARK: 筛选与批量
 private struct ManagerFilterBar: View {
     @ObservedObject var model: HistoryManagerModel
+    /// 筛选栏宽度计入表格区最小宽度：来源菜单限宽可压缩，清除筛选用图标，筛选前后布局不跳变，by AI.Coding。
     var body: some View {
         HStack(spacing: 10) {
             PageCheckbox(model: model)
             Picker("时间", selection: $model.time) { ForEach(HistoryManagerModel.TimeRange.allCases) { Text($0.rawValue).tag($0) } }
                 .pickerStyle(.segmented).labelsHidden().fixedSize()
+            // 来源名来自用户数据，长应用名不能撑宽窗口。
             Picker("来源", selection: $model.source) {
                 Text("全部来源").tag(String?.none)
                 ForEach(Array(model.sources.enumerated()), id: \.offset) { _, source in Text(source.name).tag(String?.some(source.bundleID ?? "")) }
-            }.labelsHidden().fixedSize()
+            }.labelsHidden().frame(minWidth: 80, maxWidth: 140)
             Picker("排序", selection: $model.sort) { ForEach(HistorySortOrder.allCases, id: \.self) { Text($0.title).tag($0) } }
                 .labelsHidden().fixedSize()
-            if model.hasFilters { Button("清除筛选", action: model.clearFilters).buttonStyle(.link) }
-            Spacer()
+            if model.hasFilters {
+                Button(action: model.clearFilters) { Image(systemName: "xmark.circle.fill") }
+                    .buttonStyle(.borderless).foregroundStyle(.secondary).help("清除筛选").accessibilityLabel("清除筛选")
+            }
+            Spacer(minLength: 0)
         }.padding(.horizontal, 12).frame(height: 40)
     }
 }
@@ -241,7 +247,7 @@ private struct ManagerTable: View {
             }.width(min: 22, ideal: 22, max: 22)
             // 名称是唯一伸缩列；类型图标并入名称，其余列窄而锁定。理想宽度之和不超过默认窗口（1180，检查器400）下的表格宽度，首次打开不溢出，by AI.Coding。
             TableColumn("名称") { row in NameCell(row: row, showsContent: history.canDisplayContents, history: history) }
-                .width(min: 220, ideal: 240)
+                .width(min: 180, ideal: 180)
             TableColumn("分类") { row in CategoryCell(categories: history.categories.filter { (model.memberships[row.id] ?? []).contains($0.id) }) }
                 .width(min: 88, ideal: 88, max: 88)
             // 来源只显示应用图标，名称放悬停提示和读屏标签；图标走 SourceApplicationObserver 缓存，与历史卡片头部一致，by AI.Coding。
@@ -436,11 +442,11 @@ private struct ManagerPager: View {
             if model.refreshing { ProgressView().controlSize(.mini) }
             Spacer()
             Picker("每页", selection: $model.pageSize) { ForEach(HistoryManagerModel.pageSizes, id: \.self) { Text("\($0)").tag($0) } }.fixedSize()
-            Button { model.go(toPage: model.page - 1) } label: { Image(systemName: "chevron.left") }.disabled(model.page == 0).help("上一页 · Page Up")
+            Button { model.go(toPage: model.page - 1) } label: { Image(systemName: "chevron.left") }.disabled(model.page == 0).help("上一页 · Page Up").accessibilityLabel("上一页")
             TextField("页码", text: $input).frame(width: 40).multilineTextAlignment(.center)
                 .onSubmit { if let value = Int(input) { model.go(toPage: value - 1) }; input = "\(model.page + 1)" }
             Text("/ \(model.pageCount)").foregroundStyle(.secondary).monospacedDigit()
-            Button { model.go(toPage: model.page + 1) } label: { Image(systemName: "chevron.right") }.disabled(model.page + 1 >= model.pageCount).help("下一页 · Page Down")
+            Button { model.go(toPage: model.page + 1) } label: { Image(systemName: "chevron.right") }.disabled(model.page + 1 >= model.pageCount).help("下一页 · Page Down").accessibilityLabel("下一页")
         }
         .buttonStyle(.borderless).controlSize(.small).padding(.horizontal, 12).frame(height: 32)
         .disabled(model.loading)
@@ -489,10 +495,10 @@ private struct ManagerDetail: View {
                         Task { await model.rename(row.id, name); draft.finished(name) }
                     }
                 Button { model.setFavorite([row.id], !row.isFavorite) } label: { Image(systemName: row.isFavorite ? "star.fill" : "star").foregroundStyle(row.isFavorite ? .yellow : .secondary) }
-                    .buttonStyle(.borderless).help(row.isFavorite ? "取消收藏 · ⌘D" : "收藏 · ⌘D")
+                    .buttonStyle(.borderless).help(row.isFavorite ? "取消收藏 · ⌘D" : "收藏 · ⌘D").accessibilityLabel(row.isFavorite ? "取消收藏" : "收藏").accessibilityAddTraits(row.isFavorite ? .isSelected : [])
             }
-            // 记录信息常显为一行，格式与来源依据放悬停提示；说明文字直接显示，by AI.Coding。
-            Text(ClipRecordInfo.line(detail)).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+            // 记录信息常显，窄检查器折为两行，避免中间截断吞掉“次 · 最近”；格式与来源依据放悬停提示；说明文字直接显示，by AI.Coding。
+            Text(ClipRecordInfo.line(detail)).font(.caption).foregroundStyle(.secondary).lineLimit(2)
                 .help("\(HistoryView.sourceDescription(row.source))\n\(detail.payload.items.count) 项 · 格式：\(ClipRecordInfo.formats(detail))")
             ClipRecordInfo.Notes(detail: detail)
             // 预览占满名称、来源行与底部分类、按钮之外的高度，长文在区内滚动，by AI.Coding。
