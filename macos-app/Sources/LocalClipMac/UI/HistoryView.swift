@@ -178,7 +178,7 @@ public struct HistoryView: View {
             // 弹窗锚定加号；加号滚出视口时贴到最近的可见边缘，溢出菜单和快捷键仍能打开编辑器，by AI.Coding。
             .popover(isPresented: $model.showingCategoryEditor, attachmentAnchor: .rect(.rect(Self.categoryEditorAnchor(plus: categoryPlusFrame, width: categoryNavigationWidth))), arrowEdge: .top) { PanelCategoryEditor(model: model) }
     }
-    /// 类型菜单与类型标签同一选择规则；选中时显示类型名并高亮，by AI.Coding。
+    /// 类型菜单前置网格图标，与其他导航入口一致；选中时显示类型名并高亮，by AI.Coding。
     private var kindMenu: some View {
         let selected = model.kind != nil && model.activeCategories.isEmpty && !model.favorites
         return Menu {
@@ -188,7 +188,10 @@ public struct HistoryView: View {
                 }
             }
         } label: {
-            HStack(spacing: 3) { Text(selected ? model.kind.map(Self.kindName) ?? "类型" : "类型"); Image(systemName: "chevron.down").font(.system(size: LCStyle.FontSize.caption, weight: .semibold)) }
+            HStack(spacing: 3) {
+                Label(selected ? model.kind.map(Self.kindName) ?? "类型" : "类型", systemImage: "square.grid.2x2").labelStyle(.titleAndIcon)
+                Image(systemName: "chevron.down").font(.system(size: LCStyle.FontSize.caption, weight: .semibold))
+            }
         }.menuStyle(.button).buttonStyle(ToolbarTabStyle(selected: selected)).menuIndicator(.hidden).fixedSize()
             .accessibilityLabel(selected ? "类型：\(model.kind.map(Self.kindName) ?? "")" : "类型")
     }
@@ -198,10 +201,13 @@ public struct HistoryView: View {
             Label("收藏", systemImage: model.favorites ? "star.fill" : "star")
         }.buttonStyle(ToolbarTabStyle(selected: model.favorites)).accessibilityAddTraits(model.favorites ? .isSelected : [])
     }
-    /// 类型入口退出自定义分类；全部按钮不会在分类页面伪装成已选中，by AI.Coding。
+    /// 剪贴板入口前置历史时钟图标；沿用原有范围切换与选中规则，by AI.Coding。
     private func filter(_ title: String, _ kind: ClipKind?) -> some View {
         let selected = model.kind == kind && model.activeCategories.isEmpty && !model.favorites
-        return Button(title) { model.selectKind(kind) }.buttonStyle(ToolbarTabStyle(selected: selected)).accessibilityAddTraits(selected ? .isSelected : [])
+        return Button { model.selectKind(kind) } label: {
+            Label(title, systemImage: kind.map(Self.kindSymbol) ?? "clock.arrow.circlepath")
+                .symbolRenderingMode(.monochrome).labelStyle(.titleAndIcon)
+        }.buttonStyle(ToolbarTabStyle(selected: selected)).accessibilityAddTraits(selected ? .isSelected : [])
     }
     /// 类型入口同时显示图标和名称，不要求用户猜测符号含义，by AI.Coding。
     private func kindTab(_ kind: ClipKind) -> some View {
