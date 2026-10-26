@@ -315,47 +315,71 @@ import LocalClipCore
     }
     /// 状态在打开菜单前同步，所有操作指向真实服务。
     private func updateMenu() { status?.menu = makeStatusMenu() }
-    /// 菜单构造不创建系统状态项，退出路由可在无窗口测试中验证，by AI.Coding。
+    /// 菜单构造统一图标尺寸且不创建系统状态项，退出路由可在无窗口测试中验证，by AI.Coding。
     func makeStatusMenu() -> NSMenu {
         let menu = NSMenu()
         // 参照应用菜单：关于与更新在最前，设置其次，状态与常用操作居中，退出最后；每项均配 SF Symbols，by AI.Coding。
         let about = menu.addItem(withTitle: "关于 LocalClip", action: #selector(showAbout), keyEquivalent: ""); about.target = self
-        about.image = NSImage(systemSymbolName: "info.circle", accessibilityDescription: nil)
+        about.image = Self.statusMenuIcon("info.circle")
         // 有新版本时更新项占据检查更新的位置，不额外加项，by AI.Coding。
         if let release = UpdateChecker.shared.available {
             let title = UpdateChecker.shared.phase == .ready ? "安装并重启 · \(release.version)…" : "更新 \(release.version)…"
             let update = menu.addItem(withTitle: title, action: #selector(openUpdate), keyEquivalent: ""); update.target = self
-            update.image = NSImage(systemSymbolName: "arrow.down.circle", accessibilityDescription: nil)
+            update.image = Self.statusMenuIcon("arrow.down.circle")
         } else {
             let check = menu.addItem(withTitle: "", action: #selector(checkForUpdates), keyEquivalent: ""); check.target = self
-            check.image = NSImage(systemSymbolName: "arrow.triangle.2.circlepath", accessibilityDescription: nil)
+            check.image = Self.statusMenuIcon("arrow.triangle.2.circlepath")
             updateCheckItem(check)
         }
         menu.addItem(.separator())
         let settings = menu.addItem(withTitle: "设置…", action: #selector(showSettings), keyEquivalent: ","); settings.target = self
-        settings.image = NSImage(systemSymbolName: "gearshape", accessibilityDescription: nil)
+        settings.image = Self.statusMenuIcon("gearshape")
         menu.addItem(.separator())
         // 原生分区标题显示面向用户的状态，与面板用词一致，by AI.Coding。
         menu.addItem(.sectionHeader(title: statusMenuTitle))
         let show = menu.addItem(withTitle: "打开历史", action: #selector(showHistory), keyEquivalent: ""); show.target = self
-        show.image = NSImage(systemSymbolName: "square.on.square", accessibilityDescription: nil)
+        show.image = Self.statusMenuIcon("clock.arrow.circlepath")
         let manage = menu.addItem(withTitle: "历史管理…", action: #selector(showHistoryManagerFromMenu), keyEquivalent: "h"); manage.target = self
         manage.keyEquivalentModifierMask = [.command, .option]
-        manage.image = NSImage(systemSymbolName: "tablecells", accessibilityDescription: nil)
+        manage.image = Self.statusMenuIcon("tablecells")
         let pause = menu.addItem(withTitle: "", action: #selector(toggleCapture), keyEquivalent: ""); pause.target = self
         updateCaptureItem(pause)
         if let model, model.pasteQueueActive {
             let queue = menu.addItem(withTitle: "结束粘贴队列（\(model.pasteQueuePosition)/\(model.pasteQueue.count)）", action: #selector(stopPasteQueue), keyEquivalent: ""); queue.target = self
-            queue.image = NSImage(systemSymbolName: "list.number", accessibilityDescription: nil)
+            queue.image = Self.statusMenuIcon("list.number")
         }
         menu.addItem(.separator())
         // 菜单栏非激活窗口不依赖外部应用的响应链，by AI.Coding。
         let quit = menu.addItem(withTitle: "退出 LocalClip", action: #selector(quitApplication(_:)), keyEquivalent: "q")
         quit.target = self
-        quit.image = NSImage(systemSymbolName: "power", accessibilityDescription: nil)
+        quit.image = Self.statusMenuIcon("power")
         // 检查中项需真实置灰，不能被自动启用覆盖。
         menu.autoenablesItems = false
         menu.delegate = self; return menu
+    }
+    /// 菜单图标统一为 16pt 模板画布；按离屏可见边界校正至约 14pt，保留符号比例及系统着色，by AI.Coding。
+    private static func statusMenuIcon(_ symbol: String) -> NSImage? {
+        guard let source = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: 16, weight: .regular)) else { return nil }
+        let side: CGFloat = 16
+        // SF Symbols 自带留白不同；宽表格和列表补偿留白，循环箭头缩小，避免只统一画布而视觉大小不一。
+        let opticalScale: CGFloat
+        switch symbol {
+        case "tablecells", "list.number": opticalScale = 1.10
+        case "arrow.triangle.2.circlepath": opticalScale = 0.92
+        case "gearshape", "clock.arrow.circlepath": opticalScale = 0.98
+        default: opticalScale = 1
+        }
+        let scale = side / max(source.size.width, source.size.height) * opticalScale
+        let size = NSSize(width: source.size.width * scale, height: source.size.height * scale)
+        let opticalOffset: CGFloat = symbol == "clock.arrow.circlepath" ? 0.85 : symbol == "arrow.triangle.2.circlepath" ? 0.35 : 0
+        let image = NSImage(size: NSSize(width: side, height: side), flipped: false) { bounds in
+            source.draw(in: NSRect(x: (bounds.width - size.width) / 2 + opticalOffset, y: (bounds.height - size.height) / 2,
+                                  width: size.width, height: size.height))
+            return true
+        }
+        image.isTemplate = true
+        return image
     }
     private func updateCheckItem(_ item: NSMenuItem) {
         let updates = UpdateChecker.shared
@@ -423,10 +447,11 @@ import LocalClipCore
         #endif
     }
     private var statusMenuTitle: String { "LocalClip · " + HistoryView.statusLabel(model?.capture.state ?? "准备中") }
+    /// 暂停与继续入口复用统一菜单图标，状态更新不改变图标占位，by AI.Coding。
     private func updateCaptureItem(_ item: NSMenuItem) {
         let paused = model?.recordingPaused == true
         item.title = paused ? "开始监控" : "停止监控"
-        item.image = NSImage(systemSymbolName: paused ? "play.circle" : "pause.circle", accessibilityDescription: nil)
+        item.image = Self.statusMenuIcon(paused ? "play.circle" : "pause.circle")
     }
     /// 队列快捷键在其他应用中按下：以当前前台应用为目标，先记住其焦点再粘贴；面板在前台时不粘贴到自身，by AI.Coding。
     /// retry：浮窗“重试当前项”；浮窗不激活，前台仍是用户的目标应用。
