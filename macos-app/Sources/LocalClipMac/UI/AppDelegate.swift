@@ -386,7 +386,9 @@ import LocalClipCore
         item.title = updates.phase == .downloading ? "正在下载更新…" : updates.checking ? "正在检查更新…" : "检查更新…"
         item.isEnabled = !updates.checking && updates.phase != .installing
     }
+    /// 菜单栏应用可能处于后台；先激活应用，系统关于窗口才会出现在当前应用窗口之前，by AI.Coding。
     @objc private func showAbout() {
+        NSApp.activate(ignoringOtherApps: true)
         NSApp.orderFrontStandardAboutPanel(nil)
     }
     /// 用户显式触发，结果用模态弹框告知；设置页按钮仍在页内显示结果，二者共用同一检查流程，by AI.Coding。
@@ -459,9 +461,7 @@ import LocalClipCore
         guard let model else { return }
         let target = applications.target()
         if let target { lastExternal = target; applications.rememberFocus(for: target) }
-        model.pasteQueueNext(target: target, retry: retry) {
-            !CGEventSource.flagsState(.hidSystemState).intersection([.maskCommand, .maskControl, .maskAlternate, .maskShift]).isEmpty
-        }
+        model.pasteQueueNext(target: target, retry: retry)
     }
     @objc private func stopPasteQueue() { model?.stopPasteQueue() }
     /// 同一快捷键按实际可见状态切换；关闭不刷新历史或重记粘贴目标。

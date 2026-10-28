@@ -1745,7 +1745,7 @@ import LocalClipCore
     private var pendingQueueShortcut: Shortcut?
     private var pasteQueueIdle: Task<Void, Never>?
     public var pasteQueueActive: Bool { pasteQueuePosition < pasteQueue.count }
-    /// 意图直接粘贴却只完成复制（修饰键降级或权限/目标回退）：停在当前项，等用户手动粘贴后确认或重试；再按快捷键不覆盖剪贴板，by AI.Coding。
+    /// 意图直接粘贴却只完成复制（权限/目标回退）：停在当前项，等用户手动粘贴后确认或重试；再按快捷键不覆盖剪贴板，by AI.Coding。
     @Published public private(set) var pasteQueueAwaiting = false
     /// 当前项已记过一次使用；重试或确认不重复增加复制次数。
     private var pasteQueueRecordedPosition: Int?
@@ -1808,29 +1808,23 @@ import LocalClipCore
         }
     }
     /// 宿主在按键时已记住当前前台应用与焦点；处理中再按忽略，不排队。
-    /// 物理修饰键（如队列快捷键的⌃⌥）未松开时最多等500ms，超时只复制并停在当前项等待确认，by AI.Coding。
+    /// 粘贴事件单独指定 ⌘，无需等待队列快捷键的修饰键松开，by AI.Coding。
     /// retry：用户点“重试当前项”，重新输出等待确认的那一项；当前项已失效时只跳过并说明，不顺带粘贴下一项。
-    public func pasteQueueNext(target: TargetToken?, retry: Bool = false, modifiersHeld: @escaping () -> Bool) {
+    public func pasteQueueNext(target: TargetToken?, retry: Bool = false) {
         guard pasteQueueActive, !pasteQueueBusy else { return }
         if pasteQueueAwaiting, !retry { touchPasteQueue(); queueFeedback(pasteQueueAwaitingMessage + "；" + Self.pasteQueueAwaitingReminder, failed: true); return }
         guard let target else { queueFeedback("请先切换到要粘贴的应用", failed: true); return }
         pasteQueueBusy = true; touchPasteQueue()
-        // 请求开始时固定用户原始动作与格式，等待修饰键期间改设置不改变本次判定。
+        // 请求开始时固定用户原始动作与格式，避免异步处理中设置变化影响本次操作。
         let generation = pasteQueueGeneration, ids = pasteQueue, intended = settings.defaultAction, format = settings.defaultFormat
         pasteQueueTask = Task { [weak self] in
             guard let self else { return }
             defer { if generation == pasteQueueGeneration { pasteQueueBusy = false; pasteQueueTask = nil } }
-            let deadline = ContinuousClock.now + .milliseconds(500)
-            while modifiersHeld(), ContinuousClock.now < deadline {
-                do { try await Task.sleep(for: .milliseconds(10)) } catch { return }
-                guard generation == pasteQueueGeneration else { return }
-            }
             guard !Task.isCancelled, generation == pasteQueueGeneration else { return }
-            let degraded = intended == .directPaste && modifiersHeld()
             var skipped: [Int] = [], shown = false
             while pasteQueuePosition < ids.count {
                 let index = pasteQueuePosition, id = ids[index]
-                let result = await paste.perform(.init(ids: [id], format: format, action: degraded ? .copy : intended, target: target))
+                let result = await paste.perform(.init(ids: [id], format: format, action: intended, target: target))
                 guard !Task.isCancelled, generation == pasteQueueGeneration else { return }
                 if result == .failed("内容已删除或到期，请重新选择") {
                     pasteQueuePosition += 1; pasteQueueAwaiting = false; skipped.append(index + 1)
@@ -1839,7 +1833,7 @@ import LocalClipCore
                 // 只有已发送粘贴指令或用户本就选择仅复制才推进；本该粘贴却只复制时停在当前项等待确认；明确失败留在当前项，快捷键可直接重试。
                 let awaiting: Bool
                 switch result {
-                case .copied: awaiting = degraded
+                case .copied: awaiting = false
                 case .fallback: awaiting = true
                 case .commandSent, .filesCopied, .failed: awaiting = false
                 }
@@ -1855,9 +1849,6 @@ import LocalClipCore
                 let skippedText = skippedNote.map { "（\($0)）" } ?? ""
                 switch result {
                 case .commandSent: queueFeedback(result.message + " \(progress)" + skippedText, failed: false, note: skippedNote)
-                case .copied where awaiting:
-                    pasteQueueAwaitingMessage = "修饰键未松开，当前项已复制，请手动粘贴（\(progress)）"
-                    queueFeedback(pasteQueueAwaitingMessage + skippedText, failed: true)
                 case .copied: queueFeedback("已复制 \(progress)" + skippedText, failed: false, note: skippedNote)
                 case .fallback(let reason):
                     // 权限回退的通用说明是“重新打开历史”；队列里改为指向重试按钮。

@@ -699,7 +699,7 @@ import LocalClipCore
         model.startPasteQueue(ids)
         #expect(popups.isEmpty && model.pasteQueueWarning == nil && changes > 0)
         #expect(model.pasteQueueNextSummary == model.items[0].preview.split(whereSeparator: \.isNewline).first.map(String.init))
-        model.pasteQueueNext(target: nil, modifiersHeld: { false })
+        model.pasteQueueNext(target: nil)
         #expect(popups.isEmpty && model.pasteQueueWarning == "请先切换到要粘贴的应用")
         // 用浮窗实际使用的宿主测量：曾清空全部尺寸选项，fittingSize 为 0，浮窗 0×0 看不见。
         let host = AppDelegate.queueHost(model: model) {}
@@ -709,7 +709,7 @@ import LocalClipCore
         #expect(model.pasteQueueNextSummary == "内容已隐藏")
         model.stopPasteQueue()
         #expect(model.pasteQueueWarning == nil && !model.pasteQueueActive)
-        model.pasteQueueNext(target: nil, modifiersHeld: { false })
+        model.pasteQueueNext(target: nil)
         let frame = NSRect(x: 0, y: 0, width: 40, height: 40)
         let panel = NSPanel(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: true)
         let queue = NSPanel(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: true)
