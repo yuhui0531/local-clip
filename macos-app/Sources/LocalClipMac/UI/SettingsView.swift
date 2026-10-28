@@ -10,6 +10,30 @@ enum SettingsSection: String, CaseIterable {
         switch self { case .general: "gearshape"; case .paste: "clipboard"; case .privacy: "hand.raised"; case .storage: "internaldrive"; case .advanced: "slider.horizontal.3" }
     }
 }
+/// 分组表单在传统滚动条模式下仍使用 AppKit 滚动条，隐藏它但保留滚动，by AI.Coding。
+private struct SettingsScrollerHider: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { Probe() }
+    func updateNSView(_ view: NSView, context: Context) { (view as? Probe)?.apply() }
+
+    /// 只作用于当前表单的滚动视图，系统偏好改变时重新应用，by AI.Coding。
+    @MainActor final class Probe: NSView {
+        override init(frame: NSRect) {
+            super.init(frame: frame)
+            NotificationCenter.default.addObserver(self, selector: #selector(preferenceChanged), name: NSScroller.preferredScrollerStyleDidChangeNotification, object: nil)
+        }
+        required init?(coder: NSCoder) { nil }
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+        override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); apply() }
+        @objc private func preferenceChanged() { DispatchQueue.main.async { [weak self] in self?.apply() } }
+        func apply() {
+            guard let scroll = enclosingScrollView else { return }
+            // SwiftUI 会重新启用滚动条；使用悬浮样式避免占位，并隐藏原生指示器。
+            if scroll.scrollerStyle != .overlay { scroll.scrollerStyle = .overlay }
+            scroll.autohidesScrollers = true
+            scroll.verticalScroller?.alphaValue = 0
+        }
+    }
+}
 public struct SettingsView: View {
     @ObservedObject var model: HistoryViewModel
     let login: LoginItemService
@@ -55,7 +79,7 @@ public struct SettingsView: View {
                             Text("跟随系统").tag(AppAppearance.system)
                             Text("浅色").tag(AppAppearance.light)
                             Text("深色").tag(AppAppearance.dark)
-                        }.pickerStyle(.segmented)
+                        }.pickerStyle(.segmented).background(SettingsScrollerHider())
                         Toggle("紧凑布局", isOn: setting(\.compactLayout))
                         Toggle("显示菜单栏图标", isOn: setting(\.showMenuIcon))
                         LabeledContent("全局快捷键") {
@@ -119,7 +143,7 @@ public struct SettingsView: View {
                     Section {
                         Picker("Return 默认操作", selection: setting(\.defaultAction)) {
                             Text("直接粘贴").tag(PasteAction.directPaste); Text("仅复制").tag(PasteAction.copy)
-                        }
+                        }.background(SettingsScrollerHider())
                         Picker("默认输出格式", selection: setting(\.defaultFormat)) { Text("原格式").tag(OutputFormat.original); Text("纯文本").tag(OutputFormat.plainText) }
                         Toggle("复制或粘贴后移到最前", isOn: setting(\.moveUsedToFront)).help("开启后，用过的记录排到历史第一位")
                         Picker("数字 1–9 快捷粘贴", selection: setting(\.quickModifiers)) { Text("⌘ + 数字").tag(UInt32(256)); Text("⌥ + 数字").tag(UInt32(2048)); Text("⌃ + 数字").tag(UInt32(4096)); Text("⌘⇧ + 数字").tag(UInt32(768)) }
@@ -151,7 +175,7 @@ public struct SettingsView: View {
                 }
                 if section == .privacy {
                     Section {
-                        Toggle("隐藏历史内容", isOn: setting(\.hideContents)).help("开启后面板、预览与队列浮窗不显示正文；复制与粘贴照常")
+                        Toggle("隐藏历史内容", isOn: setting(\.hideContents)).help("开启后面板、预览与队列浮窗不显示正文；复制与粘贴照常").background(SettingsScrollerHider())
                         Toggle("限制系统窗口共享读取", isOn: setting(\.excludeFromSharing)).help("开启后截图、录屏与共享通常看不到 LocalClip 的窗口")
                         Toggle("排除应用位于前台时停止监控", isOn: setting(\.pauseWhenExcludedFrontmost)).help("开启后，排除列表中的应用在前台期间复制的内容都不记录")
                         // 保留声明来源契约，将普通应用的排除前提放在列表旁，by AI.Coding。
@@ -204,7 +228,7 @@ public struct SettingsView: View {
                             TextField("1–365", text: $retention).labelsHidden().frame(width: 70).multilineTextAlignment(.trailing).onSubmit(applyRetention)
                             Button("应用", action: applyRetention).disabled(retention == String(model.settings.retentionDays))
                             Button("永不过期") { model.change(.retention(0), fromSettings: true) }.help("永不过期（仍有容量限制）")
-                        }
+                        }.background(SettingsScrollerHider())
                         LabeledContent("容量上限（MiB）") {
                             TextField("100–4096", text: $quota).labelsHidden().frame(width: 70).multilineTextAlignment(.trailing).onSubmit(applyQuota)
                             Button("应用", action: applyQuota).disabled(quota == String(model.settings.quotaBytes / MiB))
@@ -235,7 +259,7 @@ public struct SettingsView: View {
                             // 手动取整到10pt，避免带step的原生滑块画出密集刻度。
                             Slider(value: Binding(get: { model.actualPanelHeight }, set: { value in model.resizePanel?((value / 10).rounded() * 10, false) }), in: 280...520, onEditingChanged: { editing in if !editing { model.resizePanel?(model.actualPanelHeight, true) } }).frame(width: 220)
                             Text("\(Int(model.actualPanelHeight)) pt").monospacedDigit().foregroundStyle(.secondary).frame(width: 52, alignment: .trailing)
-                        }
+                        }.background(SettingsScrollerHider())
                         Toggle("启用本机阶段计时日志", isOn: setting(\.timingEnabled))
                     } footer: {
                         VStack(alignment: .leading, spacing: 6) {

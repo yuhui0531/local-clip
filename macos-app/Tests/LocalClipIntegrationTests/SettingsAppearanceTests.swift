@@ -1,10 +1,43 @@
 // 外观旧快照、持久化与未展示窗口的关闭回归，不读取生产数据，by AI.Coding。
 import AppKit
+import SwiftUI
 import Testing
 @testable import LocalClipCore
 @testable import LocalClipMac
 
 @MainActor struct SettingsAppearanceTests {
+    /// 隐藏窗口承载真实设置表单，验证传统滚动条不再占位且长内容仍可滚动，by AI.Coding。
+    @Test(arguments: SettingsSection.allCases) func settingsFormHidesLegacyScroller(section: SettingsSection) async throws {
+        _ = NSApplication.shared
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try HistoryStore(location: root)
+        let board = MacPasteboardClient(access: RawBoard()), capture = CaptureCoordinator(board: board, store: store)
+        let model = HistoryViewModel(store: store, capture: capture, paste: PasteCoordinator(board: board, applications: FakeApplications(), store: store, capture: capture), derived: DerivedContentService(store: store))
+        let host = NSHostingView(rootView: SettingsView(model: model, login: LoginItemService(), section: section, fitWindow: { _ in }))
+        host.sizingOptions = []
+        let window = NSWindow(contentRect: .init(x: 0, y: 0, width: 620, height: 300), styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false; window.contentView = host
+        defer { window.contentView = nil; window.close() }
+        host.layoutSubtreeIfNeeded()
+        try await Task.sleep(for: .milliseconds(300))
+        func scrollViews(_ view: NSView) -> [NSScrollView] { (view as? NSScrollView).map { [$0] } ?? view.subviews.flatMap(scrollViews) }
+        let scroll = try #require(scrollViews(host).first)
+        #expect(scroll.scrollerStyle == .overlay)
+        #expect((scroll.verticalScroller?.alphaValue ?? 0) == 0)
+        // 模拟系统“始终显示滚动条”，再触发偏好变更通知，检查原生滚动条状态。
+        scroll.scrollerStyle = .legacy; scroll.autohidesScrollers = false; scroll.hasVerticalScroller = true
+        NotificationCenter.default.post(name: NSScroller.preferredScrollerStyleDidChangeNotification, object: nil)
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(scroll.scrollerStyle == .overlay)
+        #expect(scroll.verticalScroller?.alphaValue == 0)
+        if (scroll.documentView?.bounds.height ?? 0) > scroll.contentView.bounds.height + 40 {
+            let before = scroll.contentView.bounds.origin.y
+            scroll.contentView.scroll(to: .init(x: 0, y: before + 40)); scroll.reflectScrolledClipView(scroll.contentView)
+            #expect(scroll.contentView.bounds.origin.y != before)
+            #expect(scroll.verticalScroller?.alphaValue == 0)
+        }
+    }
     /// 设置中的中文组合输入先处理Esc；组合结束后同一按键仍可关闭窗口，by AI.Coding。
     @Test func settingsEscapePreservesMarkedText() throws {
         _ = NSApplication.shared
