@@ -244,7 +244,8 @@ public struct SettingsView: View {
                         }.settingsFootnote()
                     }
                 }
-            }.formStyle(.grouped).scrollContentBackground(.hidden).id(section)
+            // 隐藏设置页滚动条，内容超出屏幕时仍可滚动查看，by AI.Coding。
+            }.formStyle(.grouped).scrollContentBackground(.hidden).scrollIndicators(.hidden).id(section)
                 .onScrollGeometryChange(for: CGFloat.self) { $0.contentSize.height } action: { _, height in formHeight = height }
                 // 表单占据头部与底栏之间的剩余空间；窗口动画期间头部钉在顶部、底栏钉在底部，只有表单区伸缩，by AI.Coding。
                 .frame(maxHeight: .infinity)
