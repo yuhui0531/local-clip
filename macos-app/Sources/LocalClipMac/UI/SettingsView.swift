@@ -269,13 +269,14 @@ public struct SettingsView: View {
                     }
                 }
             // 隐藏设置页滚动条，内容超出屏幕时仍可滚动查看，by AI.Coding。
-            }.formStyle(.grouped).scrollContentBackground(.hidden).scrollIndicators(.hidden).id(section)
+            }.formStyle(.grouped).scrollContentBackground(.hidden).scrollIndicators(.hidden)
+                .scrollBounceBehavior(.basedOnSize, axes: .vertical).id(section)
                 .onScrollGeometryChange(for: CGFloat.self) { $0.contentSize.height } action: { _, height in formHeight = height }
                 // 表单占据头部与底栏之间的剩余空间；窗口动画期间头部钉在顶部、底栏钉在底部，只有表单区伸缩，by AI.Coding。
                 .frame(maxHeight: .infinity)
         }
         // 操作反馈固定在底部，不随长表单滚走。
-        .safeAreaInset(edge: .bottom) {
+        .safeAreaInset(edge: .bottom, spacing: 0) {
             // 固定反馈区避免保存提示出现时挤动表单，by AI.Coding。
             VStack(spacing: 0) {
                 Divider()
@@ -336,7 +337,8 @@ public struct SettingsView: View {
     private func setting<Value>(_ key: WritableKeyPath<SettingsSnapshot, Value>) -> Binding<Value> {
         Binding(get: { model.settings[keyPath: key] }, set: { value in model.updateSettings { $0[keyPath: key] = value } })
     }
-    private var windowHeight: CGFloat { headerHeight + min(max(formHeight, 160), 600) + footerHeight }
+    // 按表单与固定区域的实际高度定尺寸，屏幕不足时由窗口限制并保留滚动。
+    private var windowHeight: CGFloat { headerHeight + max(formHeight, 160) + footerHeight }
     private func applyRetention() { if let days = Int(retention), (1...365).contains(days) { model.change(.retention(days), fromSettings: true) } else { feedback = "保留天数需为1–365"; model.message = feedback } }
     private func applyQuota() { if let value = Int64(quota), (100...4096).contains(value) { model.change(.quota(value * MiB), fromSettings: true) } else { feedback = "容量需为100–4096MiB"; model.message = feedback } }
     /// 应用选择器读取 bundleID，不将名称作为唯一键。

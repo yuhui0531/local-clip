@@ -31,12 +31,61 @@ import Testing
         try await Task.sleep(for: .milliseconds(100))
         #expect(scroll.scrollerStyle == .overlay)
         #expect(scroll.verticalScroller?.alphaValue == 0)
+        if section == .general { #expect((scroll.documentView?.bounds.height ?? 0) > scroll.contentView.bounds.height + 40) }
         if (scroll.documentView?.bounds.height ?? 0) > scroll.contentView.bounds.height + 40 {
-            let before = scroll.contentView.bounds.origin.y
-            scroll.contentView.scroll(to: .init(x: 0, y: before + 40)); scroll.reflectScrolledClipView(scroll.contentView)
-            #expect(scroll.contentView.bounds.origin.y != before)
+            let clip = scroll.contentView
+            let before = clip.bounds
+            var proposed = before; proposed.origin.y += 40
+            #expect(clip.constrainBoundsRect(proposed).origin.y > clip.constrainBoundsRect(before).origin.y)
             #expect(scroll.verticalScroller?.alphaValue == 0)
         }
+    }
+    /// 自适应设置窗口能完整容纳表单时，不存在可滚动范围或弹性位移，by AI.Coding。
+    @Test(arguments: SettingsSection.allCases) func fittedSettingsGeometry(section: SettingsSection) async throws {
+        _ = NSApplication.shared
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try HistoryStore(location: root)
+        let board = MacPasteboardClient(access: RawBoard()), capture = CaptureCoordinator(board: board, store: store)
+        let model = HistoryViewModel(store: store, capture: capture, paste: PasteCoordinator(board: board, applications: FakeApplications(), store: store, capture: capture), derived: DerivedContentService(store: store))
+        let window = SettingsWindow(contentRect: .init(x: 0, y: 0, width: 620, height: 400), styleMask: .titled, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let host = NSHostingView(rootView: SettingsView(model: model, login: LoginItemService(), section: section, fitWindow: { [weak window] in window?.fitContent(height: $0) }))
+        host.sizingOptions = []; window.contentView = host
+        defer { window.contentView = nil; window.close() }
+        host.layoutSubtreeIfNeeded()
+        try await Task.sleep(for: .seconds(1))
+        host.layoutSubtreeIfNeeded()
+        func scrollViews(_ view: NSView) -> [NSScrollView] { (view as? NSScrollView).map { [$0] } ?? view.subviews.flatMap(scrollViews) }
+        let scroll = try #require(scrollViews(host).first)
+        let document = try #require(scroll.documentView)
+        let available = scroll.contentView.bounds.height - scroll.contentInsets.top - scroll.contentInsets.bottom
+        // 屏幕不足时仍应能滚动；屏幕充足时直接验证上下两端无法滚动。
+        if document.bounds.height <= available + 0.5 {
+            #expect(scroll.verticalScrollElasticity == .none)
+            let clip = scroll.contentView
+            let before = clip.bounds
+            let base = clip.constrainBoundsRect(before).origin.y
+            // 直接检查 AppKit 对滚动范围的约束；不会投递系统输入。
+            for delta: CGFloat in [-40, 40] {
+                var proposed = before; proposed.origin.y += delta
+                #expect(abs(clip.constrainBoundsRect(proposed).origin.y - base) < 0.5)
+            }
+        } else {
+            let screenHeight = try #require((window.screen ?? NSScreen.main)?.visibleFrame.height)
+            #expect(window.frame.height >= screenHeight - 1)
+        }
+
+    }
+    /// 超长内容按指定屏幕范围约束，使用虚拟几何值而不依赖真实显示器，by AI.Coding。
+    @Test func settingsWindowFitsVisibleScreen() {
+        let visible = NSRect(x: 100, y: 50, width: 1000, height: 700)
+        let current = NSRect(x: 150, y: 200, width: 620, height: 350)
+        let frame = SettingsWindow.fittedFrame(current: current, requestedHeight: 2000, frameExtra: 28, visible: visible)
+        #expect(frame.height == visible.height)
+        #expect(frame.minY >= visible.minY && frame.maxY <= visible.maxY)
+        let short = SettingsWindow.fittedFrame(current: current, requestedHeight: 300, frameExtra: 28, visible: visible)
+        #expect(short.height == 328 && short.maxY == current.maxY)
     }
     /// 设置中的中文组合输入先处理Esc；组合结束后同一按键仍可关闭窗口，by AI.Coding。
     @Test func settingsEscapePreservesMarkedText() throws {
