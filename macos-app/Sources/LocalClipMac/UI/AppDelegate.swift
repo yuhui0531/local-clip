@@ -39,6 +39,7 @@ import LocalClipCore
     private var activeSurface: AppSurface?
     private var requestedSurface: AppSurface?
     private var surfaceRequestID = UUID()
+    private var closingHistorySession = false
     private var surfaceTask: Task<Void, Never>?
     private let surfaceAnimator = SurfaceAnimator()
     private var surfaceConfirmation: SurfaceConfirmation?
@@ -50,6 +51,8 @@ import LocalClipCore
     var surfaceWindowsForTesting: (NSWindow?, NSWindow?, NSWindow?) { (panel, settingsWindow, managerWindow) }
     var surfaceManagerForTesting: HistoryManagerModel? { manager }
     var surfaceChoiceForTesting: ((String) async -> SurfaceEdits.Choice)?
+    /// 测试控制已确认关闭后的释放时序，窗口保持隐藏，by AI.Coding。
+    var beforeCloseReleaseForTesting: (() async -> Void)?
     func configureSurfacesForTesting(_ history: HistoryViewModel) {
         model = history; hiddenSurfaceTest = true
         history.closePanel = { [weak self] animated in
@@ -607,9 +610,10 @@ import LocalClipCore
         for window in windows { window?.sharingType = exclude ? .none : .readOnly }
     }
     /// 隐藏历史和其详情，不激活旧目标，也不改变系统剪贴板。
-    private func dismissHistory(animated: Bool = true) {
+    private func dismissHistory(animated: Bool = true, resetSession: Bool = true) {
         guard panelPresented else { return }
         panelPresented = false
+        if resetSession { closingHistorySession = true }
         if activeSurface == .cards { activeSurface = nil; requestedSurface = nil }
         focusState.reset()
         model?.panelVisibilityChanged(false)
@@ -627,8 +631,12 @@ import LocalClipCore
                     try? await Task.sleep(for: .milliseconds(120))
                     guard let self else { return }
                     Self.finishPanelFade(panel, generation: generation, current: self.panelAnimationGeneration)
+                    if resetSession && generation == self.panelAnimationGeneration { self.model?.resetHistorySession(); self.closingHistorySession = false }
                 }
-            } else { Self.finishPanelFade(panel, generation: panelAnimationGeneration, current: panelAnimationGeneration) }
+            } else {
+                Self.finishPanelFade(panel, generation: panelAnimationGeneration, current: panelAnimationGeneration)
+                if resetSession { model?.resetHistorySession(); closingHistorySession = false }
+            }
         }
         #if DEBUG
         if let model { GUIAcceptanceProbe.event("panel-dismissed", model) }
@@ -869,6 +877,12 @@ import LocalClipCore
             if destination == .manager, !ids.isEmpty { manager?.reveal(ids) }
             return
         }
+        // 已确认关闭但淡出未结束时，新呼出先隐藏旧帧并接管重置，by AI.Coding。
+        if destination != nil && closingHistorySession {
+            panelAnimationGeneration += 1; panelFade?.cancel(); panel?.orderOut(nil)
+            panelPresented = false; model.panelVisibilityChanged(false); model.resetHistorySession()
+            closingHistorySession = false
+        }
         let origin = activeSurface
         let request = UUID(); surfaceRequestID = request
         surfaceTask?.cancel()
@@ -904,6 +918,7 @@ import LocalClipCore
                 self.window(for: origin)?.ignoresMouseEvents = true
             }
             guard !Task.isCancelled, request == self.surfaceRequestID else { return }
+            if destination == nil { self.closingHistorySession = true }
             self.requestedSurface = destination
             await self.prepareSurface(destination, reveal: ids, request: request)
         }
@@ -982,6 +997,13 @@ import LocalClipCore
             Self.presentWithoutActivation(current)
         }
         activeSurface = destination
+        #if DEBUG
+        // 静默测试可暂停关闭释放，验证新目标接管已确认关闭，by AI.Coding。
+        if destination == nil, let beforeCloseReleaseForTesting {
+            await beforeCloseReleaseForTesting()
+            guard !Task.isCancelled, request == surfaceRequestID else { return }
+        }
+        #endif
         for window in [panel, settingsWindow, managerWindow].compactMap({ $0 }) { window.ignoresMouseEvents = window !== current }
         let transitions = [panel, settingsWindow, managerWindow].compactMap { $0 }.filter(\.isVisible).map { ($0, $0 === current ? 1.0 : 0.0) }
         surfaceAnimator.animate(transitions, reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion) { [weak self] in
@@ -991,7 +1013,11 @@ import LocalClipCore
     }
     /// 释放退出的窗口和异步任务；只保留明确约定的浏览条件。
     private func releaseSurfaces(except destination: AppSurface?) {
-        if destination != .cards { dismissHistory(animated: false); model?.surfaceEdits.removeAll(.cards) }
+        if destination != .cards {
+            dismissHistory(animated: false, resetSession: false); model?.surfaceEdits.removeAll(.cards)
+            // 窗口切换保留上下文；整个浏览会话关闭后才重置，by AI.Coding。
+            if destination == nil { model?.resetHistorySession(); closingHistorySession = false }
+        }
         if destination != .manager, let window = managerWindow {
             managerBrowsing = manager?.browsingState
             manager?.stop(); manager = nil; managerWindow = nil

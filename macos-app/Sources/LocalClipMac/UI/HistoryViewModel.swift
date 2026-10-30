@@ -336,6 +336,10 @@ import LocalClipCore
     private var detailID = UUID()
     private var cursor: SearchCursor? { get { listState[\.cursor] } set { listState[\.cursor] = newValue } }
     private var searching: Task<Void, Never>?
+    #if DEBUG
+    /// 静默测试在结果产生后控制回写时机，发布版本不包含此钩子，by AI.Coding。
+    var queryResultForTesting: (() async -> Void)?
+    #endif
     private var queryPending = false
     private var activeSearchSignature: String?
     private var delayedLoading: Task<Void, Never>?
@@ -698,6 +702,9 @@ import LocalClipCore
                 historyWindowQueryCount += 1
                 #endif
                 var page = try await store.search(request)
+                #if DEBUG
+                if let queryResultForTesting { await queryResultForTesting() }
+                #endif
                 if let matching, matching.revision != page.revision { throw StoreError.invalidCursor }
                 var values = page.items
                 var pages = [page]
@@ -1409,6 +1416,42 @@ import LocalClipCore
     public func clearHistoryFilters() {
         sourceFilter = nil; dateFilterEnabled = false; categoryFilters = []; categoryID = nil
         kind = nil; favorites = false
+    }
+    /// 面板内重置沿用常规查询切换，避免重复点击全部范围时清空列表，by AI.Coding。
+    func resetVisibleHistoryFilters() {
+        guard !query.isEmpty || favorites || kind != nil || !activeCategories.isEmpty || sourceFilter != nil || dateFilterEnabled else { return }
+        queryState.literal = ""; clearHistoryFilters(); searchChanged(debounce: false)
+    }
+    /// 关闭整个浏览会话后作废旧查询并准备完整历史首屏；不影响队列和持久化数据，by AI.Coding。
+    func resetHistorySession() {
+        hiddenRefresh?.cancel(); searching?.cancel(); paging?.cancel(); delayedLoading?.cancel()
+        queryID = UUID(); pendingPageNavigation = nil; paging = nil; searching = nil
+        queryState.literal = ""; clearHistoryFilters(); queryConditions = []; queryProblems = []
+        cursor = nil; items = []; selectedIDs = []; select(nil)
+        firstCardPending = true; hiddenChanges = true; loading = true
+        listState.queryStatus.update(switching: true)
+        if !panelVisible { prepareHiddenFirstScreen() } else { refresh() }
+    }
+    /// 依据实际请求组合范围，前缀覆盖同维度面板条件，by AI.Coding。
+    var effectiveScope: String {
+        let request = searchRequest(sources: querySources)
+        var parts: [String] = []
+        if !request.categoryIDs.isEmpty {
+            let names = categories.filter { request.categoryIDs.contains($0.id) }.map(\.name)
+            parts.append("分类：" + names.joined(separator: "、"))
+        }
+        if request.favoritesOnly { parts.append("收藏") }
+        if let kind = request.kind { parts.append("类型：\(HistoryView.kindName(kind))") }
+        if let source = request.sourceBundleID {
+            parts.append("来源：" + (querySources.first { ($0.bundleID ?? "") == source }?.name ?? source))
+        }
+        if request.from != nil || request.until != nil {
+            let parsed = SearchQueryParser.parse(query, sources: querySources, categories: categories, now: clock.now())
+            let dates = parsed.labels.filter { $0.hasPrefix("从 ") || $0.hasPrefix("早于 ") || $0.hasPrefix("最近 ") || $0.hasSuffix(" 天前") }
+            parts.append(dates.isEmpty ? "日期筛选" : dates.joined(separator: "、"))
+        }
+        if !request.literal.isEmpty { parts.append("搜索：\(request.literal)") }
+        return parts.isEmpty ? "全部剪贴板" : parts.joined(separator: " · ")
     }
     /// 暂停/恢复保存绝对用户意图，启动后的配置变化不能把按钮动作反转，by AI.Coding。
     public func setCaptureEnabled(_ enabled: Bool) {

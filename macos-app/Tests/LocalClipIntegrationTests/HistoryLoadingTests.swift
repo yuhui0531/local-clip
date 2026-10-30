@@ -130,6 +130,72 @@ extension HistoryStore {
         try await until { !model.historyBusy && model.items.count == 3 }
         #expect(!status.switching)
     }
+    /// 内部隐藏保留条件；真正关闭重置旧结果并仅加载首屏，旧查询不能复活，by AI.Coding。
+    @Test func sessionResetKeepsHiddenSwitchAndRejectsOldQuery() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try HistoryStore(location: root); try await seed(store, count: 80)
+        let category = try await store.createCategory(name: "工作", colorHex: "007AFF")
+        let model = makeModel(store); model.configureHistoryViewport(width: 1300, cardWidth: 288)
+        try await model.start(); model.capture.stop(); model.panelVisibilityChanged(true)
+        try await until { !model.historyBusy && !model.items.isEmpty }
+        model.query = "type:image"; model.kind = .text; model.favorites = true
+        model.selectCategories([category.id]); model.sourceFilter = "old"; model.dateFilterEnabled = true
+        model.searchChanged(debounce: false); model.panelVisibilityChanged(false)
+        #expect(model.query == "type:image" && model.sourceFilter == "old")
+        model.resetHistorySession()
+        #expect(model.query.isEmpty && model.kind == nil && !model.favorites && model.activeCategories.isEmpty)
+        #expect(model.sourceFilter == nil && !model.dateFilterEnabled && model.items.isEmpty)
+        model.showFirstCard(); model.panelVisibilityChanged(true)
+        try await until { !model.historyBusy && !model.items.isEmpty }
+        #expect(model.items.count < 80 && model.selectedID == model.items.first?.id)
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(model.items.count < 80 && model.effectiveScope == "全部剪贴板")
+        let oldItems = model.items.map(\.id)
+        model.resetVisibleHistoryFilters()
+        #expect(!model.historyBusy && model.items.map(\.id) == oldItems)
+    }
+    /// 旧查询已返回但被延迟发布，新首屏超过等待期限时仍不能显示旧列表，by AI.Coding。
+    @Test func staleCompletedQueryAndSlowPreloadCannotExposeOldResults() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try HistoryStore(location: root); try await seed(store, count: 20)
+        let model = makeModel(store); try await model.start(); model.capture.stop(); model.panelVisibilityChanged(true)
+        try await until { !model.historyBusy && !model.items.isEmpty }
+        var continuations: [CheckedContinuation<Void, Never>] = []
+        defer { for continuation in continuations { continuation.resume() } }
+        model.queryResultForTesting = { await withCheckedContinuation { continuations.append($0) } }
+        model.query = "无匹配旧查询"; model.searchChanged(debounce: false)
+        try await until { continuations.count == 1 }
+        model.panelVisibilityChanged(false); model.resetHistorySession()
+        try await until { continuations.count == 2 }
+        await model.awaitHiddenFirstScreen(timeout: .milliseconds(80))
+        #expect(model.items.isEmpty && model.historyBusy && model.query.isEmpty)
+        model.showFirstCard(); model.panelVisibilityChanged(true)
+        #expect(model.items.isEmpty && model.query.isEmpty)
+        model.queryResultForTesting = nil
+        guard continuations.count == 2 else { return }
+        let newest = continuations.removeLast(); newest.resume()
+        try await until { !model.historyBusy && !model.items.isEmpty }
+        let expected = model.items.map(\.id)
+        let old = continuations.removeFirst(); old.resume()
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(model.items.map(\.id) == expected && !model.historyBusy)
+        #expect(model.selectedID == model.items.first?.id && model.query.isEmpty)
+    }
+    /// 范围展示与最终查询一致，搜索前缀覆盖面板类型和分类，by AI.Coding。
+    @Test func effectiveScopeUsesPrefixOverrides() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try HistoryStore(location: root)
+        let a = try await store.createCategory(name: "工作", colorHex: "007AFF")
+        _ = try await store.createCategory(name: "生活", colorHex: "34C759")
+        let model = makeModel(store); await model.reloadCategories()
+        model.selectCategories([a.id]); model.kind = .text; model.query = "type:image in:生活 搜索词"
+        #expect(model.effectiveScope.contains("类型：图片") && model.effectiveScope.contains("分类：生活"))
+        #expect(!model.effectiveScope.contains("类型：文本") && !model.effectiveScope.contains("分类：工作"))
+        #expect(model.effectiveScope.hasPrefix("分类：生活") && model.effectiveScope.hasSuffix("搜索：搜索词"))
+    }
     /// T10：新建分类默认取首个未用色（大小写不敏感），六色用尽按分类数取模轮换；编辑已有分类保留原色，by AI.Coding。
     @Test func newCategoryRotatesDefaultColor() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

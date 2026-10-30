@@ -106,11 +106,13 @@ import LocalClipCore
         // 卡片显式关闭也必须走草稿保护；粘贴后的非动画收起保持原语义。
         app.switchSurfaceForTesting(.cards); try await settle { history.panelVisible && app.surfaceWindowsForTesting.0 != nil }
         #expect(history.panelVisible && app.surfaceWindowsForTesting.0?.isVisible == false)
+        history.query = "未保存的范围"; history.favorites = true; history.pinned = true
         let cardDraft = UUID()
         history.surfaceEdits.register(cardDraft, surface: .cards, draft: .init(title: "卡片名称", dirty: { true }, save: { false }, discard: {}))
         app.surfaceChoiceForTesting = { _ in .cancel }
         history.closePanel?(true); try await settle()
         #expect(history.panelVisible)
+        #expect(history.query == "未保存的范围" && history.favorites && history.pinned)
         #expect(app.surfaceWindowsForTesting.0?.ignoresMouseEvents == false)
         var choices = 0
         app.surfaceChoiceForTesting = { _ in choices += 1; return .discard }
@@ -120,7 +122,41 @@ import LocalClipCore
         try await settle { !history.panelVisible && app.surfaceWindowsForTesting.2 != nil }
         #expect(choices == 1 && app.surfaceWindowsForTesting.2 != nil && app.surfaceWindowsForTesting.1 == nil)
         #expect(!history.panelVisible)
+        #expect(history.query == "未保存的范围" && history.favorites && history.pinned)
         app.switchSurfaceForTesting(nil); try await settle()
+        #expect(history.query.isEmpty && !history.favorites && history.pinned)
+    }
+    /// 已确认关闭但释放尚未完成时，任何新入口都接管重置，by AI.Coding。
+    @Test func reopeningDuringConfirmedCloseStartsNewSession() async throws {
+        _ = NSApplication.shared
+        for destination: AppSurface in [.cards, .settings, .manager] {
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            defer { try? FileManager.default.removeItem(at: root) }
+            let store = try HistoryStore(location: root)
+            let board = MacPasteboardClient(access: RawBoard()), capture = CaptureCoordinator(board: board, store: store)
+            let history = HistoryViewModel(store: store, capture: capture, paste: PasteCoordinator(board: board, applications: FakeApplications(), store: store, capture: capture), derived: DerivedContentService(store: store))
+            try await history.start(); capture.stop(); history.panelVisibilityChanged(false)
+            let app = AppDelegate(); app.configureSurfacesForTesting(history)
+            app.switchSurfaceForTesting(.cards)
+            for _ in 0..<200 where !history.panelVisible { try await Task.sleep(for: .milliseconds(10)) }
+            #expect(history.panelVisible)
+            history.query = "旧范围"; history.favorites = true
+            var waiting = false
+            var continuation: CheckedContinuation<Void, Never>?
+            app.beforeCloseReleaseForTesting = {
+                await withCheckedContinuation { value in continuation = value; waiting = true }
+            }
+            app.switchSurfaceForTesting(nil)
+            for _ in 0..<200 where !waiting { try await Task.sleep(for: .milliseconds(10)) }
+            #expect(waiting && history.query == "旧范围")
+            app.switchSurfaceForTesting(destination)
+            #expect(history.query.isEmpty && !history.favorites && history.items.isEmpty)
+            continuation?.resume(); app.beforeCloseReleaseForTesting = nil
+            try await Task.sleep(for: .milliseconds(250))
+            #expect(history.query.isEmpty && !history.favorites)
+            app.switchSurfaceForTesting(nil)
+            try await Task.sleep(for: .milliseconds(650))
+        }
     }
     /// 确认期间拒绝新请求；取消/保存失败均不得执行原切换。
     @Test func draftResolution() async {

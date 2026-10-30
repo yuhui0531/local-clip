@@ -45,6 +45,22 @@ import Testing
         #expect(clipboard(h.raw) == "third")
     }
 
+    /// 真正关闭历史后队列仍可使用原快捷键继续，by AI.Coding。
+    @Test func queueContinuesAfterHistorySessionCloses() async throws {
+        _ = NSApplication.shared
+        let h = try await harness(); defer { h.model.stopPasteQueue(); try? FileManager.default.removeItem(at: h.root) }
+        try await h.model.start(); h.model.capture.stop(); h.model.panelVisibilityChanged(false)
+        let app = AppDelegate(); app.configureSurfacesForTesting(h.model)
+        app.switchSurfaceForTesting(.cards)
+        try await until(h) { h.model.panelVisible }
+        h.model.query = "旧范围"; h.model.startPasteQueue(h.ids)
+        #expect(!h.model.panelVisible && h.model.query.isEmpty)
+        #expect(h.model.pasteQueueActive && h.recorder.unregistered == 0)
+        h.model.pasteQueueNext(target: h.apps.remembered)
+        try await until(h) { h.apps.events == 1 }
+        #expect(clipboard(h.raw) == "first" && h.model.pasteQueuePosition == 1 && h.model.pasteQueueActive)
+        #expect(app.surfaceWindowsForTesting.0 != nil)
+    }
     /// 按选择顺序逐项粘贴，处理中再按忽略；用完自动结束并注销快捷键，by AI.Coding。
     @Test func pastesInOrderAndEnds() async throws {
         let h = try await harness(); defer { try? FileManager.default.removeItem(at: h.root) }

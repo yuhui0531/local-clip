@@ -40,6 +40,7 @@ public struct HistoryView: View {
                     // 搜索与筛选置于最左，靠近视线起点和首张卡片；右侧只留面板级操作，by AI.Coding。
                     HStack(spacing: 4) {
                         HistorySearchInput(model: model, input: model.queryState, footer: model.listState.footerState, focus: model.searchFocusRequest, placeholder: searchPlaceholder, focused: model.historyFocus == .search, compact: compact)
+                        HistoryScopeIndicator(model: model, input: model.queryState)
                         filterButton
                             .popover(isPresented: $model.showingFilters) { FilterEditor(model: model) }
                     }
@@ -245,6 +246,19 @@ public struct HistoryView: View {
 
 // 输入只让搜索框与列表读取，不引起工具栏、分类行和整条底栏重算，by AI.Coding。
 // 条数与查询转圈只订阅统计快照，替代原底栏统计，by AI.Coding。
+/// 当前实际查询范围始终可见，窄布局省略文字但保留完整辅助说明，by AI.Coding。
+private struct HistoryScopeIndicator: View {
+    @ObservedObject var model: HistoryViewModel
+    @ObservedObject var input: HistoryQueryState
+    var body: some View {
+        let scope = model.effectiveScope
+        return Button { model.resetVisibleHistoryFilters() } label: {
+            Text(scope).font(.system(size: 11)).lineLimit(1).truncationMode(.tail)
+                .frame(maxWidth: 110, alignment: .leading).foregroundStyle(.secondary)
+        }.buttonStyle(.plain).help("当前范围：\(scope)；点击重置全部条件")
+            .accessibilityLabel("当前范围：\(scope)，重置全部条件")
+    }
+}
 private struct HistorySearchInput: View {
     let model: HistoryViewModel
     @ObservedObject var input: HistoryQueryState
