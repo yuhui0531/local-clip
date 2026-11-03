@@ -78,4 +78,16 @@ struct HistoryTests {
         _ = try await store.ingest(.init(payload: .init([plain, alternate])), at: SystemClock().now())
         #expect(try await store.search(.init()).items.count == 3)
     }
+    /// 只含空白的文字不入库；带文字的空白与图片照常保存。
+    @Test func blankTextSkipped() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try HistoryStore(location: root), now = SystemClock().now()
+        #expect(try await store.ingest(fixture(""), at: now) == .skipped(.blank))
+        #expect(try await store.ingest(fixture("  \n\t "), at: now) == .skipped(.blank))
+        #expect(try await store.ingest(fixture("\u{200B} \u{FEFF}\u{2060}"), at: now) == .skipped(.blank))
+        #expect(insertedID(try await store.ingest(fixture(" a "), at: now)) != "")
+        #expect(insertedID(try await store.ingest(.init(payload: .init([.init([.init(SupportedType.png, Data(repeating: 7, count: 16))])])), at: now)) != "")
+        #expect(try await store.search(.init()).items.count == 2)
+    }
 }

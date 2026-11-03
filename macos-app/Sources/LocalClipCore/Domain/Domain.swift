@@ -18,7 +18,7 @@ public enum StoreError: String, Error, Sendable {
     case postCommitUnavailable, notFound, invalidSettings, invalidCursor, unavailable, policyChanged
 }
 public enum SkipReason: String, Codable, Sendable {
-    case sensitive, unsupported, tooLarge, paused, excluded, changedDuringRead, accessUnavailable, busy, selfWrite
+    case sensitive, unsupported, tooLarge, paused, excluded, changedDuringRead, accessUnavailable, busy, selfWrite, blank
 }
 public enum SupportedType {
     public static let string = "public.utf8-plain-text"

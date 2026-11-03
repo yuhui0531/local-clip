@@ -254,6 +254,13 @@ public actor HistoryStore: HistoryRepository {
                item.fileURL == nil { return .skipped(.unsupported) }
         }
         if payload.hasFileReferences, payload.fileURLs == nil { return .skipped(.unsupported) }
+        // 只含空白或零宽字符的纯文字不入历史；图片、文件和无法解码的文字不按空白判断，by AI.Coding。
+        let textTypes: Set<String> = [SupportedType.string, SupportedType.url, SupportedType.rtf, SupportedType.html]
+        let blank = CharacterSet.whitespacesAndNewlines.union(.init(charactersIn: "\u{200B}\u{200C}\u{200D}\u{2060}\u{FEFF}"))
+        if payload.items.allSatisfy({ item in
+            item.representations.allSatisfy { textTypes.contains($0.type) }
+                && extractedText(item)?.trimmingCharacters(in: blank).isEmpty == true
+        }) { return .skipped(.blank) }
         let hash = payload.fingerprint
         let existing = try strategy.read { db -> [String: SQLValue]? in
             guard let row = try db.rows("SELECT *, (\(protectedSQL)) AS isProtected FROM clips WHERE contentHash=?", [.text(hash)]).first,

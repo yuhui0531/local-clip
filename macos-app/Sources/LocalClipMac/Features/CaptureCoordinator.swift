@@ -202,6 +202,8 @@ import LocalClipCore
                 setState("正常"); onCommit?()
                 do { _ = try await store.expire(at: clock.now()) }
                 catch { setState("已记录；期限清理失败，未报告释放") }
+            // 空白复制静默丢弃，不进入“最近忽略”提示，by AI.Coding。
+            case .skipped(.blank): setState("正常")
             case .skipped(let reason): ignored(reason)
             }
         } catch StoreError.policyChanged { ignored(.paused) }
