@@ -952,15 +952,9 @@ struct ClipCard: View, Equatable {
                 Spacer(minLength: 2)
                 if let detection, !hidden, !tiny { DetectionBadge(detection: detection, foreground: Color(nsColor: headerText)) }
                 if item.isFavorite && !tiny {
-                    // 橙星在亮黄橙头部上不醒目，跟随深色字；其余头部保持橙星白边，by AI.Coding。
-                    if headerText === SourceApplicationObserver.darkHeaderText {
-                        Image(systemName: "star.fill").font(.system(size: LCStyle.FontSize.meta))
-                            .accessibilityLabel("已收藏")
-                    } else {
-                        Image(systemName: "star.fill").font(.system(size: LCStyle.FontSize.meta)).foregroundStyle(.orange)
-                            .background { Image(systemName: "star.fill").font(.system(size: LCStyle.FontSize.meta)).foregroundStyle(.white).scaleEffect(1.12) }
-                            .accessibilityLabel("已收藏")
-                    }
+                    // 收藏星跟随头部文字色，不在来源色上叠橙色，by AI.Coding。
+                    Image(systemName: "star.fill").font(.system(size: LCStyle.FontSize.meta))
+                        .accessibilityLabel("已收藏")
                 }
                 // 应用图标自带外形，直接显示不再垫白底；系统图标四周留有透明边距，略放大与标题对齐，by AI.Coding。
                 Group {
