@@ -5,6 +5,7 @@ import SwiftUI
 struct ClipNameField: NSViewRepresentable {
     @Binding var text: String
     var fontSize: CGFloat
+    var textColor: NSColor = .white
     var onCommit: () -> Void
     var onCancel: () -> Void
     var onFocusLost: (() -> Void)? = nil
@@ -13,7 +14,10 @@ struct ClipNameField: NSViewRepresentable {
     func makeNSView(context: Context) -> Field {
         let field = Field()
         field.isBordered = false; field.drawsBackground = false; field.focusRingType = .none
-        field.textColor = .white; field.placeholderString = "名称"
+        // 占位文字跟随头部文字色：系统占位色在亮黄橙头部上不可见，by AI.Coding。
+        field.placeholderAttributedString = NSAttributedString(string: "名称", attributes: [
+            .foregroundColor: textColor.withAlphaComponent(0.6), .font: NSFont.systemFont(ofSize: fontSize, weight: .semibold)
+        ])
         field.cell?.isScrollable = true; field.cell?.wraps = false
         field.delegate = context.coordinator
         field.setAccessibilityLabel("记录名称")
@@ -24,6 +28,7 @@ struct ClipNameField: NSViewRepresentable {
         context.coordinator.parent = self
         if field.stringValue != text { field.stringValue = text }
         field.font = .systemFont(ofSize: fontSize, weight: .semibold)
+        field.textColor = textColor
         field.requestInitialFocus()
     }
     func makeCoordinator() -> Coordinator { Coordinator(self) }

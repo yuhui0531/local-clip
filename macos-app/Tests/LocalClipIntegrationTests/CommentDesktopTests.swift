@@ -98,8 +98,8 @@ import ServiceManagement
         try await Task.sleep(for: .milliseconds(250))
         window.makeFirstResponder(nil)
         model.beginRename(id)
-        try await wait { views(host, NSTextField.self).contains { $0.placeholderString == "名称" } }
-        let field = try #require(views(host, NSTextField.self).first { $0.placeholderString == "名称" })
+        try await wait { views(host, NSTextField.self).contains { $0.placeholderAttributedString?.string == "名称" } }
+        let field = try #require(views(host, NSTextField.self).first { $0.placeholderAttributedString?.string == "名称" })
         let invalid = String(repeating: "x", count: 1025)
         // 等原生字段完成首次异步聚焦再输入，与真实用户时序一致；抢先输入会被随后的聚焦结束编辑，by AI.Coding。
         try await wait { field.currentEditor() != nil }

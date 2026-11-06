@@ -656,16 +656,37 @@ import LocalClipCore
         model.select(model.items[0].id)
         #expect(!model.showingDetail)
     }
-    /// 来源色头部：任何主色校正后白字对比度≥4.5:1，保持色相、饱和度≤上限；双色图标取主色桶而非RGB平均；近灰图标回退中性深灰；按键缓存只算一次，by AI.Coding。
-    @Test func headerColorsKeepWhiteTextReadable() {
+    /// 来源色头部：任何主色校正后头部文字对比度≥4.5:1，保持色相、饱和度≤上限；亮黄橙保留原亮度配深色字；双色图标取主色桶而非RGB平均；近灰图标回退中性深灰；按键缓存只算一次，by AI.Coding。
+    @Test func headerColorsKeepTextReadable() {
         let samples: [NSColor] = [.systemYellow, .yellow, NSColor(srgbRed: 0.6, green: 1, blue: 0.6, alpha: 1), .white, .cyan, .green, .orange, .red, .blue, .magenta, .systemTeal, NSColor(srgbRed: 1, green: 0.98, blue: 0.4, alpha: 1), .black]
-        for sample in samples {
+        // 全色域网格覆盖阈值边界：深色字对比度 = 深色字的白字对比度 / 头部的白字对比度。
+        let grid = stride(from: 0.0, to: 1.0, by: 1.0 / 72).flatMap { hue in stride(from: 0.15, through: 1.0, by: 0.05).flatMap { saturation in
+            stride(from: 0.05, through: 1.0, by: 0.05).map { NSColor(hue: hue, saturation: saturation, brightness: $0, alpha: 1) } } }
+        let dark = SourceApplicationObserver.darkHeaderText
+        for sample in samples + grid {
             let header = SourceApplicationObserver.readableHeader(sample)
-            #expect(SourceApplicationObserver.whiteContrast(header) >= 4.5)
+            let text = SourceApplicationObserver.headerText(on: header)
+            let contrast = text === dark ? SourceApplicationObserver.whiteContrast(dark) / SourceApplicationObserver.whiteContrast(header) : SourceApplicationObserver.whiteContrast(header)
+            #expect(contrast >= 4.5)
             #expect(header.saturationComponent <= SourceApplicationObserver.maxHeaderSaturation + 0.001)
         }
-        let yellow = SourceApplicationObserver.readableHeader(.systemYellow).usingColorSpace(.sRGB)!
-        #expect(abs(yellow.hueComponent - NSColor.systemYellow.usingColorSpace(.sRGB)!.hueComponent) < 0.02)
+        // 亮黄橙不压暗、配深色字；蓝色仍压暗、配白字。
+        let notes = NSColor(srgbRed: 0xDF / 255.0, green: 0xBF / 255.0, blue: 0x3D / 255.0, alpha: 1)
+        let warm = SourceApplicationObserver.readableHeader(notes).usingColorSpace(.sRGB)!
+        #expect(abs(warm.hueComponent - notes.hueComponent) < 0.02)
+        #expect(abs(warm.brightnessComponent - notes.brightnessComponent) < 0.02)
+        #expect(SourceApplicationObserver.headerText(on: warm) === dark)
+        let safari = NSColor(srgbRed: 0x50 / 255.0, green: 0xA1 / 255.0, blue: 0xD7 / 255.0, alpha: 1)
+        let cool = SourceApplicationObserver.readableHeader(safari)
+        #expect(cool.usingColorSpace(.sRGB)!.brightnessComponent < safari.brightnessComponent)
+        #expect(SourceApplicationObserver.headerText(on: cool) === NSColor.white)
+        // 阈值两侧：只有色相25–65°且亮度>0.75才保留原亮度配深色字。
+        for (hue, brightness, keeps) in [(25.5, 0.9, true), (64.5, 0.9, true), (45.0, 0.76, true), (24.5, 0.9, false), (65.5, 0.9, false), (45.0, 0.74, false), (120.0, 0.9, false), (200.0, 0.9, false)] {
+            let sample = NSColor(hue: hue / 360, saturation: 0.6, brightness: brightness, alpha: 1)
+            let header = SourceApplicationObserver.readableHeader(sample).usingColorSpace(.sRGB)!
+            #expect((SourceApplicationObserver.headerText(on: header) === dark) == keeps)
+            #expect((abs(header.brightnessComponent - brightness) < 0.01) == keeps)
+        }
         func image(_ color: NSColor) -> NSImage {
             NSImage(size: .init(width: 32, height: 32), flipped: false) { rect in color.setFill(); rect.fill(); return true }
         }

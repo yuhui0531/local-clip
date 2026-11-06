@@ -70,7 +70,7 @@ import LocalClipCore
         return icon
     }
 
-    // MARK: 卡片头部来源色：按bundleID提取图标主色并校正到白字对比度≥4.5:1，只计算一次，by AI.Coding。
+    // MARK: 卡片头部来源色：按bundleID提取图标主色并校正到头部文字对比度≥4.5:1，只计算一次，by AI.Coding。
     private static var headerColors: [String: NSColor] = [:]
     /// 图标整体近灰（含单色图标）时使用的中性深灰。
     static let neutralHeader = NSColor(srgbRed: 0x5A / 255.0, green: 0x5F / 255.0, blue: 0x6B / 255.0, alpha: 1)
@@ -113,12 +113,17 @@ import LocalClipCore
     }
     /// 头部饱和度上限；不设下限，低饱和图标保持原样，by AI.Coding。
     static let maxHeaderSaturation: CGFloat = 0.72
-    /// 保持色相，饱和度上限 maxHeaderSaturation，逐步降低亮度直到白字对比度≥4.5:1。
+    /// 亮黄橙来源头部上的深色文字。
+    static let darkHeaderText = NSColor(srgbRed: 0x1A / 255.0, green: 0x1A / 255.0, blue: 0x1A / 255.0, alpha: 1)
+    /// 校正后的头部色决定文字颜色：只有保留原色的亮黄橙头部用深色字。
+    static func headerText(on color: NSColor) -> NSColor { whiteContrast(color) >= 4.5 ? .white : darkHeaderText }
+    /// 保持色相，饱和度上限 maxHeaderSaturation；亮黄橙（色相25–65°、亮度>0.75）压暗会发棕，保留原色配深色字，其余逐步降低亮度直到白字对比度≥4.5:1，by AI.Coding。
     static func readableHeader(_ color: NSColor) -> NSColor {
         guard let value = color.usingColorSpace(.sRGB) else { return neutralHeader }
         let hue = value.hueComponent, saturation = min(value.saturationComponent, maxHeaderSaturation)
         var brightness = value.brightnessComponent
         var result = NSColor(hue: hue, saturation: saturation, brightness: brightness, alpha: 1)
+        if (25.0...65.0).contains(hue * 360), brightness > 0.75 { return result }
         while whiteContrast(result) < 4.5 && brightness > 0 {
             brightness = max(0, brightness - 0.02)
             result = NSColor(hue: hue, saturation: saturation, brightness: brightness, alpha: 1)

@@ -887,10 +887,11 @@ struct ClipCard: View, Equatable {
         case .file: Color(red: 0.35, green: 0.49, blue: 0.70)
         case .mixed: Color(red: 0.73, green: 0.53, blue: 0.25) } }
     /// 来源图标主色校正后的实色头部；无来源图标回退到校正后的类型色，by AI.Coding。
-    private var headerColor: Color {
-        if let id = item.source.bundleID, let color = SourceApplicationObserver.headerColor(for: id) { return Color(nsColor: color) }
-        return Color(nsColor: SourceApplicationObserver.headerColor(fallback: "\(item.kind)", base: NSColor(tint)))
+    private var headerColor: NSColor {
+        if let id = item.source.bundleID, let color = SourceApplicationObserver.headerColor(for: id) { return color }
+        return SourceApplicationObserver.headerColor(fallback: "\(item.kind)", base: NSColor(tint))
     }
+    private var headerText: NSColor { SourceApplicationObserver.headerText(on: headerColor) }
     private var appIcon: NSImage? {
         guard let id = item.source.bundleID else { return nil }
         return SourceApplicationObserver.icon(for: id)
@@ -916,7 +917,7 @@ struct ClipCard: View, Equatable {
             if editing {
                 ClipNameField(text: Binding(get: { nameDraft }, set: {
                     if nameDraft != $0 { nameDraft = $0; model.renameDraftChanged(id: item.id) }
-                }), fontSize: tiny ? 10 : height < 150 ? 12 : 14,
+                }), fontSize: tiny ? 10 : height < 150 ? 12 : 14, textColor: headerText,
                     onCommit: { model.saveRename(id: item.id, title: nameDraft) },
                     onCancel: { model.cancelRename(id: item.id) },
                     onFocusLost: { if nameDraft == (item.title ?? "") { model.cancelRename(id: item.id) } })
@@ -944,26 +945,32 @@ struct ClipCard: View, Equatable {
                     cardTitle
                     if height >= 150 {
                         CopyAge(copiedAt: item.lastCopiedAt)
-                            .font(.system(size: LCStyle.FontSize.meta)).foregroundStyle(Color.white.opacity(0.85)).lineLimit(1)
+                            .font(.system(size: LCStyle.FontSize.meta)).lineLimit(1)
 
                     }
                 }
                 Spacer(minLength: 2)
-                if let detection, !hidden, !tiny { DetectionBadge(detection: detection) }
+                if let detection, !hidden, !tiny { DetectionBadge(detection: detection, foreground: Color(nsColor: headerText)) }
                 if item.isFavorite && !tiny {
-                    Image(systemName: "star.fill").font(.system(size: LCStyle.FontSize.meta)).foregroundStyle(.orange)
-                        .background { Image(systemName: "star.fill").font(.system(size: LCStyle.FontSize.meta)).foregroundStyle(.white).scaleEffect(1.12) }
-                        .accessibilityLabel("已收藏")
+                    // 橙星在亮黄橙头部上不醒目，跟随深色字；其余头部保持橙星白边，by AI.Coding。
+                    if headerText === SourceApplicationObserver.darkHeaderText {
+                        Image(systemName: "star.fill").font(.system(size: LCStyle.FontSize.meta))
+                            .accessibilityLabel("已收藏")
+                    } else {
+                        Image(systemName: "star.fill").font(.system(size: LCStyle.FontSize.meta)).foregroundStyle(.orange)
+                            .background { Image(systemName: "star.fill").font(.system(size: LCStyle.FontSize.meta)).foregroundStyle(.white).scaleEffect(1.12) }
+                            .accessibilityLabel("已收藏")
+                    }
                 }
                 // 应用图标自带外形，直接显示不再垫白底；系统图标四周留有透明边距，略放大与标题对齐，by AI.Coding。
                 Group {
                     // 细暗投影勾出图标轮廓，同色头部上也可辨认，by AI.Coding。
                     if let appIcon { Image(nsImage: appIcon).resizable().interpolation(.high).scaledToFit().scaleEffect(1.12).shadow(color: .black.opacity(0.25), radius: 0.5, y: 0.5) }
-                    else { Image(systemName: symbol).font(.system(size: tiny ? 11 : 15, weight: .medium)).foregroundStyle(.white)
+                    else { Image(systemName: symbol).font(.system(size: tiny ? 11 : 15, weight: .medium))
                         .frame(maxWidth: .infinity, maxHeight: .infinity).background(Color.white.opacity(0.18), in: RoundedRectangle(cornerRadius: LCStyle.Radius.control, style: .continuous)) }
                 }.frame(width: iconSize, height: iconSize).help(sourceDescription)
-            }.foregroundStyle(.white).padding(.leading, tiny ? 8 : 14).padding(.trailing, tiny ? 6 : 10)
-                .frame(height: headerHeight).background(headerColor)
+            }.foregroundStyle(Color(nsColor: headerText)).padding(.leading, tiny ? 8 : 14).padding(.trailing, tiny ? 6 : 10)
+                .frame(height: headerHeight).background(Color(nsColor: headerColor))
             // 正文独占剩余区域；长文件名和多行文字只能在正文内截断，不挤掉标题和底栏。
             GeometryReader { region in
                 cardContent.frame(width: region.size.width, height: region.size.height, alignment: .topLeading).clipped()
@@ -1622,6 +1629,7 @@ struct ToolbarIconButton: View {
 /// 卡片识别徽标：沿用快捷键标签的小胶囊样式，颜色附色块，by AI.Coding。
 private struct DetectionBadge: View {
     let detection: ContentInspector.Detection
+    let foreground: Color
     var body: some View {
         HStack(spacing: 3) {
             if case .color(let value) = detection {
@@ -1629,7 +1637,7 @@ private struct DetectionBadge: View {
                     .overlay(Circle().strokeBorder(Color.white.opacity(0.6), lineWidth: 0.5)).frame(width: 9, height: 9)
             }
             Text(detection.badge).font(.system(size: LCStyle.FontSize.caption, weight: .medium, design: .monospaced)).lineLimit(1)
-        }.foregroundStyle(.white).padding(.horizontal, 4).padding(.vertical, 1).fixedSize()
+        }.foregroundStyle(foreground).padding(.horizontal, 4).padding(.vertical, 1).fixedSize()
             .background(Color.white.opacity(0.18), in: RoundedRectangle(cornerRadius: LCStyle.Radius.control))
             .help(detection.kindName + "：" + detection.badge)
     }
