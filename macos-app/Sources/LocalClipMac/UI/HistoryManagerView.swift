@@ -333,6 +333,8 @@ private struct NameCell: View {
         }
         // 悬停显示较长的摘要预览，不读正文；内容隐藏时不提示，by AI.Coding。
         .help(showsContent ? (row.preview.isEmpty ? HistoryView.displayTitle(row) : row.preview) : "")
+        // 单元格固定尺寸还不足以稳定滚动条，原生表格也必须停止对离屏行估高，by AI.Coding。
+        .background(HistoryManagerFixedRowHeight().accessibilityHidden(true))
         .task(id: showsContent ? row.id + "|" + (row.contentFingerprint ?? "") : "") {
             guard showsContent else { preview = nil; return }
             preview = await RowPreview.load(row, history: history)
@@ -399,7 +401,7 @@ private struct RowPreviewTile: View {
                 Image(systemName: HistoryView.kindSymbol(row.kind)).font(.system(size: 20, weight: .light)).foregroundStyle(.secondary)
             }
         }
-        .frame(width: 72, height: 48)
+        .frame(width: HistoryManagerRowLayout.previewWidth, height: HistoryManagerRowLayout.contentHeight)
         .help(HistoryView.kindName(row.kind))
     }
 }
