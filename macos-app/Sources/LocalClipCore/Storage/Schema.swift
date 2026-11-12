@@ -39,6 +39,7 @@ enum Schema {
         """)
         try createCategories(db)
         try db.exec(imageTextSQL)
+        try db.exec(fileCopiesSQL)
         try writeSettings(db, settings)
     }
     /// 旧库升级保留复制身份和原顺序；结构、版本与配置标记一并提交或回滚。
@@ -59,6 +60,13 @@ enum Schema {
     /// v5已有的派生扩展继续按需补建；normalizedText为空表示无文字或无法识别，不再重试，by AI.Coding。
     static let imageTextSQL = """
     CREATE TABLE IF NOT EXISTS image_text(clipID TEXT NOT NULL,itemIndex INTEGER NOT NULL,blobDigest TEXT NOT NULL,normalizedText TEXT NOT NULL,
+      PRIMARY KEY(clipID,itemIndex),FOREIGN KEY(clipID,itemIndex) REFERENCES items(clipID,itemIndex) ON DELETE CASCADE);
+    """
+    /// 附加表兼容已有 v6 历史，副本随项目删除，不改变原剪贴板表示和指纹。
+    static let fileCopiesSQL = """
+    CREATE TABLE IF NOT EXISTS file_copies(clipID TEXT NOT NULL,itemIndex INTEGER NOT NULL,
+      digest TEXT NOT NULL,byteCount INTEGER NOT NULL CHECK(byteCount>=0),
+      payload BLOB NOT NULL CHECK(length(payload)=byteCount),
       PRIMARY KEY(clipID,itemIndex),FOREIGN KEY(clipID,itemIndex) REFERENCES items(clipID,itemIndex) ON DELETE CASCADE);
     """
     /// 分类与归属同库保存，删除历史会级联移除归属，原始表示不重复存储。

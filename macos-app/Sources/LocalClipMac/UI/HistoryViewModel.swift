@@ -235,7 +235,7 @@ import LocalClipCore
         }
     }
     @Published public private(set) var usage: StorageUsage?
-    /// 拖出图片文件占用；不计入历史容量，单独展示与清理，by AI.Coding。
+    /// 历史输出文件占用；不计入历史容量，单独展示与清理，by AI.Coding。
     @Published public private(set) var dragFilesBytes: Int64?
     @Published public var target: TargetToken?
     /// 面板显示周期标识，供文件预览重新校验与GUI探针；不再驱动搜索框焦点，by AI.Coding。
@@ -612,11 +612,11 @@ import LocalClipCore
         do { assignIfChanged(\.usage, try await store.usage()); assignIfChanged(\.dragFilesBytes, try await store.dragFilesBytes()) }
         catch { message = "空间计量失败" }
     }
-    /// 手动清理拖出图片文件；失败时如实提示，计量以实际剩余为准，by AI.Coding。
+    /// 手动清理历史输出文件；失败时如实提示，计量以实际剩余为准，by AI.Coding。
     public func clearDragFiles() {
         Task {
-            do { try await store.clearDragFiles(); notice("已清理拖出图片文件") }
-            catch { message = "拖出图片文件清理未完成，请检查访问权限" }
+            do { try await store.clearDragFiles(); notice("已清理历史输出文件") }
+            catch { message = "历史输出文件清理未完成，请检查访问权限" }
             await refreshUsage()
         }
     }
@@ -2037,7 +2037,7 @@ import LocalClipCore
         guard text.utf8.count <= TextTransform.byteLimit else { return ([], "内容过大（超过 4 MiB），无法转换") }
         return (TextTransform.applicableTransforms(text), nil)
     }
-    /// 单项记录另存为文件，沿用拖出的格式规则；富文本可改选纯文本、RTF或HTML，链接存为.webloc。文件引用本身就是文件，不提供此操作，by AI.Coding。
+    /// 单项记录另存为文件，缓存文件导出历史副本，富文本与链接沿用已有格式，by AI.Coding。
     public func saveSelectedToFile() {
         guard let selectedID else { return }
         Task {
@@ -2045,7 +2045,19 @@ import LocalClipCore
                 let access = try await store.exportAccess(id: selectedID)
                 let summary = try await store.metadata(id: selectedID, at: clock.now()).summary
                 let items = try await Task.detached { try access.itemTypes() }.value
-                guard items.count == 1, let types = items.first, !types.contains(SupportedType.fileURL) else { message = "多项记录请拖到Finder，每项生成一个文件"; return }
+                guard items.count == 1, let types = items.first else { message = "多项记录请拖到Finder，每项生成一个文件"; return }
+                if types.contains(SupportedType.fileURL) {
+                    guard let name = try await Task.detached(operation: { try access.savedFileName(index: 0) }).value else {
+                        message = "这条文件记录没有历史副本，可将可用的原文件拖到Finder"; return
+                    }
+                    let panel = NSSavePanel()
+                    panel.canCreateDirectories = true; panel.isExtensionHidden = false
+                    panel.nameFieldStringValue = name
+                    guard panel.runModal() == .OK, let url = panel.url else { return }
+                    // 保存确认后再读取副本，记录失效时不写入目标。
+                    try await Task.detached { try access.savedFileData(index: 0).write(to: url, options: .atomic) }.value
+                    return
+                }
                 var options: [(title: String, fileExtension: String, data: @Sendable () throws -> Data)] = []
                 if let plan = try await ContentExportProvider.plan(access: access, index: 0, types: types) {
                     options.append(("自动（.\(plan.fileExtension)）", plan.fileExtension, { try ContentExportProvider.data(plan, access: access, index: 0, types: types) }))

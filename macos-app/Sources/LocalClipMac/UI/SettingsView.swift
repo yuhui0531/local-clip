@@ -233,15 +233,16 @@ public struct SettingsView: View {
                             TextField("100–4096", text: $quota).labelsHidden().frame(width: 70).multilineTextAlignment(.trailing).onSubmit(applyQuota)
                             Button("应用", action: applyQuota).disabled(quota == String(model.settings.quotaBytes / MiB))
                         }
-                        LabeledContent("拖出图片文件") {
+                        // 图片拖出和缓存文件恢复共用输出目录，清理范围与界面文案保持一致。
+                        LabeledContent("历史输出文件") {
                             Text(model.dragFilesBytes.map(HistoryViewModel.bytes) ?? "—").monospacedDigit().foregroundStyle(.secondary)
                             Button("清理…") { confirmingDragFiles = true }.disabled((model.dragFilesBytes ?? 0) == 0)
                         }
-                        .alert("清理拖出图片文件？", isPresented: $confirmingDragFiles) {
+                        .alert("清理历史输出文件？", isPresented: $confirmingDragFiles) {
                             Button("清理", role: .destructive) { model.clearDragFiles() }
                             Button("取消", role: .cancel) {}
                         } message: {
-                            Text("历史记录不受影响。只引用这些文件路径（未复制图片）的文档，例如Typora未设置复制图片时，将无法再显示对应图片。")
+                            Text("历史记录及其中的副本会保留。引用这些输出路径的文档可能无法再打开对应文件。")
                         }
                         HStack {
                             Button("清理已到期内容") { Task { await model.maintenance() } }
@@ -250,7 +251,7 @@ public struct SettingsView: View {
                         }
                     } footer: {
                         Text("收藏或加入自定义分类的记录不会因期限或自动淘汰被删除，但计入容量；容量满时保留旧历史、跳过新增。降低设置前会预览确认。").settingsFootnote()
-                        settingsLimits("拖出图片文件是拖进编辑器时提供的图片副本，长期保留以免文档图片失效，不计入容量，仅可手动清理。期限按最近有效用户复制起算；浏览和自身恢复不续期。1MiB = 1,048,576 字节。")
+                        settingsLimits("历史输出文件包括拖出的图片和从历史恢复的缓存文件，可单独清理。历史库中保存的副本计入容量。期限按最近有效用户复制起算；浏览和自身恢复不续期。1MiB = 1,048,576 字节。")
                     }
                 }
                 if section == .advanced {

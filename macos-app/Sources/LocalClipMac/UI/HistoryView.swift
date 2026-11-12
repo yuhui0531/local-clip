@@ -1158,7 +1158,8 @@ struct ClipCard: View, Equatable {
                 }
                 Button("打开") { model.select(item.id); model.openSelected() }.keyboardShortcut("o", modifiers: .command)
                 if item.kind == .file { Button("在Finder中显示") { model.select(item.id); model.openSelected(reveal: true) }; Button("打开方式…") { model.select(item.id); model.openSelected(withApplication: true) } }
-                if item.kind != .file { Button("存储为文件…") { model.select(item.id); model.saveSelectedToFile() } }
+                // 缓存文件的历史副本也可用同一入口另存。
+                Button("存储为文件…") { model.select(item.id); model.saveSelectedToFile() }
                 if item.kind == .image || item.kind == .mixed || isImageFile { Button("复制图中文字") { model.copyImageText(id: item.id) }.disabled(hidden) }
                 Divider(); Button("删除", role: .destructive) { model.change(.delete(model.selectedIDs.contains(item.id) ? model.orderedSelection : [item.id])) }
             }

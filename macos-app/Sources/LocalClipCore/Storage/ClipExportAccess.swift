@@ -19,7 +19,30 @@ public final class ClipExportAccess: Sendable {
     }
     /// 每个项目独立延迟读取，版本复查后才向目标返回真实格式。
     public func itemData(index: Int, type: String) throws -> Data {
-        try itemPayload(index: index, type: type).data
+        let payload = try itemPayload(index: index, type: type)
+        guard type == SupportedType.fileURL,
+              let url = PasteboardItemValue([.init(type, payload.data)]).fileURL else { return payload.data }
+        // 拖放与普通复制使用相同的失效路径回退。
+        let db = try SQLiteConnection(database, readonly: true); defer { try? db.close() }
+        try validate(db)
+        let root = database.deletingLastPathComponent().deletingLastPathComponent()
+        let restored = try CachedFileCopy.restoreIfNeeded(url, db: db, id: id, index: index, root: root)
+        try checkValid()
+        return restored.map { Data($0.absoluteString.utf8) } ?? payload.data
+    }
+    /// 另存为保留原文件名，只读取副本是否存在，不提前加载正文。
+    public func savedFileName(index: Int) throws -> String? {
+        let db = try SQLiteConnection(database, readonly: true); defer { try? db.close() }; try validate(db)
+        guard try db.scalarInt("SELECT COUNT(*) FROM file_copies WHERE clipID=? AND itemIndex=?", [.text(id), .integer(Int64(index))]) == 1 else { return nil }
+        let original = try itemPayload(index: index, type: SupportedType.fileURL).data
+        return PasteboardItemValue([.init(SupportedType.fileURL, original)]).fileURL?.lastPathComponent
+    }
+    /// 另存为直接使用已验证的历史副本，不依赖原路径或生成临时文件。
+    public func savedFileData(index: Int) throws -> Data {
+        let db = try SQLiteConnection(database, readonly: true); defer { try? db.close() }; try validate(db)
+        guard let payload = try CachedFileCopy.read(db, id: id, index: index) else { throw StoreError.notFound }
+        try checkValid()
+        return payload.data
     }
     private func itemPayload(index: Int, type: String) throws -> VerifiedExportPayload {
         let db = try SQLiteConnection(database, readonly: true); defer { try? db.close() }; try validate(db)

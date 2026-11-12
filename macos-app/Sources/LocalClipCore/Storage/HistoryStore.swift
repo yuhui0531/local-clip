@@ -57,8 +57,15 @@ public actor HistoryStore: HistoryRepository {
             guard version == 5 || version == Schema.version else { try db.close(); throw StoreError.incompatibleSchema }
             guard try db.scalarText("PRAGMA quick_check") == "ok", try db.rows("PRAGMA foreign_key_check").isEmpty else { throw StoreError.corruptPayload }
             let hasImageText = try db.scalarInt("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='image_text'") == 1
+            let hasFileCopies = try db.scalarInt("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='file_copies'") == 1
             try db.close()
-            if version == 5 { try strategy.commit(quota: .max, allowOverQuota: true) { try Schema.migrateV5($0) } }
+            // 旧版本迁移和副本表补建共用一次提交，避免升级停在中间状态。
+            if version == 5 || !hasFileCopies {
+                try strategy.commit(quota: .max, allowOverQuota: true) { db in
+                    if version == 5 { try Schema.migrateV5(db) }
+                    if !hasFileCopies { try db.exec(Schema.fileCopiesSQL) }
+                }
+            }
             // 同版本旧库只在单一事务内补建空派生表，不改动已有表与数据；失败回滚，原库保持可用。
             if hasImageText { imageTextReady = true }
             else {
@@ -273,7 +280,19 @@ public actor HistoryStore: HistoryRepository {
         if let existing, try strategy.read({ try $0.scalarText("SELECT lastOperationID FROM store_meta") }) == snapshot.captureID {
             return .deduplicated(existing.text("id"))
         }
-        try mutate(operation: snapshot.captureID, quota: settings.quotaBytes, growth: payload.byteCount + Int64(payload.items.count) * 8192 + 64 * 1024, trim: true, protectedID: id) { db in
+        // 旧快照晚到时保留较新记录的副本；单次采集的原始表示和副本共用 50 MiB 上限。
+        var copies: [(Int, VerifiedExportPayload)] = []
+        var remaining = Int(50 * MiB - payload.byteCount)
+        if existing.map({ at >= $0.int("lastCopiedAtMs") }) ?? true {
+            for (index, item) in payload.items.enumerated() {
+                guard let url = item.fileURL,
+                      let data = CachedFileCopy.capture(url, limit: remaining, storeRoot: strategy.root) else { continue }
+                copies.append((index, VerifiedExportPayload(data)))
+                remaining -= data.count
+            }
+        }
+        let copyBytes = copies.reduce(Int64(0)) { $0 + Int64($1.1.data.count) }
+        try mutate(operation: snapshot.captureID, quota: settings.quotaBytes, growth: payload.byteCount + copyBytes + Int64(payload.items.count) * 8192 + 64 * 1024, trim: true, protectedID: id) { db in
             if let existing {
                 // 补存的旧快照晚于同内容的新复制落库：只计这一次复制，不把时间、来源和分类次序回退到更早状态，by AI.Coding。
                 if at < existing.int("lastCopiedAtMs") {
@@ -319,6 +338,14 @@ public actor HistoryStore: HistoryRepository {
                 if let thumbnail = snapshot.thumbnail, thumbnail.count <= 16 * MiB {
                     try db.run("INSERT INTO thumbnails VALUES(?,?,?,?)", [.text(id), .integer(0), .blob(thumbnail), .integer(Int64(thumbnail.count))])
                 }
+            }
+            // 与引用在同一事务提交；相同路径再次捕获时，仅用成功读取的新字节更新副本。
+            for (index, copy) in copies {
+                try db.run("""
+                    INSERT INTO file_copies VALUES(?,?,?,?,?)
+                    ON CONFLICT(clipID,itemIndex) DO UPDATE SET digest=excluded.digest,byteCount=excluded.byteCount,payload=excluded.payload
+                    WHERE file_copies.digest<>excluded.digest
+                    """, [.text(id), .integer(Int64(index)), .text(copy.digest), .integer(Int64(copy.data.count)), .blob(copy.data)])
             }
         }
         return existing == nil ? .inserted(id) : .deduplicated(id)
@@ -374,6 +401,15 @@ public actor HistoryStore: HistoryRepository {
         guard payload.fingerprint == storedHash else { throw StoreError.corruptPayload }
         return payload
     }
+    /// 先按原始引用校验指纹，随后仅为失效路径恢复可复制的文件 URL。
+    private func resolvedPayload(_ db: SQLiteConnection, id: ClipID) throws -> ClipboardPayload {
+        let original = try readPayload(db, id: id)
+        return try ClipboardPayload(original.items.enumerated().map { index, item in
+            guard let url = item.fileURL, let restored = try CachedFileCopy.restoreIfNeeded(url, db: db, id: id, index: index, root: strategy.root) else { return item }
+            let reps = item.representations.map { $0.type == SupportedType.fileURL ? Representation($0.type, Data(restored.absoluteString.utf8)) : $0 }
+            return PasteboardItemValue(reps, declaredTypes: item.declaredTypes, plainText: item.plainText)
+        })
+    }
     /// 同一可见性规则覆盖详情和恢复。
     public func detail(id: ClipID, at: Instant) throws -> ClipDetail {
         try Task.checkCancellation()
@@ -382,7 +418,7 @@ public actor HistoryStore: HistoryRepository {
             guard let row = try db.rows("SELECT *, (\(protectedSQL)) AS isProtected FROM clips WHERE id=?", [.text(id)]).first,
                   visible(row, at: at, settings: settings) else { throw StoreError.notFound }
             let categoryIDs = Set(try db.rows("SELECT categoryID FROM clip_categories WHERE clipID=?", [.text(id)]).map { $0.text("categoryID") })
-            return ClipDetail(summary: summary(row), payload: try readPayload(db, id: id), revision: try self.revision(db), categoryIDs: categoryIDs)
+            return ClipDetail(summary: summary(row), payload: try resolvedPayload(db, id: id), revision: try self.revision(db), categoryIDs: categoryIDs)
         }
     }
     /// 选择/异步缩略图复查只读索引与摘要，不读取BLOB或计算内容哈希。
@@ -990,8 +1026,10 @@ public actor HistoryStore: HistoryRepository {
         let total = try CommitStrategy.bytes(strategy.databaseURL.deletingLastPathComponent()) + pending + temporary
         let values = try strategy.read { db -> (Int64, Int64) in
             let favorite = try db.scalarInt("SELECT COALESCE(SUM(byteCount),0) FROM blobs WHERE EXISTS(SELECT 1 FROM representations JOIN clips ON clips.id=representations.clipID WHERE blobDigest=blobs.digest AND (\(protectedSQL)))")
-            let all = try db.scalarInt("SELECT COALESCE(SUM(byteCount),0) FROM blobs")
-            return (favorite, all - favorite)
+            // 副本按所属记录计入历史载荷，物理配额仍由数据库实际占用决定。
+            let protectedCopies = try db.scalarInt("SELECT COALESCE(SUM(byteCount),0) FROM file_copies JOIN clips ON clips.id=file_copies.clipID WHERE " + protectedSQL)
+            let all = try db.scalarInt("SELECT (SELECT COALESCE(SUM(byteCount),0) FROM blobs) + (SELECT COALESCE(SUM(byteCount),0) FROM file_copies)")
+            return (favorite + protectedCopies, all - favorite - protectedCopies)
         }
         return StorageUsage(measuredTotal: total, favoritePayload: values.0, normalPayload: values.1,
             common: max(0, total - pending - temporary - values.0 - values.1), pending: pending, temporary: temporary)
@@ -1237,7 +1275,8 @@ public actor HistoryStore: HistoryRepository {
         let metadata = try db.scalarInt("SELECT COALESCE(SUM(length(CAST(previewText AS BLOB))+COALESCE(length(CAST(title AS BLOB))*2,0)),0) FROM clips WHERE id IN(" + placeholders + ")", values)
         let texts = try db.scalarInt("SELECT COALESCE(SUM(length(CAST(plainText AS BLOB))+length(CAST(normalizedText AS BLOB))),0) FROM text_content WHERE clipID IN(" + placeholders + ")", values)
         let declarations = try db.scalarInt("SELECT COALESCE(SUM(length(CAST(declaredTypes AS BLOB))),0) FROM items WHERE clipID IN(" + placeholders + ")", values)
-        let total = bytes + metadata + texts + declarations + Int64(existing.count) * 8192
+        let copies = try db.scalarInt("SELECT COALESCE(SUM(byteCount),0) FROM file_copies WHERE clipID IN(" + placeholders + ")", values)
+        let total = bytes + copies + metadata + texts + declarations + Int64(existing.count) * 8192
         return (existing, protectedCount, total <= 50 * MiB ? total : nil)
     }
     /// 删除包只驻留内存；预览与提交共享预算，超限不读取大正文。
@@ -1251,7 +1290,7 @@ public actor HistoryStore: HistoryRepository {
             let blobCondition = "digest IN(SELECT blobDigest FROM representations WHERE clipID IN(" + placeholders + "))"
             var tables: [String: [[String: SQLValue]]] = [:]
             tables["clips"] = try db.rows("SELECT * FROM clips WHERE id IN(" + placeholders + ")", values)
-            for table in ["items", "representations", "text_content", "clip_categories"] + (imageTextReady ? ["image_text"] : []) {
+            for table in ["items", "representations", "text_content", "clip_categories", "file_copies"] + (imageTextReady ? ["image_text"] : []) {
                 tables[table] = try db.rows("SELECT * FROM " + table + " WHERE clipID IN(" + placeholders + ")", values)
             }
             tables["blobs"] = try db.rows("SELECT * FROM blobs WHERE " + blobCondition, values)
@@ -1277,7 +1316,7 @@ public actor HistoryStore: HistoryRepository {
                 let withinRetention = retentionCutoff(settings: settings, at: at).map { row.int("lastCopiedAtMs") > $0 } ?? true
                 guard row.int("isFavorite") == 1 || protected || withinRetention else { throw StoreError.notFound }
             }
-            for table in ["clips", "items", "blobs", "representations", "text_content", "clip_categories", "image_text"] {
+            for table in ["clips", "items", "blobs", "representations", "text_content", "clip_categories", "file_copies", "image_text"] {
                 for row in packet.tables[table] ?? [] {
                     if table == "clip_categories", try db.scalarInt("SELECT COUNT(*) FROM categories WHERE id=?", [.text(row.text("categoryID"))]) == 0 { continue }
                     let columns = row.keys.sorted()
@@ -1326,9 +1365,9 @@ public actor HistoryStore: HistoryRepository {
     }
     /// 仅删除本次新建路径，沿用统一输出目录边界检查，by AI.Coding。
     public func removeDragFiles(_ files: [URL]) throws { try DragFileStorage.remove(files, root: strategy.root) }
-    /// 拖出图片文件的实际占用，供设置页手动清理入口展示，by AI.Coding。
+    /// 历史输出文件的实际占用，供设置页手动清理入口展示，by AI.Coding。
     public func dragFilesBytes() throws -> Int64 { try CommitStrategy.bytes(strategy.root.appendingPathComponent("DragFiles"), countHardLinksOnce: true) }
-    /// 用户确认后整体删除；只引用这些路径的文档会失去图片，历史记录不受影响，by AI.Coding。
+    /// 用户确认后整体删除；只引用这些路径的文档会失去对应文件，历史中的副本仍可重新输出，by AI.Coding。
     public func clearDragFiles() throws {
         let directory = strategy.root.appendingPathComponent("DragFiles")
         if FileManager.default.fileExists(atPath: directory.path) { try FileManager.default.removeItem(at: directory) }

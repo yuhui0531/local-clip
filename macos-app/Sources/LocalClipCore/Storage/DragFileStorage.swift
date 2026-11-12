@@ -8,10 +8,14 @@ enum DragFileStorage {
         return try write(VerifiedExportPayload(data), root: root, fileName: fileName)
     }
     /// 命中缓存先核验字节；已被外部修改的路径保留，新的拖出使用独立副本。
-    static func write(_ payload: VerifiedExportPayload, root: URL, fileName: String) throws -> (url: URL, created: Bool) {
+    /// 历史副本保留来源文件名和扩展名，普通图片导出仍限定已有的图片格式。
+    static func write(_ payload: VerifiedExportPayload, root: URL, fileName: String, isFileCopy: Bool = false) throws -> (url: URL, created: Bool) {
         let data = payload.data
-        guard !fileName.isEmpty, !fileName.contains("/"), !fileName.hasPrefix("."),
-              ["png", "tiff", "jpg"].contains(URL(fileURLWithPath: fileName).pathExtension), data.count <= 50 * MiB else { throw StoreError.invalidSettings }
+        guard !fileName.isEmpty, !fileName.contains("/"), fileName != ".", fileName != "..",
+              data.count <= 50 * MiB else { throw StoreError.invalidSettings }
+        if !isFileCopy {
+            guard !fileName.hasPrefix("."), ["png", "tiff", "jpg"].contains(URL(fileURLWithPath: fileName).pathExtension) else { throw StoreError.invalidSettings }
+        }
         let folder = root.appendingPathComponent("DragFiles/" + payload.digest, isDirectory: true)
         var file = folder.appendingPathComponent(fileName)
         let fm = FileManager.default
@@ -20,7 +24,8 @@ enum DragFileStorage {
                attributes[.size] as? Int == data.count,
                (try? Data(contentsOf: file, options: .mappedIfSafe)) == data { return (file, false) }
             // 旧路径可能被文档引用，不覆盖、不删除；新副本仍来自已验证原始载荷。
-            file = folder.appendingPathComponent(file.deletingPathExtension().lastPathComponent + "-" + UUID().uuidString).appendingPathExtension(file.pathExtension)
+            let extensionSuffix = file.pathExtension.isEmpty ? "" : "." + file.pathExtension
+            file = folder.appendingPathComponent(file.deletingPathExtension().lastPathComponent + "-" + UUID().uuidString + extensionSuffix)
         }
         let filesystem = try fm.attributesOfFileSystem(forPath: root.path)
         guard let free = filesystem[.systemFreeSize] as? NSNumber,
