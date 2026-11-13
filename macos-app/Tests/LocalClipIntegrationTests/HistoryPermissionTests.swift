@@ -25,6 +25,61 @@ import LocalClipCore
         while !condition(), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
         #expect(condition())
     }
+    /// 在第一次粘贴写入后、焦点稳定前重入两个入口，保留第一次的结果，by AI.Coding。
+    @Test func repeatedPasteProducesNoFailureFeedback() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try HistoryStore(location: root)
+        let payload = ClipboardPayload([.init([.init(SupportedType.string, Data("paste feedback".utf8))])])
+        guard case .inserted(let id) = try await store.ingest(.init(payload: payload), at: SystemClock().now()) else {
+            Issue.record("未保存测试记录")
+            return
+        }
+        let board = MacPasteboardClient(access: RawBoard())
+        let capture = CaptureCoordinator(board: board, store: store)
+        let apps = FakeApplications()
+        let paste = PasteCoordinator(board: board, applications: apps, store: store, capture: capture)
+        let model = HistoryViewModel(store: store, capture: capture, paste: paste, derived: DerivedContentService(store: store))
+        try await model.start()
+        capture.stop()
+        try await until { model.items.contains { $0.id == id } }
+        model.select(id)
+        model.target = apps.remembered
+        var feedback: [Bool] = []
+        model.showPasteFeedback = { _, failed in feedback.append(failed) }
+        apps.onRestore = { [weak model] in
+            model?.perform(action: .directPaste, ids: [id])
+            model?.doubleClick(id)
+        }
+        model.perform(action: .directPaste, ids: [id])
+        try await until { apps.events == 1 && model.message == PasteResult.commandSent.message }
+        #expect(feedback.isEmpty)
+    }
+
+    /// 回退内容已写入测试剪贴板；提示使用复制图标，by AI.Coding。
+    @Test func fallbackUsesClipboardFeedback() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try HistoryStore(location: root)
+        let data = Data("fallback content".utf8)
+        let payload = ClipboardPayload([.init([.init(SupportedType.string, data)])])
+        guard case .inserted(let id) = try await store.ingest(.init(payload: payload), at: SystemClock().now()) else {
+            Issue.record("未保存测试记录")
+            return
+        }
+        let raw = RawBoard()
+        let board = MacPasteboardClient(access: raw)
+        let capture = CaptureCoordinator(board: board, store: store)
+        let paste = PasteCoordinator(board: board, applications: FakeApplications(), store: store, capture: capture)
+        let model = HistoryViewModel(store: store, capture: capture, paste: paste, derived: DerivedContentService(store: store))
+        var feedback: [Bool] = []
+        model.showPasteFeedback = { _, failed in feedback.append(failed) }
+        model.perform(action: .directPaste, ids: [id])
+        try await until { !feedback.isEmpty }
+        #expect(feedback == [false])
+        #expect(raw.items.first?[SupportedType.string] == data)
+    }
+
     /// 置顶可见时自动同步；隐藏期间授权则重开立即同步，且不能补发旧粘贴。
     @Test(arguments: [false, true]) func grantedPermissionClearsOnlyPendingWarning(reopen: Bool) async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

@@ -512,7 +512,11 @@ private struct ManagerDetail: View {
                     Button("预览") { model.preview(row.id) }.help("空格预览，再按空格或Esc关闭")
                 }
                 if hasOCR { Button("复制图中文字") { history.copyImageText(id: row.id) } }
-                if !urls.isEmpty { Button("在访达中显示") { NSWorkspace.shared.activateFileViewerSelecting(urls.filter { FileManager.default.fileExists(atPath: $0.path) }) } }
+                let existingURLs = urls.filter { FileManager.default.fileExists(atPath: $0.path) }
+                if !urls.isEmpty {
+                    Button("在访达中显示") { NSWorkspace.shared.activateFileViewerSelecting(existingURLs) }
+                        .disabled(existingURLs.isEmpty)
+                }
                 if urls.isEmpty, let link = HistoryViewModel.openTargets(detail.payload).first { Button("打开链接") { NSWorkspace.shared.open(link) } }
                 Spacer()
                 Button("复制") { model.copy([row.id]) }.buttonStyle(.borderedProminent).help("复制 · ↩")

@@ -19,7 +19,7 @@
   - 超配额、故障注入或任何错误 → `ROLLBACK`；`dryRun`（容量预览、`canCapture`）执行同样变更后回滚。
   - 只有首次建库使用 staging 候选库 + `rename` 发布，保证不会出现半份 schema。
   - 启动 `recover()` 清理 staging 与崩溃遗留的非热日志，并做 `quick_check`；完整 `integrity_check` 由维护任务在面板隐藏时每天执行一次（在存储 actor 内，期间写入排队而不会因锁超时失败；仅确认损坏时进入不可用流程）。
-- **Schema 版本**：当前 v4，卡片名称存于 `clips.title/normalizedTitle`。全新开发阶段不做旧库升级：版本不等的库拒绝打开且不修改文件。
+- **Schema 版本**：当前 v6，卡片名称存于 `clips.title/normalizedTitle`。支持 v5 到 v6 的单事务迁移。低于 v5 或高于 v6 的库会被拒绝打开，原库文件保持原样。
 - **派生数据**：缩略图在采集后台解码阶段生成并随记录同一事务写入 `thumbnails`；旧记录首次展示时补写，不递增 storeRevision。
 
 ## 采集 → 入库

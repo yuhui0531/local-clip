@@ -65,6 +65,37 @@ struct HistoryReorderTests {
         try await store.touch(ids: [ids[2], ids[3]], at: clock.now())
         #expect(try await store.search(.init(sort: .manual)).items.prefix(2).map(\.id) == [ids[2], ids[3]])
     }
+    /// 外键损坏不会阻止 ALTER TABLE；打开时仍须在迁移提交前拒绝旧库，by AI.Coding。
+    @Test func corruptV5IsRejectedWithoutChangingDatabase() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        _ = try HistoryStore(location: root)
+        let database = root.appendingPathComponent("History/history.sqlite")
+        let db = try SQLiteConnection(database)
+        try db.exec("""
+        DROP INDEX manual_order;
+        ALTER TABLE clips DROP COLUMN manualPosition;
+        UPDATE settings SET schemaVersion=5;
+        UPDATE store_meta SET schemaVersion=5;
+        PRAGMA user_version=5;
+        PRAGMA foreign_keys=OFF;
+        INSERT INTO items VALUES('missing-clip',0,'[]');
+        """)
+        #expect(try db.scalarText("PRAGMA quick_check") == "ok")
+        #expect(try !db.rows("PRAGMA foreign_key_check").isEmpty)
+        try db.close()
+        let before = try Data(contentsOf: database)
+        // 在副本上确认仅靠迁移事务不能保护损坏的 v5：升级能提交，但外键仍损坏，by AI.Coding。
+        let copy = try CommitStrategy(root: root.appendingPathComponent("MigrationProbe"))
+        try FileManager.default.copyItem(at: database, to: copy.databaseURL)
+        try copy.commit(quota: .max, allowOverQuota: true) { try Schema.migrateV5($0) }
+        #expect(try copy.read { try $0.scalarInt("PRAGMA user_version") } == 6)
+        #expect(try copy.read { try !$0.rows("PRAGMA foreign_key_check").isEmpty })
+        #expect(try Data(contentsOf: copy.databaseURL) != before)
+        #expect(throws: StoreError.corruptPayload) { _ = try HistoryStore(location: root) }
+        #expect(try Data(contentsOf: database) == before)
+    }
+
     /// v5升级保持内容与时间，升级及排序提交前故障均回滚到完整旧态。
     @Test func migrationAndReorderRollback() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

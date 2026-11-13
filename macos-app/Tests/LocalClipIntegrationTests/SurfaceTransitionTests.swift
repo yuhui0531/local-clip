@@ -192,6 +192,8 @@ import LocalClipCore
         #expect(values.first == 0); #expect(values.last == 1)
         #expect(zip(values, values.dropFirst()).allSatisfy { $0 <= $1 })
         #expect(SurfaceMotion.value(from: 0.37, to: 0, progress: 0) == 0.37)
-        #expect(SurfaceMotion.duration(reduceMotion: true) < SurfaceMotion.duration(reduceMotion: false))
+        #expect(SurfaceMotion.duration(reduceMotion: false) == 0.20)
+        #expect(SurfaceMotion.duration(reduceMotion: false, cardsEntrance: true) == 0.12)
+        #expect(SurfaceMotion.duration(reduceMotion: true, cardsEntrance: true) == SurfaceMotion.duration(reduceMotion: true))
     }
 }

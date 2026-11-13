@@ -41,7 +41,10 @@ enum AppSurface: Hashable { case cards, settings, manager }
 
 /// 动效插值保持单调，不回弹；减少动态效果仍保留短淡化。
 enum SurfaceMotion {
-    static func duration(reduceMotion: Bool) -> Double { reduceMotion ? 0.10 : 0.20 }
+    static func duration(reduceMotion: Bool, cardsEntrance: Bool = false) -> Double {
+        if reduceMotion { return 0.10 }
+        return cardsEntrance ? 0.12 : 0.20
+    }
     static func value(from: Double, to: Double, progress: Double) -> Double {
         let t = min(1, max(0, progress)), eased = t * t * (3 - 2 * t)
         return from + (to - from) * eased
@@ -52,19 +55,21 @@ enum SurfaceMotion {
 @MainActor final class SurfaceAnimator {
     private var task: Task<Void, Never>?
     /// 所有非目标窗口只绘制、不交互；结束操作由宿主按当前代次决定。
-    func animate(_ windows: [(NSWindow, Double)], reduceMotion: Bool, completion: @escaping () -> Void) {
+    func animate(_ windows: [(NSWindow, Double)], reduceMotion: Bool, cardsEntrance: NSWindow? = nil, completion: @escaping () -> Void) {
         task?.cancel()
         let starts = windows.map { $0.0.alphaValue }
+        // 面板淡入可先完成，离场窗口仍按自身时长释放，by AI.Coding。
+        let durations = windows.map { SurfaceMotion.duration(reduceMotion: reduceMotion, cardsEntrance: $0.0 === cardsEntrance) }
+        let duration = durations.max() ?? SurfaceMotion.duration(reduceMotion: reduceMotion)
         task = Task {
-            let start = ContinuousClock.now, duration = SurfaceMotion.duration(reduceMotion: reduceMotion)
+            let start = ContinuousClock.now
             while !Task.isCancelled {
                 let elapsed = start.duration(to: .now).components
                 let seconds = Double(elapsed.seconds) + Double(elapsed.attoseconds) / 1e18
-                let progress = min(1, seconds / duration)
                 for (index, pair) in windows.enumerated() {
-                    pair.0.alphaValue = SurfaceMotion.value(from: starts[index], to: pair.1, progress: progress)
+                    pair.0.alphaValue = SurfaceMotion.value(from: starts[index], to: pair.1, progress: seconds / durations[index])
                 }
-                if progress >= 1 { completion(); return }
+                if seconds >= duration { completion(); return }
                 do { try await Task.sleep(for: .milliseconds(8)) } catch { return }
             }
         }

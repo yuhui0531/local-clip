@@ -78,7 +78,8 @@ import LocalClipCore
         #expect(try await store.textCharacterCount(id: id, at: SystemClock().now()) == revised.count)
         #expect(try await store.loadPayload(id: id, at: SystemClock().now()).plainText == revised)
         model.select(id); model.perform(.original, action: .copy)
-        try await wait { raw.items.first?[SupportedType.string] == Data(revised.utf8) }
+        // 剪贴板写入发生在输出收尾之前，等复制完成再发起下一次操作，by AI.Coding。
+        try await wait { model.message == "已复制" && raw.items.first?[SupportedType.string] == Data(revised.utf8) }
         model.target = apps.remembered; model.perform(.original, action: .directPaste)
         try await wait { apps.events == 1 }
         #expect(raw.items.first?[SupportedType.string] == Data(revised.utf8))

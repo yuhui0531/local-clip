@@ -3,6 +3,7 @@ import AppKit
 import SwiftUI
 import Carbon
 import ApplicationServices
+import OSLog
 import LocalClipCore
 @MainActor final class ClipPanel: NSPanel {
     /// Esc与取消命令：先经模型分级处理，最后才收起面板，by AI.Coding。
@@ -45,29 +46,28 @@ import LocalClipCore
     private var surfaceConfirmation: SurfaceConfirmation?
     private var managerBrowsing: HistoryManagerModel.BrowsingState?
     private var settingsSection = SettingsSection.general
-    #if DEBUG
-    /// 静默集成测试仅绕过可见呈现，查询、保护、动画代次和释放仍使用生产路径。
+    // Release 基准也走真实请求和布局；提交探针代替窗口置前，by AI.Coding。
     private var hiddenSurfaceTest = false
+    private var historySubmissionForTesting: ((ContinuousClock.Instant) -> Void)?
+    #if DEBUG
     var surfaceWindowsForTesting: (NSWindow?, NSWindow?, NSWindow?) { (panel, settingsWindow, managerWindow) }
     var surfaceManagerForTesting: HistoryManagerModel? { manager }
     var surfaceChoiceForTesting: ((String) async -> SurfaceEdits.Choice)?
     /// 测试控制已确认关闭后的释放时序，窗口保持隐藏，by AI.Coding。
     var beforeCloseReleaseForTesting: (() async -> Void)?
-    func configureSurfacesForTesting(_ history: HistoryViewModel) {
+    func switchSurfaceForTesting(_ surface: AppSurface?) { requestSurface(surface) }
+    #endif
+    func configureSurfacesForTesting(_ history: HistoryViewModel, onSubmission: ((ContinuousClock.Instant) -> Void)? = nil) {
         model = history; hiddenSurfaceTest = true
+        historySubmissionForTesting = onSubmission
         history.closePanel = { [weak self] animated in
             if animated { self?.requestSurface(nil) } else { self?.dismissHistory(animated: false) }
         }
     }
-    func switchSurfaceForTesting(_ surface: AppSurface?) { requestSurface(surface) }
-    #endif
-    /// 测试窗口始终隐藏；发布构建不存在替换开关。
-    private var presentsSurfaces: Bool {
-        #if DEBUG
-        if hiddenSurfaceTest { return false }
-        #endif
-        return true
-    }
+    func toggleHistoryForTesting() { toggleHistory() }
+
+    // 隐藏开关仅由测试配置入口设置，应用运行时入口不会设置它，by AI.Coding。
+    private var presentsSurfaces: Bool { !hiddenSurfaceTest }
 
     private var feedbackPanel: NSPanel?
     private var feedbackTask: Task<Void, Never>?
@@ -133,11 +133,11 @@ import LocalClipCore
     }
     /// 获得独占启动权限后自动监听，恢复与隐私检查仍先于正文采集，by AI.Coding。
     private func startServices() {
-        makeMenu()
+        if status == nil { makeMenu() }
         let location = Self.storageLocation()
         do {
             let initialSettings = SettingsSnapshot()
-            let store = try HistoryStore(location: location, initialSettings:initialSettings, extractor: ContentDecoder.extract)
+            let store = try HistoryStore(location: location, initialSettings: initialSettings, extractor: ContentDecoder.extract)
             let access: NativePasteboardAccess
             #if DEBUG
             if GUIAcceptanceProbe.usesExternalPasteboard { access = NativePasteboardAccess() }
@@ -242,7 +242,64 @@ import LocalClipCore
                 }
             }
         } catch {
-            let alert = NSAlert(); alert.messageText = "LocalClip 无法打开存储"; alert.informativeText = "原库未覆盖。请检查磁盘、权限或数据库版本。错误类别：\(error)"; alert.runModal()
+            switch promptToRetryStorage(error) {
+            case .retry:
+                // 结束本次模态调用后再进入启动流程，连续重试不叠加调用栈，by AI.Coding。
+                Task { [weak self] in self?.startServices() }
+            case .quit: quitApplication(nil)
+            case .stopShowing: break
+            case .revealDirectory, .showAgain: assertionFailure("Unexpected storage prompt outcome")
+            }
+        }
+    }
+
+    nonisolated static func storageOpenFailureMessage(_ error: any Error) -> String {
+        switch error as? StoreError {
+        case .incompatibleSchema:
+            return "数据库版本与当前 LocalClip 不兼容。请使用支持该版本的 LocalClip。"
+        case .corruptPayload:
+            return "数据库完整性检查未通过。请检查或备份数据目录后重试。"
+        case .diskFull:
+            return "磁盘空间不足，无法打开数据库。请释放磁盘空间后重试。"
+        default:
+            return "无法读写数据库。请检查磁盘和数据目录的访问权限后重试。"
+        }
+    }
+
+    enum StoragePromptAction: Equatable { case retry, revealDirectory, quit, showAgain, stopShowing }
+    private static let storageLogger = Logger(subsystem: "local.localclip", category: "StorageRecovery")
+
+    /// 非按钮返回值只能重新显示或停止弹窗，不能触发退出，by AI.Coding。
+    nonisolated static func storagePromptAction(response: Int, consecutiveUnexpected: Int) -> StoragePromptAction {
+        switch response {
+        case NSApplication.ModalResponse.alertFirstButtonReturn.rawValue: return .retry
+        case NSApplication.ModalResponse.alertSecondButtonReturn.rawValue: return .revealDirectory
+        case NSApplication.ModalResponse.alertThirdButtonReturn.rawValue: return .quit
+        default: return consecutiveUnexpected >= 2 ? .stopShowing : .showAgain
+        }
+    }
+
+    /// 访达切走焦点后使用新的模态窗口；限制异常返回的重试次数，by AI.Coding。
+    private func promptToRetryStorage(_ error: any Error) -> StoragePromptAction {
+        var consecutiveUnexpected = 0
+        while true {
+            let alert = NSAlert()
+            alert.messageText = "LocalClip 无法打开存储"
+            alert.informativeText = Self.storageOpenFailureMessage(error)
+            alert.addButton(withTitle: "重试")
+            alert.addButton(withTitle: "在访达中显示数据目录")
+            alert.addButton(withTitle: "退出").keyEquivalent = "\u{1b}"
+            let response = alert.runModal().rawValue
+            Self.storageLogger.notice("\(response, privacy: .public)")
+            let action = Self.storagePromptAction(response: response, consecutiveUnexpected: consecutiveUnexpected)
+            switch action {
+            case .revealDirectory:
+                consecutiveUnexpected = 0
+                NSWorkspace.shared.activateFileViewerSelecting([Self.storageLocation()])
+                NSApp.activate()
+            case .showAgain: consecutiveUnexpected += 1
+            case .retry, .quit, .stopShowing: return action
+            }
         }
     }
     /// 同版本再次打开直接显示历史；只有磁盘上已安装新版本时才启动新实例接替，by AI.Coding。
@@ -469,12 +526,13 @@ import LocalClipCore
     @objc private func stopPasteQueue() { model?.stopPasteQueue() }
     /// 同一快捷键按实际可见状态切换；关闭不刷新历史或重记粘贴目标。
     private func toggleHistory() {
-        requestSurface((requestedSurface ?? activeSurface) == .cards ? nil : .cards)
+        let began = model?.settings.timingEnabled == true ? ContinuousClock.now : nil
+        requestSurface((requestedSurface ?? activeSurface) == .cards ? nil : .cards, historyToggleBegan: began)
     }
     /// 记住外部目标后展示面板，铺满当前显示器底边，禁止拖动和缩放。
     @objc public func showHistory() { requestSurface(.cards) }
     /// 卡片布局与目标记忆沿用原逻辑，透明度由统一切换器控制。
-    private func presentHistory() {
+    private func presentHistory(toggleBegan: ContinuousClock.Instant?) {
         guard let model else { return }
         let began = ContinuousClock.now
         applications.timingEnabled = model.settings.timingEnabled
@@ -482,14 +540,16 @@ import LocalClipCore
         defer { if model.settings.timingEnabled { StageTiming.record("show_history_submitted", since: began, count: 1) } }
         focusState.ownedInteraction()
         focusDismissal?.cancel(); model.showingDetail = false; model.showingCategoryEditor = false
-        if let target = applications.target() {
-            lastExternal = target
-            // 必须先取外部输入控件身份，再把非激活面板搜索框设为key。
-            applications.rememberFocus(for: target)
-        } else if panel?.isKeyWindow != true {
-            applications.rememberFocus(for: nil)
+        if presentsSurfaces {
+            if let target = applications.target() {
+                lastExternal = target
+                // 必须先取外部输入控件身份，再把非激活面板搜索框设为key。
+                applications.rememberFocus(for: target)
+            } else if panel?.isKeyWindow != true {
+                applications.rememberFocus(for: nil)
+            }
         }
-        let screen = targetScreen()
+        let screen = presentsSurfaces ? targetScreen() : NSScreen.main
         let rect = screen?.frame ?? NSRect(x: 0, y: 0, width: 1400, height: 380)
         let panelHeight = Self.clampedPanelHeight(model.settings.panelHeight, screenHeight: rect.height)
         model.configureHistoryViewport(width: rect.width, cardWidth: HistoryView.cardSide(height: panelHeight))
@@ -517,7 +577,12 @@ import LocalClipCore
             panel.contentView?.layoutSubtreeIfNeeded()
             panel.contentView?.displayIfNeeded()
             panelPresented = true
-            if presentsSurfaces { panel.makeKeyAndOrderFront(nil) }
+            if presentsSurfaces {
+                panel.makeKeyAndOrderFront(nil)
+                if let toggleBegan { StageTiming.record("toggle_history_submitted", since: toggleBegan, count: 1) }
+            } else if let toggleBegan {
+                historySubmissionForTesting?(toggleBegan)
+            }
             // 上次关闭时若停在搜索框，重新呼出也回到结果区。
             panel.makeFirstResponder(panel)
             // 置前后的首次提交（窗口服务器同步）立即完成，不占用随后淡入与位移动画的前几帧，by AI.Coding。
@@ -859,7 +924,7 @@ import LocalClipCore
     func showHistoryManager(reveal ids: [ClipID] = []) { requestSurface(.manager, reveal: ids) }
 
     /// 已有确认不接受排队；草稿确认期间冻结原目标。普通动画则允许随时改向。
-    private func requestSurface(_ destination: AppSurface?, reveal ids: [ClipID] = []) {
+    private func requestSurface(_ destination: AppSurface?, reveal ids: [ClipID] = [], historyToggleBegan: ContinuousClock.Instant? = nil) {
         guard let model, !model.surfaceEdits.resolving else { return }
         let windows = [managerWindow, settingsWindow, panel].compactMap { $0 }
         let contentEditor = manager?.editor ?? (model.contentEditorPresented ? model.contentEditor : nil)
@@ -920,7 +985,7 @@ import LocalClipCore
             guard !Task.isCancelled, request == self.surfaceRequestID else { return }
             if destination == nil { self.closingHistorySession = true }
             self.requestedSurface = destination
-            await self.prepareSurface(destination, reveal: ids, request: request)
+            await self.prepareSurface(destination, reveal: ids, request: request, historyToggleBegan: historyToggleBegan)
         }
     }
     /// 未提交编辑的保存结果决定是否继续；取消后恢复原来的第一响应者。
@@ -960,7 +1025,7 @@ import LocalClipCore
         window.orderFrontRegardless()
     }
     /// 新窗口在透明状态下完成布局，旧窗口仍保留画面，内容就绪后才开始交接。
-    private func prepareSurface(_ destination: AppSurface?, reveal ids: [ClipID], request: UUID) async {
+    private func prepareSurface(_ destination: AppSurface?, reveal ids: [ClipID], request: UUID, historyToggleBegan: ContinuousClock.Instant?) async {
         guard let model else { return }
         let target: NSWindow?
         switch destination {
@@ -984,14 +1049,14 @@ import LocalClipCore
         }
         // 隐藏期间的首屏准备未完成时至多等80ms，首帧即最新列表；超时由打开后的首屏刷新兜底，by AI.Coding。
         if destination == .cards, panel?.isVisible != true { await model.awaitHiddenFirstScreen(timeout: .milliseconds(80)) }
-        // 给 SwiftUI 首次布局与窗口服务器提交留出稳定帧；取消时新请求接管已有窗口。
-        if destination != nil {
+        // 未预热的界面仍需给首次布局留出稳定帧，by AI.Coding。
+        if destination != nil, destination != .cards || panel == nil {
             do { try await Task.sleep(for: .milliseconds(32)) } catch { return }
         }
         guard !Task.isCancelled, request == surfaceRequestID else { return }
         manager?.closeQuickLook()
         if destination != .cards { model.closeQuickLookForTransition() }
-        if destination == .cards { presentHistory() }
+        if destination == .cards { presentHistory(toggleBegan: historyToggleBegan) }
         let current = destination.flatMap { window(for: $0) }
         if let current, presentsSurfaces {
             Self.presentWithoutActivation(current)
@@ -1006,7 +1071,7 @@ import LocalClipCore
         #endif
         for window in [panel, settingsWindow, managerWindow].compactMap({ $0 }) { window.ignoresMouseEvents = window !== current }
         let transitions = [panel, settingsWindow, managerWindow].compactMap { $0 }.filter(\.isVisible).map { ($0, $0 === current ? 1.0 : 0.0) }
-        surfaceAnimator.animate(transitions, reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion) { [weak self] in
+        surfaceAnimator.animate(transitions, reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion, cardsEntrance: destination == .cards ? current : nil) { [weak self] in
             guard let self, request == self.surfaceRequestID else { return }
             self.releaseSurfaces(except: destination)
         }

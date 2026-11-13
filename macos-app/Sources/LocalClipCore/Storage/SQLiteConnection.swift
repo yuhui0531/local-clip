@@ -39,6 +39,8 @@ final class SQLiteConnection {
     /// 查询不输出 SQL 或正文，错误仅用类别表示。
     private func check(_ result: Int32) throws {
         if result == SQLITE_FULL { throw StoreError.diskFull }
+        // 无效数据库文件也属于完整性失败；权限和读写错误保留各自类别，by AI.Coding。
+        if result == SQLITE_CORRUPT || result == SQLITE_NOTADB { throw StoreError.corruptPayload }
         guard result == SQLITE_OK || result == SQLITE_DONE || result == SQLITE_ROW else { throw StoreError.ioFailure }
     }
     /// 固定 SQL 的批量执行，用户输入只能通过绑定参数。

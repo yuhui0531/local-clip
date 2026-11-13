@@ -980,11 +980,15 @@ import LocalClipCore
         if delta > 0, current == items.count - 1, hasMore { loadMore(advanceSelection:true); return }
         select(items[min(items.count - 1, max(0, current + delta))].id, keepDetail: previewFollowsSelection)
     }
+    // 在创建任务前占用入口，连续按键与双击共享同一个状态，by AI.Coding。
+    private var panelPasteInProgress = false
     /// 按配置动作执行；输出状态不会写成目标已接收。
     public func perform(_ format: OutputFormat? = nil, action: PasteAction? = nil, transform: TextTransform? = nil, join: JoinStyle = .newline, ids: [ClipID]? = nil) {
         let ids = ids ?? orderedSelection
-        guard !ids.isEmpty else { return }
+        guard !panelPasteInProgress, !ids.isEmpty else { return }
+        panelPasteInProgress = true
         Task {
+            defer { panelPasteInProgress = false }
             let result = await output(.init(ids: ids, format: format ?? settings.defaultFormat, action: action ?? settings.defaultAction, target: pasteTarget(), transform: transform, join: join))
             showPasteResult(result)
             notifyPasteResult(result)
@@ -1106,13 +1110,15 @@ import LocalClipCore
     }
     /// 双击恢复原格式后向原应用焦点粘贴；Finder文件对象仍复制到其当前实际目录。
     public func doubleClick(_ id: ClipID) {
-        guard contains(id) else { return }
+        guard !panelPasteInProgress, contains(id) else { return }
+        panelPasteInProgress = true
         if !selectedIDs.contains(id) { select(id) }
         focusResults?()
         let ids = orderedSelection
         let rememberedTarget = pasteTarget()
         let copyFiles = ids.allSatisfy { id in items.first(where: { $0.id == id })?.kind == .file } && rememberedTarget?.bundleID == "com.apple.finder"
         Task {
+            defer { panelPasteInProgress = false }
             let result = await paste.perform(.init(ids: ids, format: settings.defaultFormat, action: copyFiles ? .copy : .directPaste, target: rememberedTarget), copyFilesToFinder: copyFiles)
             showPasteResult(result)
             notifyPasteResult(result)
@@ -1132,8 +1138,8 @@ import LocalClipCore
         // 授权向导已说明原因和操作，不再叠加同义提示，by AI.Coding。
         if AccessibilityGuide.shared.isVisible { return }
         switch result {
-        // 本该粘贴却只完成复制、失败或智能粘贴降级，都是需要用户留意的问题。
-        case .fallback, .failed: showPasteFeedback?(message, true)
+        case .fallback: showPasteFeedback?(message, false)
+        case .failed: showPasteFeedback?(message, true)
         case _ where paste.smartPasteNotice != nil: showPasteFeedback?(message, true)
         default: break
         }
@@ -2106,14 +2112,14 @@ import LocalClipCore
         let visibility = contentGeneration
         Task {
             do {
-                let value = try await store.detail(id: selectedID, at: clock.now())
+                let payload = try await store.loadPayload(id: selectedID, at: clock.now())
                 guard canDisplayContents, visibility == contentGeneration, self.selectedID == selectedID else { return }
-                let urls = Self.openTargets(value.payload)
+                let urls = Self.openTargets(payload)
                 guard !urls.isEmpty else { message = "没有可打开的链接或文件"; return }
                 var url = urls[0]
                 if urls.count > 1 { let picker = NSAlert(); picker.messageText = "选择要打开的对象"; let popup = NSPopUpButton(frame: NSRect(x:0,y:0,width:400,height:26)); popup.addItems(withTitles: urls.map { $0.isFileURL ? $0.lastPathComponent : $0.absoluteString }); picker.accessoryView = popup; picker.addButton(withTitle:"打开"); picker.addButton(withTitle:"取消"); guard picker.runModal() == .alertFirstButtonReturn else { return }; url = urls[popup.indexOfSelectedItem] }
                 _ = try await store.metadata(id: selectedID, at: clock.now())
-                if url.isFileURL, !FileManager.default.fileExists(atPath: url.path) { message = "原文件已移动或删除；历史保存的是引用"; return }
+                if url.isFileURL, !FileManager.default.fileExists(atPath: url.path) { message = "原文件已移动或删除，找不到可打开的文件"; return }
                 if reveal && url.isFileURL { NSWorkspace.shared.activateFileViewerSelecting([url]) }
                 else if withApplication && url.isFileURL {
                     let picker = NSOpenPanel(); picker.allowedContentTypes = [.application]; picker.directoryURL = URL(fileURLWithPath: "/Applications"); guard picker.runModal() == .OK, let app = picker.url else { return }

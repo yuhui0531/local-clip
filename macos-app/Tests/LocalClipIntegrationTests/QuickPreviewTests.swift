@@ -111,6 +111,42 @@ import LocalClipCore
         }
     }
 
+    /// 原件消失后，真实预览窗口显示恢复指引，且不兑现历史副本，by AI.Coding。
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["LOCALCLIP_INTERACTIVE_TESTS"] == "1"))
+    func missingCachedFilePreviewShowsRecoveryHint() async throws {
+        _ = NSApplication.shared
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let location = root.appendingPathComponent("Store")
+        let store = try HistoryStore(location: location)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appendingPathComponent("missing-fixture.txt")
+        try Data("recoverable fixture".utf8).write(to: source)
+        let payload = ClipboardPayload([.init([.init(SupportedType.fileURL, Data(source.absoluteString.utf8))])])
+        guard case .inserted(let id) = try await store.ingest(.init(payload: payload), at: SystemClock().now()) else {
+            Issue.record("未能创建文件副本夹具")
+            return
+        }
+        try FileManager.default.removeItem(at: source)
+        let detail = try await store.detail(id: id, at: SystemClock().now())
+        #expect(detail.savedFileCopyIndexes == [0])
+        let preview = QuickPreview()
+        defer { preview.close() }
+        preview.show(await QuickPreview.loadItems(detail), parent: nil, excludeFromSharing: false)
+        func labels(_ view: NSView) -> [String] {
+            ((view as? NSTextField).map { [$0.stringValue] } ?? []) + view.subviews.flatMap { labels($0) }
+        }
+        let deadline = ContinuousClock.now + .seconds(5)
+        var hint = ""
+        repeat {
+            if let view = NSApp.windows.first(where: { $0.isVisible && $0.title == "LocalClip 预览" })?.contentView {
+                hint = labels(view).first(where: { $0.contains("原文件不存在") }) ?? ""
+            }
+            if hint.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+        } while hint.isEmpty && ContinuousClock.now < deadline
+        #expect(hint.contains("可从记录复制或另存"))
+        #expect(!FileManager.default.fileExists(atPath: location.appendingPathComponent("DragFiles").path))
+    }
+
     /// 需显式交互授权：图片与文件经Space打开独立预览窗口（不弹详情），再按Space关闭；缺失文件显示原因而非静默。
     @Test(.enabled(if: ProcessInfo.processInfo.environment["LOCALCLIP_INTERACTIVE_TESTS"] == "1", "Requires explicit user request for desktop interaction")) func spaceOpensPreviewWindow() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

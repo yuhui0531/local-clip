@@ -129,7 +129,7 @@ public struct ClipboardPayload: Codable, Equatable, Sendable {
     }
 }
 public enum ContentFingerprint {
-    /// SHA256 只是查找键，存储层还须比较规范原始内容。
+    /// SHA256 用于内容查找与表示摘要；读取时由存储层核对原始字节，by AI.Coding。
     public static func hash(_ data: Data) -> String { SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() }
 }
 // 来源依据区分声明与前台推断，只有声明参与应用排除，by AI.Coding。
@@ -287,6 +287,8 @@ public struct ClipDetail: Sendable {
     public var payload: ClipboardPayload
     public var revision: Int64
     public var categoryIDs: Set<String> = []
+    /// 仅记录已保存副本的项目索引；详情可提示恢复能力而无需读取副本正文，by AI.Coding。
+    public var savedFileCopyIndexes: Set<Int> = []
 }
 // 选择卡片仅读取轻量元数据，避免为了高亮或分类菜单加载图片正文，by AI.Coding。
 public struct ClipMetadata: Equatable, Sendable {

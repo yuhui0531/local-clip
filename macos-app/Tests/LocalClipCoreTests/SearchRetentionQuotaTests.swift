@@ -168,6 +168,55 @@ struct SearchRetentionQuotaTests {
         #expect(try await store.search(.init()).items.contains { $0.id == new })
         #expect(try await store.detail(id: favorite, at: clock.now()).summary.isFavorite)
     }
+    /// 淘汰最旧普通记录时，收藏、其他存活记录及新图的派生数据继续可用，by AI.Coding。
+    @Test func quotaPressurePreservesSurvivingDerivedRows() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let clock = TestClock()
+        let store = try HistoryStore(location: root, clock: clock)
+        var settings = try await store.settings()
+        settings.imageTextSearchSince = clock.now()
+        settings = try await store.updateCaptureSettings(settings)
+        func image(_ byte: UInt8) -> ClipboardSnapshot {
+            let size = byte == 2 ? 512 * 1024 : byte == 4 ? 360 * 1024 : 256 * 1024
+            var snapshot = ClipboardSnapshot(payload: .init([.init([.init(SupportedType.png, Data(repeating: byte, count: size))])]),
+                                             revision: settings.revision)
+            snapshot.thumbnail = Data(repeating: byte, count: 96 * 1024)
+            return snapshot
+        }
+        var ids: [ClipID] = []
+        for byte in [UInt8(1), 2, 3] {
+            let snapshot = image(byte)
+            let id = insertedID(try await store.ingest(snapshot, at: clock.now()))
+            try #require(!id.isEmpty)
+            ids.append(id)
+            let digest = ContentFingerprint.hash(snapshot.payload.items[0].representations[0].data)
+            #expect(try await store.saveImageText(.init(clipID: id, itemIndex: 0), digest: digest, text: "derived-\(byte)"))
+            clock.advance(1)
+        }
+        _ = try await store.apply(store.preview(.favorite(ids[0], true)).token)
+        let database = root.appendingPathComponent("History/history.sqlite")
+        let db = try SQLiteConnection(database)
+        #expect(try db.scalarInt("SELECT COUNT(*) FROM thumbnails") == 3)
+        #expect(try db.scalarInt("SELECT COUNT(*) FROM image_text") == 3)
+        // 超出四张缩略图总量，旧实现会继续清除 OCR；淘汰一条普通记录则足够，by AI.Coding。
+        settings.quotaBytes = try CommitStrategy.pageBytes(db) + 16 * 1024
+        try Schema.writeSettings(db, settings)
+        let newest = insertedID(try await store.ingest(image(4), at: clock.now()))
+        try #require(!newest.isEmpty)
+        let survivors = try await store.search(.init()).items.map(\.id)
+        #expect(Set(survivors) == Set([ids[0], ids[2], newest]))
+        #expect(try db.scalarInt("SELECT COUNT(*) FROM thumbnails") == 3)
+        #expect(try db.scalarInt("SELECT COUNT(*) FROM image_text") == 2)
+        for (id, byte) in [(ids[0], UInt8(1)), (ids[2], UInt8(3)), (newest, UInt8(4))] {
+            let thumbnail = try db.rows("SELECT encodedImage FROM thumbnails WHERE clipID=?", [.text(id)]).first?.data("encodedImage")
+            #expect(thumbnail == image(byte).thumbnail)
+        }
+        for (id, byte) in [(ids[0], 1), (ids[2], 3)] {
+            let text = try db.scalarText("SELECT normalizedText FROM image_text WHERE clipID=?", [.text(id)])
+            #expect(text == "derived-\(byte)")
+        }
+    }
     /// 已删条目、在途派生和旧分页都无法复活；索引丢失仍能搜正文。
     @Test func AC14_AC25_deletedContentAndCacheFallback() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

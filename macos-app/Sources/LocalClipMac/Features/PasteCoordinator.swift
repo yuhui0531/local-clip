@@ -47,9 +47,16 @@ struct SmartPastePlan {
         do {
             try Task.checkCancellation()
             let initialCount = board.changeCount
-            try await OutputBudget.preflight(request.ids, store: store, at: clock.now(), transform: request.transform != nil)
             var records: [ClipboardPayload] = []
-            for id in request.ids { try Task.checkCancellation(); records.append(try await store.loadPayload(id: id, at: clock.now())) }
+            do {
+                try await OutputBudget.preflight(request.ids, store: store, at: clock.now(), transform: request.transform != nil)
+                for id in request.ids {
+                    try Task.checkCancellation()
+                    records.append(try await store.loadPayload(id: id, at: clock.now()))
+                }
+            } catch StoreError.corruptPayload {
+                return .failed("这条记录的内容已损坏，无法读取")
+            }
             let started = ContinuousClock.now
             // 目标分类延后到应用焦点恢复后；分类前始终保留原文件表示，by AI.Coding。
             let settings = try await store.settings()

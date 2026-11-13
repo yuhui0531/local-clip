@@ -7,6 +7,18 @@ import LocalClipCore
 @testable import LocalClipMac
 
 struct FileCardPreviewTests {
+    /// 按缺失原件索引匹配副本，存在的原件即使有副本也不计入，by AI.Coding。
+    @Test func fileAvailabilityLabelsMatchMissingIndexes() {
+        #expect(FileAvailabilityLabel.card(unavailable: [], savedCopies: [0], allFolders: false) == nil)
+        #expect(FileAvailabilityLabel.card(unavailable: [], savedCopies: [], allFolders: true) == "文件夹")
+        #expect(FileAvailabilityLabel.card(unavailable: [1], savedCopies: [0, 1], allFolders: false) == "原件不可用 · 可复制历史副本")
+        #expect(FileAvailabilityLabel.card(unavailable: [1, 2], savedCopies: [0, 2], allFolders: false) == "原件不可用 · 部分文件有副本")
+        #expect(FileAvailabilityLabel.card(unavailable: [0, 1], savedCopies: [0, 1], allFolders: false) == "原件不可用 · 可复制历史副本")
+        #expect(FileAvailabilityLabel.card(unavailable: [0, 1], savedCopies: [], allFolders: false) == "文件已移动、删除或无法访问")
+        #expect(FileAvailabilityLabel.card(unavailable: [1], savedCopies: [0], allFolders: false) == "文件已移动、删除或无法访问")
+        #expect(FileAvailabilityLabel.remaining(total: 3, unavailable: [4, 6], savedCopies: [0, 5, 6]) == "另有 3 个文件 · 2 个原件不可用 · 其中 1 个有副本")
+    }
+
     /// 每例独立临时目录，复现微信哈希文件名及超过摘要上限的完整路径。
     private func directory() throws -> URL {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

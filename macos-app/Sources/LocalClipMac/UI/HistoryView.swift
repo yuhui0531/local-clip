@@ -726,6 +726,7 @@ struct ClipCard: View, Equatable {
     @State private var plainCopyAllowed = false
     @State private var checkedFileGeneration: UUID?
     @State private var fileVersion: FileReferencePreviewVersion?
+    @State private var fileAvailabilityStatus: String?
     @State private var characterCount: (fingerprint: String?, count: Int)?
     @State private var fileText: String?
     @State private var thumbnailState: ThumbnailPreviewState = .loading
@@ -1189,13 +1190,23 @@ struct ClipCard: View, Equatable {
                 // 外部文件每次进入视口/重开面板先验证身份；慢卷期间只显示占位，by AI.Coding。
                 if item.kind == .file {
                     checkedFileGeneration = nil
-                    let urls = try? await model.previewDetail(id: item.id).payload.fileURLs
+                    let detail = try? await model.previewDetail(id: item.id)
+                    let urls = detail?.payload.fileURLs
                     let version = await Task.detached(priority: .utility) { urls.flatMap(FileReferencePreviewVersion.read) }.value
                     guard !Task.isCancelled, model.contains(item.id) else { return }
                     // 大小与预览身份分开：目录或不可读文件没有预览版本，仍可给出“未知/文件夹”而不影响其他功能。
-                    let size = await Task.detached(priority: .utility) { urls.map(ClipContentSize.measure) ?? .unknown }.value
+                    let (size, unavailable) = await Task.detached(priority: .utility) {
+                        let files = urls ?? []
+                        let unavailable = Set(files.indices.filter { !FileManager.default.fileExists(atPath: files[$0].path) })
+                        return (urls.map(ClipContentSize.measure) ?? .unknown, unavailable)
+                    }.value
                     guard !Task.isCancelled, model.contains(item.id) else { return }
                     contentSize = size
+                    let allFolders: Bool
+                    if case let .files(_, count, _, folders, _) = size { allFolders = folders == count }
+                    else { allFolders = false }
+                    fileAvailabilityStatus = FileAvailabilityLabel.card(unavailable: unavailable,
+                        savedCopies: detail?.savedFileCopyIndexes ?? [], allFolders: allFolders)
                     // 每次打开面板预览代次都会变，图标只在离屏清空后重取；重复解码多图标 TIFF 会在入场动画期间占主线程，by AI.Coding。
                     if fileIcon == nil, let path = urls?.first?.path {
                         guard let icon = await Self.fileIcon(path, id: item.id, model: model) else { return }
@@ -1272,6 +1283,7 @@ struct ClipCard: View, Equatable {
                     Text(fileCaption(paths, unit: isImageFile ? "张" : "个")).font(.system(size: LCStyle.FontSize.meta, weight: .medium)).foregroundStyle(Color.primary.opacity(0.85)).lineLimit(1).truncationMode(.middle).help(paths.first)
                         .padding(.horizontal, 10).padding(.vertical, 5)
                 }
+                fileStatusLabel
             }
         } else if let text = displayedFileText, let paths = filePaths {
             VStack(spacing: 0) {
@@ -1284,10 +1296,19 @@ struct ClipCard: View, Equatable {
                     Text(fileCaption(paths, unit: "个")).font(.system(size: LCStyle.FontSize.meta, weight: .medium)).foregroundStyle(Color.primary.opacity(0.85)).lineLimit(1).truncationMode(.middle).help(paths.first)
                         .padding(.horizontal, 10).padding(.vertical, 5)
                 }
+                fileStatusLabel
             }
         } else if tiny && item.kind == .file {
-            Text(((item.preview.split(separator: "\n").first.map(String.init) ?? "文件引用") as NSString).lastPathComponent)
+            let name = Text(((item.preview.split(separator: "\n").first.map(String.init) ?? "文件引用") as NSString).lastPathComponent)
                 .font(.system(size: LCStyle.FontSize.caption)).lineLimit(1).padding(.horizontal, 6).padding(.top, 3)
+            if let fileStatus, fileStatus != "文件夹" {
+                VStack {
+                    name
+                    fileStatusLabel
+                }
+            } else {
+                name
+            }
         } else if item.kind == .file {
             // 不可预览文件、目录与失效文件居中显示系统图标与文件名，正文不再空白，by AI.Coding。
             VStack(spacing: 6) {
@@ -1299,7 +1320,7 @@ struct ClipCard: View, Equatable {
                 if let paths = filePaths {
                     Text(fileCaption(paths, unit: "个")).font(.system(size: LCStyle.FontSize.meta, weight: .medium)).foregroundStyle(Color.primary.opacity(0.85)).lineLimit(2).truncationMode(.middle).multilineTextAlignment(.center).help(paths.first)
                 }
-                if let status = fileStatus { Text(status).font(.system(size: LCStyle.FontSize.caption)).foregroundStyle(.secondary) }
+                fileStatusLabel
                 Spacer(minLength: 0)
             }.frame(maxWidth: .infinity, maxHeight: .infinity).padding(.horizontal, 12)
         } else if let colorValue {
@@ -1331,11 +1352,13 @@ struct ClipCard: View, Equatable {
     /// 摘要只存前180字符；无搜索片段时达到上限即视为截断，by AI.Coding。
     // ponytail: 恰好180字符的原文也会显示省略行，需精确时改用 displayedCharacterCount > preview.count（异步到达，省略行会晚出现）。
     private var previewTruncated: Bool { item.context == item.preview && item.preview.count >= 180 }
-    /// 目录与失效文件给出状态文字；可读普通文件不加说明，by AI.Coding。
     private var fileStatus: String? {
-        guard case let .files(_, count, unknown, folders, _) = contentSize else { return nil }
-        if folders == count { return "文件夹" }
-        return unknown == count ? "文件已移动、删除或无法访问" : nil
+        checkedFileGeneration == previewGeneration ? fileAvailabilityStatus : nil
+    }
+    private var fileStatusLabel: some View {
+        Group {
+            if let fileStatus { Text(fileStatus).font(.system(size: LCStyle.FontSize.caption)).foregroundStyle(.secondary) }
+        }
     }
     private var symbol: String { code ? "chevron.left.forwardslash.chevron.right" : HistoryView.kindSymbol(item.kind) }
 }
@@ -1423,6 +1446,23 @@ struct ClipInspector: View {
         } else { Button(title) { model.perform(format, action: .copy) }.buttonStyle(ToolbarTabStyle(selected: true)).disabled(!enabled) }
     }
 }
+// 使用缺失项目的序号匹配已保存副本，大小未知不参与判定，by AI.Coding。
+enum FileAvailabilityLabel {
+    static func card(unavailable: Set<Int>, savedCopies: Set<Int>, allFolders: Bool) -> String? {
+        guard !unavailable.isEmpty else { return allFolders ? "文件夹" : nil }
+        let recoverable = unavailable.intersection(savedCopies)
+        if recoverable == unavailable { return "原件不可用 · 可复制历史副本" }
+        if !recoverable.isEmpty { return "原件不可用 · 部分文件有副本" }
+        return "文件已移动、删除或无法访问"
+    }
+
+    /// 汇总详情未展开的项目，副本数量只计原件缺失的文件，by AI.Coding。
+    static func remaining(total: Int, unavailable: Set<Int>, savedCopies: Set<Int>) -> String {
+        let recoverable = unavailable.intersection(savedCopies).count
+        return "另有 \(total) 个文件 · \(unavailable.count) 个原件不可用 · 其中 \(recoverable) 个有副本"
+    }
+}
+
 /// 详情预览放入浅底圆角容器；文件显示图标、名称与所在文件夹，不把路径当代码高亮。面板详情与历史管理检查器共用，by AI.Coding。
 struct ClipDetailPreview: View {
     let detail: ClipDetail
@@ -1432,6 +1472,7 @@ struct ClipDetailPreview: View {
     let interactive: Bool
     /// 历史管理检查器用：占满可用高度，长文在区内滚动、图片按空间放大；面板不传，仍按 LC-F01 测高，by AI.Coding。
     var fills = false
+    @State private var remainingAvailability: (urls: [URL], unavailable: Set<Int>)?
     var body: some View {
         let urls = detail.summary.kind == .file ? detail.payload.fileURLs ?? [] : []
         if image != nil || !urls.isEmpty || text != nil {
@@ -1441,16 +1482,22 @@ struct ClipDetailPreview: View {
                         .aspectRatio(image.size.width > 0 && image.size.height > 0 ? image.size : CGSize(width: 1, height: 1), contentMode: .fit)
                         .frame(maxWidth: .infinity, maxHeight: text == nil ? (fills ? .infinity : 220) : (fills ? 240 : 150)).clipShape(RoundedRectangle(cornerRadius: 6))
                 }
-                ForEach(Array(urls.prefix(4).enumerated()), id: \.offset) { _, url in
+                ForEach(Array(urls.prefix(4).enumerated()), id: \.offset) { index, url in
                     HStack(spacing: 10) {
                         Image(nsImage: NSWorkspace.shared.icon(forFile: url.path)).resizable().frame(width: 32, height: 32)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(url.lastPathComponent).font(.system(size: LCStyle.FontSize.body, weight: .medium)).lineLimit(1).truncationMode(.middle)
-                            Text(url.deletingLastPathComponent().path).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                            Text(FileManager.default.fileExists(atPath: url.path) ? url.deletingLastPathComponent().path : detail.savedFileCopyIndexes.contains(index) ? "原文件不存在 · 已保存副本" : "原文件不存在").font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
                         }
                     }
                 }
-                if urls.count > 4 { Text("另有 \(urls.count - 4) 个文件").font(.caption).foregroundStyle(.secondary) }
+                if urls.count > 4 {
+                    let remaining = remainingAvailability.flatMap { availability in
+                        availability.urls == urls ? FileAvailabilityLabel.remaining(total: urls.count - 4,
+                            unavailable: availability.unavailable, savedCopies: detail.savedFileCopyIndexes) : nil
+                    }
+                    Text(remaining ?? "另有 \(urls.count - 4) 个文件").font(.caption).foregroundStyle(.secondary)
+                }
                 if let text {
                     // LC-F01：高度计算只测量短文，长文直接使用滚动视口；传入预览的全文保持不变，by AI.Coding。
                     SyntaxDetailPreview(content: text, highlight: highlight, fills: fills)
@@ -1458,6 +1505,13 @@ struct ClipDetailPreview: View {
             }.padding(10).frame(maxWidth: .infinity, maxHeight: fills ? .infinity : nil, alignment: .topLeading)
                 .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 10))
                 .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.primary.opacity(0.06)))
+                .task(id: urls) {
+                    guard urls.count > 4 else { remainingAvailability = nil; return }
+                    let unavailable = await Task.detached(priority: .utility) {
+                        Set(urls.indices.dropFirst(4).filter { !FileManager.default.fileExists(atPath: urls[$0].path) })
+                    }.value
+                    if !Task.isCancelled { remainingAvailability = (urls, unavailable) }
+                }
         }
     }
 }
@@ -1490,7 +1544,11 @@ struct ClipRecordInfo: View {
     struct Notes: View {
         let detail: ClipDetail
         var body: some View {
-            let notes = (detail.summary.kind == .file ? ["保存的是文件引用，未备份文件本体；移动或删除原件后请重新复制。Finder中双击会复制副本到当前实际文件夹，同名冲突会停止，不覆盖已有文件。"] : [])
+            let copies = detail.savedFileCopyIndexes.count
+            let fileNote = copies == 0 ? "历史保存的是文件引用。原件不可用时，请找到原文件后重新复制。"
+                : "历史已保存 \(copies) 个文件副本。原件不可用时，可用「原格式复制」、另存或拖到访达取回已保存的文件。"
+            let finderNote = "访达中双击会复制副本到当前文件夹，同名冲突会停止，不覆盖已有文件。"
+            let notes = (detail.summary.kind == .file ? [fileNote, finderNote] : [])
                 + (detail.payload.items.contains(where: { !Set($0.declaredTypes).subtracting(SupportedType.all).isEmpty }) ? ["仅保留支持格式，附加私有格式未保存"] : [])
             if !notes.isEmpty {
                 Label(notes.joined(separator: "\n"), systemImage: "info.circle").font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)

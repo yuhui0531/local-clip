@@ -4,6 +4,71 @@ import Darwin
 import Testing
 @testable import LocalClipCore
 struct FailureBoundaryTests {
+    #if DEBUG
+    /// 满配额的预演可复用；修订、派生写入和目录占用变化均须重新判定，by AI.Coding。
+    @Test func fullQuotaCapacityPreviewReusesOnlyUnchangedInputs() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        var settings = SettingsSnapshot()
+        settings.quotaBytes = 100 * MiB
+        settings.imageTextSearchSince = 1
+        let store = try HistoryStore(location: root, initialSettings: settings)
+        let image = Data(repeating: 7, count: 256 * 1024)
+        let at = SystemClock().now()
+        let snapshot = ClipboardSnapshot(payload: .init([.init([.init(SupportedType.png, image)])]))
+        let imageID = insertedID(try await store.ingest(snapshot, at: at))
+        let ordinaryID = insertedID(try await store.ingest(fixture("ordinary"), at: at))
+        try #require(!imageID.isEmpty && !ordinaryID.isEmpty)
+        let exports = root.appendingPathComponent("Exports")
+        try FileManager.default.createDirectory(at: exports, withIntermediateDirectories: true)
+        let filler = exports.appendingPathComponent("filler")
+        try Data().write(to: filler)
+        let handle = try FileHandle(forWritingTo: filler)
+        defer { try? handle.close() }
+
+        func resizeExport(_ size: Int64) throws { try handle.truncate(atOffset: UInt64(size)) }
+        func expectPreview(_ count: Int) async throws {
+            #expect(try await store.usage().measuredTotal >= settings.quotaBytes)
+            let fresh = try HistoryStore(location: root)
+            let result = try await store.canCapture()
+            #expect(result == (try await fresh.canCapture()))
+            #expect(await store.captureCapacityPreviewCount == count)
+            #expect(try await store.canCapture() == result)
+            #expect(await store.captureCapacityPreviewCount == count)
+        }
+
+        try resizeExport(settings.quotaBytes - 192 * 1024)
+        try await expectPreview(1)
+        #expect(try await store.canCapture())
+        _ = try await store.apply(store.preview(.delete([ordinaryID])).token)
+        try await expectPreview(2)
+        _ = try await store.apply(store.preview(.favorite(imageID, true)).token)
+        try await expectPreview(3)
+        #expect(try await !store.canCapture())
+        // 补写派生数据时暂时腾出空间，再恢复到满配额场景，by AI.Coding。
+        try resizeExport(0)
+        let metadata = try await store.metadata(id: imageID, at: at)
+        #expect(try await store.cacheThumbnail(id: imageID, revision: metadata.revision, data: Data([1, 2, 3])))
+        try resizeExport(settings.quotaBytes - 192 * 1024)
+        try await expectPreview(4)
+        try resizeExport(0)
+        #expect(try await store.saveImageText(.init(clipID: imageID, itemIndex: 0), digest: ContentFingerprint.hash(image), text: "indexed text"))
+        try resizeExport(settings.quotaBytes - 192 * 1024)
+        try await expectPreview(5)
+        try resizeExport(settings.quotaBytes - 208 * 1024)
+        try await expectPreview(6)
+        let db = try SQLiteConnection(root.appendingPathComponent("History/history.sqlite"))
+        settings.quotaBytes -= 4096
+        try Schema.writeSettings(db, settings)
+        try db.close()
+        try await expectPreview(7)
+        try await store.clearImageText()
+        try await expectPreview(8)
+        _ = try await store.recover()
+        try await expectPreview(9)
+    }
+    #endif
+
     /// 全库恰好到容量但普通载荷可淘汰时，探测不得全局暂停或改变原库。
     @Test func AC13_AC17_capacityProbePreservesReleasableFullStore() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -23,6 +88,21 @@ struct FailureBoundaryTests {
         #expect(try await store.search(.init("SMALL-AT-FULL")).items.count == 1)
         #expect(try await store.usage().measuredTotal <= settings.quotaBytes)
     }
+    /// 重复入库按表示摘要识别；载荷字节损坏由正文读取报告，by AI.Coding。
+    @Test func duplicateChecksDescriptorsWithoutReadingStoredBlob() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try HistoryStore(location: root)
+        let at = SystemClock().now()
+        let id = insertedID(try await store.ingest(fixture("original"), at: at))
+        try #require(!id.isEmpty)
+        let db = try SQLiteConnection(root.appendingPathComponent("History/history.sqlite"))
+        try db.exec("UPDATE blobs SET payload=zeroblob(byteCount)")
+        try db.close()
+        #expect(try await store.ingest(fixture("original"), at: at + 1) == .deduplicated(id))
+        await #expect(throws: StoreError.corruptPayload) { try await store.detail(id: id, at: at + 1) }
+    }
+
     /// 一个字节垃圾也占文件系统块；计量不能只报告一个字节。
     @Test func AC25_allocationBlocksAreCounted() async throws {
         let root=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -90,8 +170,12 @@ struct FailureBoundaryTests {
         let pending = root.appendingPathComponent("Staging/pending")
         try FileManager.default.createDirectory(at: pending, withIntermediateDirectories: true)
         try Data(repeating: 7, count: 65536).write(to: pending.appendingPathComponent("candidate.sqlite"))
+        #expect(try await store.usage().pending == 65536)
+        let handle = try FileHandle(forWritingTo: pending.appendingPathComponent("candidate.sqlite"))
+        try handle.truncate(atOffset: 131072)
+        try handle.close()
         let usage = try await store.usage()
-        #expect(usage.pending == 65536)
+        #expect(usage.pending == 131072)
         #expect(usage.measuredTotal == usage.favoritePayload + usage.normalPayload + usage.common + usage.pending)
         _ = try await store.recover()
         #expect(try await store.usage().pending == 0)

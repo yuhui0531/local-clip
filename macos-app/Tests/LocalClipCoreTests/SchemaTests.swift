@@ -13,6 +13,29 @@ struct SchemaTests {
         #expect(throws: StoreError.incompatibleSchema) { _ = try HistoryStore(location: root) }
         #expect(try Data(contentsOf: strategy.databaseURL) == bytes)
     }
+    /// 非 SQLite 文件应报告损坏，并保留全部原始字节，by AI.Coding。
+    @Test func unreadableDatabaseHeaderIsReportedAsCorruption() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let strategy = try CommitStrategy(root: root)
+        let bytes = Data(repeating: 0x58, count: 4096)
+        try bytes.write(to: strategy.databaseURL)
+        #expect(throws: StoreError.corruptPayload) { _ = try HistoryStore(location: root) }
+        #expect(try Data(contentsOf: strategy.databaseURL) == bytes)
+    }
+
+    /// 首次恢复失败也会消耗打开时的校验结果，by AI.Coding。
+    @Test func failedFirstRecoveryDoesNotSkipValidationOnRetry() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try HistoryStore(location: root)
+        let db = try SQLiteConnection(root.appendingPathComponent("History/history.sqlite"))
+        try db.exec("PRAGMA user_version=99")
+        await #expect(throws: StoreError.corruptPayload) { try await store.recover() }
+        try db.exec("PRAGMA user_version=6; PRAGMA foreign_keys=OFF; INSERT INTO items VALUES('missing',0,'[]')")
+        await #expect(throws: StoreError.corruptPayload) { try await store.recover() }
+    }
+
     /// 初次 schema 故障不能把半份库发布。
     @Test func AC15_schemaFailurePreservesNoPublishedDatabase() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

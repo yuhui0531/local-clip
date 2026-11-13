@@ -68,11 +68,10 @@ import LocalClipCore
         // 两次提交的事件都需送达；立即路径只多等20ms，仍在60秒静默等待之内。
         try await Task.sleep(for: immediate ? .milliseconds(20) : .seconds(1))
 
-        // 与prepareSurface/presentHistory一致的打开顺序。
+        // 模拟预热面板：等待隐藏首屏，随后直接提交已创建的窗口，by AI.Coding。
         let began = ContinuousClock.now
         await model.awaitHiddenFirstScreen(timeout: .milliseconds(80))
         let waited = began.duration(to: .now)
-        try await Task.sleep(for: .milliseconds(32))
         model.showFirstCard(); model.panelVisibilityChanged(true); window.orderFront(nil)
         let first = try frame(host, window)
         let firstText = try text(first), pixels = imagePixels(first)

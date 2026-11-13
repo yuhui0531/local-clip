@@ -1,7 +1,7 @@
 // 真实临时 SQLite + fake 系统边界闭环，不代替真实应用接收，by AI.Coding。
 import Foundation
 import Testing
-import LocalClipCore
+@testable import LocalClipCore
 @testable import LocalClipMac
 @MainActor final class FakeApplications: ApplicationClient {
     var targetKind: PasteTargetKind = .unknown
@@ -35,6 +35,28 @@ import LocalClipCore
     func sendPaste(_ target: TargetToken, ifClipboardUnchanged stillValid: () -> Bool) -> Bool { guard stillValid(), permitted, isFrontmost(target) else { return false }; events += 1; return true }
 }
 @MainActor struct EndToEndTests {
+    /// 摘要校验失败必须报告记录损坏，且不得覆写剪贴板，by AI.Coding。
+    @Test func corruptedStoredTextReportsDamageOnCopy() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try HistoryStore(location: root)
+        let payload = ClipboardPayload([.init([.init(SupportedType.string, Data("synthetic".utf8))])])
+        guard case .inserted(let id) = try await store.ingest(.init(payload: payload), at: SystemClock().now()) else {
+            Issue.record("临时库未入库")
+            return
+        }
+        let db = try SQLiteConnection(root.appendingPathComponent("History/history.sqlite"))
+        try db.exec("UPDATE blobs SET payload=zeroblob(byteCount)")
+        try db.close()
+        let raw = RawBoard()
+        let board = MacPasteboardClient(access: raw)
+        let capture = CaptureCoordinator(board: board, store: store)
+        let paste = PasteCoordinator(board: board, applications: FakeApplications(), store: store, capture: capture)
+        let result = await paste.perform(.init(ids: [id], format: .original, action: .copy))
+        #expect(result == .failed("这条记录的内容已损坏，无法读取"))
+        #expect(raw.items.isEmpty)
+    }
+
     /// 大条目预拒绝只影响本条，不吞掉随后可以容纳的小条目。
     @Test func AC13_AC17_largeRejectionAllowsSmallNextCopy() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

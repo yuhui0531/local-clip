@@ -72,28 +72,6 @@ import LocalClipCore
         #expect(capture.state == "正在暂停")
     }
 
-    /// 跳过轮询间隙的排除来源，同时保留先前已采集的正常队列。
-    @Test(arguments: [true, false])
-    func excludedDeparturePreservesAllowedQueue(_ enabled: Bool) async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
-        var settings = SettingsSnapshot(); settings.pauseWhenExcludedFrontmost = enabled; settings.excludedBundleIDs = ["local.private"]
-        let store = try HistoryStore(location: root, initialSettings: settings)
-        let raw = RawBoard(), capture = CaptureCoordinator(board: MacPasteboardClient(access: raw), store: store)
-        capture.updatePolicy(settings)
-        raw.user("allowed-before"); capture.tick()
-        raw.user("between-polls"); capture.applicationDidDeactivate("local.private"); capture.tick()
-        raw.user("allowed-after"); capture.tick()
-        let expected = enabled ? 2 : 3
-        // 全量并行时主线程争用可使入库超过3秒；满足即退出，放宽上限不拖慢正常路径，by AI.Coding。
-        let deadline = ContinuousClock.now + .seconds(10)
-        while try await store.search(.init()).items.count < expected, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(5)) }
-        let values = try await store.search(.init()).items.map(\.preview)
-        #expect(values.contains("allowed-before") && values.contains("allowed-after"))
-        #expect(values.contains("between-polls") == !enabled)
-        capture.stop()
-    }
-
     /// 取消转换后恢复原文件；用户新复制和已到期记录均不得覆盖。
     @Test(arguments: ["cancel", "new-copy", "expired", "cancel-target-change"])
     func convertedPasteFailurePreservesOwnership(_ mode: String) async throws {
@@ -192,4 +170,29 @@ private final class CommentClock: ClipClock, @unchecked Sendable {
     private var value: Instant = SystemClock().now()
     func now() -> Instant { lock.withLock { value } }
     func advance(_ delta: Instant) { lock.withLock { value += delta } }
+}
+
+// 默认全量在其他套件结束后单独运行本套件，两种策略参数也串行，避免同步写盘争用，by AI.Coding。
+@MainActor @Suite(.serialized) struct ExcludedDepartureCaptureTests {
+    /// 跳过轮询间隙的排除来源，同时保留先前已采集的正常队列。
+    @Test(arguments: [true, false])
+    func excludedDeparturePreservesAllowedQueue(_ enabled: Bool) async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        var settings = SettingsSnapshot(); settings.pauseWhenExcludedFrontmost = enabled; settings.excludedBundleIDs = ["local.private"]
+        let store = try HistoryStore(location: root, initialSettings: settings)
+        let raw = RawBoard(), capture = CaptureCoordinator(board: MacPasteboardClient(access: raw), store: store)
+        capture.updatePolicy(settings)
+        raw.user("allowed-before"); capture.tick()
+        raw.user("between-polls"); capture.applicationDidDeactivate("local.private"); capture.tick()
+        raw.user("allowed-after"); capture.tick()
+        let expected = enabled ? 2 : 3
+        // 等实际入库完成，保留已有的超时上限，by AI.Coding。
+        let deadline = ContinuousClock.now + .seconds(10)
+        while try await store.search(.init()).items.count < expected, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(5)) }
+        let values = try await store.search(.init()).items.map(\.preview)
+        #expect(values.contains("allowed-before") && values.contains("allowed-after"))
+        #expect(values.contains("between-polls") == !enabled)
+        capture.stop()
+    }
 }

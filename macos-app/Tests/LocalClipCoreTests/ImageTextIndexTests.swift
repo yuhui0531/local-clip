@@ -172,7 +172,7 @@ struct ImageTextIndexTests {
         #expect(try await expiring.saveImageText(.init(clipID: old, itemIndex: 0), digest: ContentFingerprint.hash(image(10).data), text: "expired") == false)
     }
 
-    /// 容量：索引写入超出预算时停止且不淘汰历史；新采集需要空间时先丢弃可重建的索引，不淘汰旧历史。
+    /// 容量：索引写入超出预算时停止且不淘汰历史；新采集需要空间时淘汰最旧普通记录，索引随记录清除，by AI.Coding。
     @Test func capacityNeverEvictsHistoryForIndex() async throws {
         let location = root(); defer { try? FileManager.default.removeItem(at: location) }
         var settings = SettingsSnapshot(); settings.quotaBytes = 512 * 1024; settings.imageTextSearchSince = 1
@@ -184,7 +184,7 @@ struct ImageTextIndexTests {
         #expect(try raw(location, "SELECT COUNT(*) FROM image_text") == 0)
         #expect(try await store.saveImageText(job, digest: digest, text: String(repeating: "fits ", count: 40_000)))
         let second = try await insert(store, [.init([image(12, 200 * 1024)])], at: now + 1)
-        #expect(Set(try await store.search(.init()).items.map(\.id)) == [first, second])
+        #expect(try await store.search(.init()).items.map(\.id) == [second])
         #expect(try raw(location, "SELECT COUNT(*) FROM image_text") == 0)
     }
 }

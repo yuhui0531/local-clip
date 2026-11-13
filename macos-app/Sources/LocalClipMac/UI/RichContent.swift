@@ -98,7 +98,7 @@ enum FilePreviewContent: Equatable, Sendable {
         guard url.isFileURL else { return .failure("不是本地文件引用，无法预览") }
         var directory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: url.path, isDirectory: &directory) else {
-            return .failure("原文件不存在：已被移动、重命名或删除。历史中只保存了文件引用，请重新复制原文件。")
+            return .failure("原文件不存在：已被移动、重命名或删除。如历史中有文件副本，可从记录复制或另存。")
         }
         if directory.boolValue { return .quickLook }
         // 其他应用的数据目录、受保护文件夹会被系统拒绝读取；提示原因而不是显示空白或只显示文件信息。
