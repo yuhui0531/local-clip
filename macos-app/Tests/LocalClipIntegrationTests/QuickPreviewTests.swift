@@ -39,7 +39,7 @@ import LocalClipCore
         context.beginPDFPage(nil); context.endPDFPage(); context.closePDF()
         #expect(FilePreviewContent.classify(pdf) == .quickLook)
         guard case .failure(let missing) = FilePreviewContent.classify(directory.appendingPathComponent("gone.py")) else { Issue.record("缺失文件应给出原因"); return }
-        #expect(missing.contains("不存在"))
+        #expect(missing.contains("不存在") && missing.contains("没有历史副本"))
         let locked = directory.appendingPathComponent("locked.py"); try Data("x = 1".utf8).write(to: locked)
         try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: locked.path)
         guard case .failure(let denied) = FilePreviewContent.classify(locked) else { Issue.record("无权限文件应给出原因"); return }
@@ -51,6 +51,44 @@ import LocalClipCore
     }
 
     /// 扩展名提示覆盖需求中的常见语言，未知扩展名交给内容判定。
+    @Test func missingFilesUseTheirOwnSavedCopyHints() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let location = root.appendingPathComponent("Store")
+        let store = try HistoryStore(location: location)
+        let saved = root.appendingPathComponent("saved.txt")
+        let unsaved = root.appendingPathComponent("unsaved.txt")
+        let bytes = Data("file fixture".utf8)
+        try bytes.write(to: saved)
+        let urls = [saved, unsaved]
+        let payload = ClipboardPayload(urls.map { .init([.init(SupportedType.fileURL, Data($0.absoluteString.utf8))]) })
+        let now = SystemClock().now()
+        guard case .inserted(let id) = try await store.ingest(.init(payload: payload), at: now) else {
+            Issue.record("未能创建多文件夹具")
+            return
+        }
+        try FileManager.default.removeItem(at: saved)
+        let detail = try await store.detail(id: id, at: now)
+        #expect(detail.savedFileCopyIndexes == [0])
+        let items = await QuickPreview.loadItems(detail)
+        try #require(items.count == 2)
+        for (index, item) in items.enumerated() {
+            guard case .file(let url, let hasSavedCopy) = item,
+                  case .failure(let message) = FilePreviewContent.classify(url, hasSavedCopy: hasSavedCopy) else {
+                Issue.record("缺失项应有预览提示")
+                continue
+            }
+            #expect(url == urls[index])
+            #expect(hasSavedCopy == (index == 0))
+            #expect(message.contains(index == 0 ? "复制或拖到访达" : "没有历史副本"))
+            #expect(!message.contains("另存"))
+        }
+        #expect(!FileManager.default.fileExists(atPath: location.appendingPathComponent("DragFiles").path))
+        let restored = try #require(try await store.loadPayload(id: id, at: now).fileURLs)
+        #expect(try Data(contentsOf: restored[0]) == bytes)
+        #expect(restored[1] == unsaved)
+    }
+
     @Test func fileLanguageHints() {
         let pairs = ["a.json": "json", "a.xml": "xml", "a.yml": "yaml", "a.yaml": "yaml", "a.py": "python", "A.Java": "java", "a.mjs": "javascript",
                      "a.tsx": "typescript", "a.sql": "sql", "a.zsh": "bash", "Makefile": "makefile", "Dockerfile": "bash"]

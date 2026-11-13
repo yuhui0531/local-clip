@@ -57,6 +57,50 @@ import LocalClipCore
         #expect(SurfaceConfirmation.usableAnchor(card, owner: panel) == card)
         #expect(SurfaceConfirmation.usableAnchor(panel, owner: panel) == nil)
     }
+    #if DEBUG
+    /// 首页被挂起时，历史管理已经可以接收交互，且表格仍处于加载状态，by AI.Coding。
+    @Test func managerHandoffDoesNotWaitForFirstPage() async throws {
+        _ = NSApplication.shared
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try HistoryStore(location: root)
+        let payload = ClipboardPayload([.init([.init(SupportedType.string, Data("manager fixture".utf8))])])
+        _ = try await store.ingest(.init(payload: payload), at: SystemClock().now())
+        let board = MacPasteboardClient(access: RawBoard())
+        let capture = CaptureCoordinator(board: board, store: store)
+        let history = HistoryViewModel(store: store, capture: capture, paste: PasteCoordinator(board: board, applications: FakeApplications(), store: store, capture: capture), derived: DerivedContentService(store: store))
+        try await history.start()
+        capture.stop()
+        let app = AppDelegate()
+        app.configureSurfacesForTesting(history)
+        var blocked = false
+        var unblock: CheckedContinuation<Void, Never>?
+        app.configureManagerForTesting = { manager in
+            manager.readHook = { kind, _ in
+                guard kind == .search, !blocked else { return }
+                blocked = true
+                await withCheckedContinuation { unblock = $0 }
+            }
+        }
+        defer { unblock?.resume(); app.surfaceManagerForTesting?.stop() }
+        app.switchSurfaceForTesting(.manager)
+        let deadline = ContinuousClock.now + .seconds(5)
+        while ContinuousClock.now < deadline {
+            if blocked, app.surfaceWindowsForTesting.2?.ignoresMouseEvents == false { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let manager = try #require(app.surfaceManagerForTesting)
+        let window = try #require(app.surfaceWindowsForTesting.2)
+        #expect(blocked && !window.ignoresMouseEvents && !window.isVisible)
+        #expect(manager.loading && manager.rows.isEmpty)
+        let continuation = try #require(unblock)
+        unblock = nil
+        continuation.resume()
+        let loaded = ContinuousClock.now + .seconds(5)
+        while manager.loading, ContinuousClock.now < loaded { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(!manager.loading && manager.rows.map(\.preview) == ["manager fixture"])
+    }
+
     /// 使用真实宿主路由和隐藏窗口，证明退出会释放模型而只恢复轻量查询条件。
     @Test func hiddenWindowSwitchingAndRelease() async throws {
         _ = NSApplication.shared
@@ -158,6 +202,7 @@ import LocalClipCore
             try await Task.sleep(for: .milliseconds(650))
         }
     }
+    #endif
     /// 确认期间拒绝新请求；取消/保存失败均不得执行原切换。
     @Test func draftResolution() async {
         let edits = SurfaceEdits()

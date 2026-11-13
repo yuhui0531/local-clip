@@ -155,6 +155,7 @@ extension HistoryStore {
         model.resetVisibleHistoryFilters()
         #expect(!model.historyBusy && model.items.map(\.id) == oldItems)
     }
+    #if DEBUG
     /// 旧查询已返回但被延迟发布，新首屏超过等待期限时仍不能显示旧列表，by AI.Coding。
     @Test func staleCompletedQueryAndSlowPreloadCannotExposeOldResults() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -183,6 +184,7 @@ extension HistoryStore {
         #expect(model.items.map(\.id) == expected && !model.historyBusy)
         #expect(model.selectedID == model.items.first?.id && model.query.isEmpty)
     }
+    #endif
     /// 范围展示与最终查询一致，搜索前缀覆盖面板类型和分类，by AI.Coding。
     @Test func effectiveScopeUsesPrefixOverrides() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -329,6 +331,7 @@ extension HistoryStore {
         try await until { !model.historyBusy && model.items.first?.preview == "hidden-head" }
         #expect(model.selectedID == model.items.first?.id && model.selectedIDs.count == 1)
     }
+    #if DEBUG
     /// 关闭即裁回首屏；隐藏期间新增在后台备好最新首屏，打开不再查询也不露出旧列表，by AI.Coding。
     @Test func hiddenCapturesPrepareFirstScreenBeforeOpen() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -352,6 +355,7 @@ extension HistoryStore {
         try await Task.sleep(for: .milliseconds(50))
         #expect(model.historyWindowQueryCount == queries && model.items.first?.preview == "hidden-59")
     }
+    #endif
     /// 静默等待未到就打开：先立即准备并等待；仍未备好时打开后只查首屏兜底，by AI.Coding。
     @Test func openBeforeHiddenPreparationWaitsOrFallsBack() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

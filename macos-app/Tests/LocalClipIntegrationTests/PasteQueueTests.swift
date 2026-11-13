@@ -45,6 +45,7 @@ import Testing
         #expect(clipboard(h.raw) == "third")
     }
 
+    #if DEBUG
     /// 真正关闭历史后队列仍可使用原快捷键继续，by AI.Coding。
     @Test func queueContinuesAfterHistorySessionCloses() async throws {
         _ = NSApplication.shared
@@ -61,6 +62,7 @@ import Testing
         #expect(clipboard(h.raw) == "first" && h.model.pasteQueuePosition == 1 && h.model.pasteQueueActive)
         #expect(app.surfaceWindowsForTesting.0 != nil)
     }
+    #endif
     /// 按选择顺序逐项粘贴，处理中再按忽略；用完自动结束并注销快捷键，by AI.Coding。
     @Test func pastesInOrderAndEnds() async throws {
         let h = try await harness(); defer { try? FileManager.default.removeItem(at: h.root) }

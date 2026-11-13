@@ -34,6 +34,37 @@ struct SchemaTests {
         await #expect(throws: StoreError.corruptPayload) { try await store.recover() }
         try db.exec("PRAGMA user_version=6; PRAGMA foreign_keys=OFF; INSERT INTO items VALUES('missing',0,'[]')")
         await #expect(throws: StoreError.corruptPayload) { try await store.recover() }
+        await #expect(throws: StoreError.postCommitUnavailable) { try await store.search(.init()) }
+        try db.exec("DELETE FROM items")
+        _ = try await store.recover()
+        #expect(try await store.search(.init()).items.isEmpty)
+    }
+
+    @Test func firstRecoveryRevalidatesDatabaseChangedSinceOpening() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        _ = try HistoryStore(location: root)
+        let store = try HistoryStore(location: root)
+        let events = await store.events()
+        let db = try SQLiteConnection(root.appendingPathComponent("History/history.sqlite"))
+        try db.exec("PRAGMA foreign_keys=OFF; INSERT INTO items VALUES('missing',0,'[]')")
+        try db.close()
+        await #expect(throws: StoreError.corruptPayload) { try await store.recover() }
+        let unavailable = await store.unavailable
+        try #require(unavailable)
+        let notified = await withTaskGroup(of: Bool.self) { group in
+            group.addTask {
+                var iterator = events.makeAsyncIterator()
+                if case .unavailable(.corruptPayload)? = await iterator.next() { return true }
+                return false
+            }
+            group.addTask { try? await Task.sleep(for: .seconds(2)); return false }
+            let result = await group.next() ?? false
+            group.cancelAll()
+            return result
+        }
+        #expect(notified)
+        await #expect(throws: StoreError.postCommitUnavailable) { try await store.search(.init()) }
     }
 
     /// 初次 schema 故障不能把半份库发布。

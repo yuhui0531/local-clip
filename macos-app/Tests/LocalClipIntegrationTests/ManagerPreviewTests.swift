@@ -131,7 +131,7 @@ import Testing
         #expect(image.representations.first?.pixelsWide == 24)
         model.selection = [fileID]
         try await wait { recorder.presentations == 3 }
-        guard case .file(let shown)? = recorder.values.first else { Issue.record("Expected shared file preview"); return }
+        guard case .file(let shown, _)? = recorder.values.first else { Issue.record("Expected shared file preview"); return }
         #expect(shown == file)
         #expect(model.handleKey(code: 53, flags: [], editing: false))
         #expect(!recorder.isVisible && model.selection == [fileID])

@@ -28,6 +28,7 @@ import LocalClipCore
         try await until { model.rows.count == min(25, count) && model.total == count }
         return (model, store, clock, ids.reversed(), root)
     }
+    #if DEBUG
     /// 写入发出的存储事件异步送达；负载下可能晚于随后的“选择全部”，被当成历史变化作废全选。
     /// 等模型处理完事件（事件触发后台刷新，读到刷新查询即已处理）再继续，不按固定时长等待。
     private func afterChange<T: Sendable>(_ model: HistoryManagerModel, _ write: () async throws -> T) async throws -> T {
@@ -39,6 +40,7 @@ import LocalClipCore
         try await until { searched && !model.refreshing }
         return value
     }
+    #endif
     @Test func pagesTotalsAndPageSizes() async throws {
         let (model, _, _, newest, root) = try await make(60)
         defer { model.stop(); try? FileManager.default.removeItem(at: root) }
@@ -147,6 +149,7 @@ import LocalClipCore
         try await until { model.rows.count == 60 }
         #expect(model.rows.map(\.id) == Array(newest[100...]))
     }
+    #if DEBUG
     @Test func unrelatedCaptureDoesNotReloadDetail() async throws {
         let (model, store, clock, newest, root) = try await make(3)
         defer { model.stop(); try? FileManager.default.removeItem(at: root) }
@@ -157,6 +160,7 @@ import LocalClipCore
         try await until { model.total == 4 }
         #expect(model.detailLoads == loads && model.selection == [newest[1]])
     }
+    #endif
     @Test func copyKeysYieldWithoutSelectionOrToTextSelection() async throws {
         let (model, _, _, _, root) = try await make(1)
         defer { model.stop(); try? FileManager.default.removeItem(at: root) }
@@ -376,6 +380,7 @@ import LocalClipCore
         return try await store.search(request).total ?? -1
     }
 
+    #if DEBUG
     // R1 换条件立即清空旧结果进入加载，查询未返回前不显示空态。
     @Test func conditionChangeShowsLoadingNotStaleRows() async throws {
         let (model, _, _, _, root) = try await make(60)
@@ -509,6 +514,7 @@ import LocalClipCore
         #expect(refresh.passed == 0 && model.allMatching == nil && !model.selectingAll && model.selection.isEmpty)
         refresh.open()
     }
+    #endif
     // R3 提交前版本复核：全选收集后变化而事件尚未处理时，提交中止并提示重选，不降级为本页操作。
     @Test func staleSelectAllAbortsCommit() async throws {
         let (model, store, _, newest, root) = try await make(60)
@@ -521,6 +527,7 @@ import LocalClipCore
         try await until { model.toast?.text == "全选结果已过期，请重新选择" }
         #expect(try await favoriteCount(store) == 1 && model.allMatching == nil && model.selection.isEmpty)
     }
+    #if DEBUG
     // R4 窗口打开期间出现的新来源进入列表；来源筛选与 app: 结果一致；未知来源不退化为全库查询，已知来源采集不重读来源。
     @Test func newSourceAppearsAndUnknownAppBlocks() async throws {
         let raw = RawBoard()
@@ -576,11 +583,13 @@ import LocalClipCore
             try await until { model.rows.allSatisfy { $0.isFavorite == (expected == 120) } }
         }
     }
+    #endif
     private func picture(_ store: HistoryStore, _ clock: ManagerClock, _ byte: UInt8) async throws -> (ClipID, String) {
         let png = Data(repeating: byte, count: 64)
         guard case .inserted(let id) = try await store.ingest(.init(payload: .init([.init([.init(SupportedType.png, png)])])), at: clock.now()) else { throw StoreError.ioFailure }
         clock.advance(1); return (id, ContentFingerprint.hash(png))
     }
+    #if DEBUG
     /// 图片入库并开启图片文字搜索后等后台刷新结束，之后的读取计数只属于测试步骤。
     private func enableImageText(_ model: HistoryManagerModel, _ store: HistoryStore, count: Int) async throws {
         var searches = 0
@@ -732,6 +741,7 @@ import LocalClipCore
         try await until { !model.selectingAll }
         #expect(model.allMatching?.count == (imageText ? 121 : 120))
     }
+    #endif
     // UX 另一实例写入不产生本窗口事件：后台刷新发现版本变化时作废全选也要提示，不静默清除。
     @Test func refreshNoticesExternalChangeDuringSelectAll() async throws {
         let (model, _, clock, _, root) = try await make(30)
@@ -833,6 +843,7 @@ import LocalClipCore
         split.setPosition(split.bounds.width - 200, ofDividerAt: 0)
         try await until { width() == 300 }
     }
+    #if DEBUG
     // 文件说明纵向固定，曾把检查器最小高度撑过窗口，选中文件行整页被居中上移、侧栏钻到标题栏下。隐藏窗口，不上屏。
     @Test func selectingFileKeepsWindowLayout() async throws {
         let (model, store, clock, _, root) = try await make(2)
@@ -862,6 +873,7 @@ import LocalClipCore
         }
         #expect(!window.isVisible)
     }
+    #endif
     // 定位只来自“在历史管理中显示”：未完成的定位随关闭作废，之后无目标打开不选中任何行。
     @Test func revealDoesNotSurviveReopen() async throws {
         let (model, _, _, newest, root) = try await make(30)
@@ -871,6 +883,7 @@ import LocalClipCore
         try await until { !model.loading && model.rows.count == 25 }
         #expect(model.selection.isEmpty && model.page == 0)
     }
+    #if DEBUG
     // R3 被取代的旧收集晚到的失败不清除用户之后建立的选择，也不影响新的收集任务。
     @Test func lateSelectAllFailureKeepsNewerSelection() async throws {
         let (model, store, _, newest, root) = try await make(120)
@@ -903,6 +916,7 @@ import LocalClipCore
         #expect(model.allMatching?.count == 120 && model.toast == nil)
         try await settle(store)
     }
+    #endif
     // R4 来源歧义形成→删除其一后无需改输入即解除→撤销删除后重新判断为歧义，不沿用旧唯一匹配。
     @Test func sourceDeletionAndUndoRecheckAppCondition() async throws {
         let raw = RawBoard()
@@ -928,6 +942,7 @@ import LocalClipCore
         try await until { !model.queryProblems.isEmpty && model.rows.isEmpty }
         #expect(model.queryProblems.first?.hasPrefix("来源“test.localclip.bet”匹配多个") == true && model.total == 0)
     }
+    #if DEBUG
     // 旧回调：入口捕获的全选身份在全选作废（历史变化、换条件、取消）后被拒绝，存储不变；当前全选、单条与局部选择照常。
     @Test func staleSelectAllCallbackIsRejected() async throws {
         let (model, store, clock, newest, root) = try await make(60)
@@ -1022,6 +1037,7 @@ import LocalClipCore
         try await until { model.toast?.text == "已加入“全选”" }
         #expect(try await store.categoryMemberships(all).count == 61)
     }
+    #endif
 }
 /// 读取屏障：到达计数，打开前挂起；测试按到达次数推进，不用固定时长制造竞态。
 @MainActor private final class Gate {

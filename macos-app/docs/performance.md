@@ -19,10 +19,10 @@ P50 取中位数，P95 取 nearest-rank，保留全部计入样本的测量值�
 - **M4** 交替查首页和末页，查询计总数，搜索词互不构成前缀。长文本负载命中 100 条，短文本命中 5,000 条，单页 50 条。两组 P95 均高于报告建议的 80 ms。
 - **M5** 各反复打开同一合成库 10 次，计量 `HistoryStore.init` 至 `recover()` 返回。未清除系统页缓存，未采集冷启动样本。
 
-仓库 Release 测试编译会被五个引用 Debug 专用探针的集成测试文件阻断。Release 数据来自临时 SwiftPM 副本，排除了 `CaptureRetryTests`、`HistoryLoadingTests`、`HistoryManagerTests`、`PasteQueueTests` 和 `SurfaceTransitionTests`。仓库测试目标及门控保持原样。
+表中历史数据来自临时 SwiftPM 副本，当时排除了五个依赖 Debug 探针的测试文件。现在仅依赖这些探针的用例在 Debug 编译，其余用例与基准可直接从仓库运行。
 
 ```sh
-LOCALCLIP_STORAGE_BASELINE=1 rtk proxy bash scripts/test.sh -c release --no-parallel --filter StorageBaselineTests
+LOCALCLIP_STORAGE_BASELINE=1 rtk proxy bash macos-app/scripts/test.sh -c release --no-parallel --filter StorageBaselineTests
 ```
 
 ## 2026-11-14 M1 隐藏面板对照
@@ -32,7 +32,7 @@ LOCALCLIP_STORAGE_BASELINE=1 rtk proxy bash scripts/test.sh -c release --no-para
 计时从热键回调到隐藏面板完成布局并触发提交探针。正式埋点结束于 `makeKeyAndOrderFront` 返回。隐藏测试绕过真实 AX 目标读取与置前，显示器首帧、淡入和真实按键不在测量范围内。旧版 M1 两次运行的条件不同，此处以同条件对照替代。
 
 ```sh
-LOCALCLIP_PANEL_BASELINE=1 rtk proxy bash scripts/test.sh -c release --no-parallel --filter HistorySubmissionBaselineTests
+LOCALCLIP_PANEL_BASELINE=1 rtk proxy bash macos-app/scripts/test.sh -c release --no-parallel --filter HistorySubmissionBaselineTests
 ```
 
 | 轮次 | 32 ms 等待 | 首屏状态 | 样本数 | P50（ms） | P95（ms） | 最大值（ms） |
@@ -62,7 +62,7 @@ LOCALCLIP_PANEL_BASELINE=1 rtk proxy bash scripts/test.sh -c release --no-parall
 每组同时发起 100 次 `metadata` 请求，测量从请求到返回的总时延，包含元数据请求之间的排队。首次仍执行原预演事务，紧接的第二次在库、占用和配额均未变时命中缓存。内容变化后，下一次仍需完整预演。
 
 ```sh
-LOCALCLIP_STORAGE_BASELINE=1 rtk proxy bash scripts/test.sh -c release --no-parallel --skip-build --filter metadataDuringStorageOperations
+LOCALCLIP_STORAGE_BASELINE=1 rtk proxy bash macos-app/scripts/test.sh -c release --no-parallel --filter metadataDuringStorageOperations
 ```
 
 原始样本与运行日志见 `macos-app/evidence/automated/20261114-review-fixes-release/`。每份 Release 副本第一次编译，后续轮次复用同一构建。两份副本固定于同一源码快照，测量期间工作区另有紧凑文件卡片布局调整，由 Debug 回归覆盖。

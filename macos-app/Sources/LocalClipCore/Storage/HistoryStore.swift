@@ -1,5 +1,6 @@
 // 所有历史访问在 actor 内串行且事务内没有 await，by AI.Coding。
 import Foundation
+import Darwin
 
 let protectedSQL = "isFavorite=1 OR EXISTS(SELECT 1 FROM clip_categories WHERE clipID=clips.id)"
 let ordinarySQL = "isFavorite=0 AND NOT EXISTS(SELECT 1 FROM clip_categories WHERE clipID=clips.id)"
@@ -33,7 +34,24 @@ public actor HistoryStore: HistoryRepository {
     var previews: [UUID: ChangePreview] = [:]
     var unavailable = false
     // 打开阶段已校验库；仅首次恢复复用，后续恢复仍重新检查，by AI.Coding。
-    private var needsRecoveryValidation = false
+    private var openingValidation: DatabaseStamp?
+    private struct DatabaseStamp: Equatable {
+        let device: dev_t
+        let inode: ino_t
+        let size: off_t
+        let modifiedSeconds: time_t
+        let modifiedNanos: Int
+        let changedSeconds: time_t
+        let changedNanos: Int
+
+        init?(_ url: URL) {
+            var info = stat()
+            guard url.path.withCString({ lstat($0, &info) }) == 0 else { return nil }
+            device = info.st_dev; inode = info.st_ino; size = info.st_size
+            modifiedSeconds = info.st_mtimespec.tv_sec; modifiedNanos = info.st_mtimespec.tv_nsec
+            changedSeconds = info.st_ctimespec.tv_sec; changedNanos = info.st_ctimespec.tv_nsec
+        }
+    }
     // 仅在同步入库操作内部复用配置；操作结束即释放，不缓存跨调用的持久状态，by AI.Coding。
     private var operationSettings: SettingsSnapshot?
     // finalize闭包结果保持actor隔离；同步事务无await，失败时统一清空，by AI.Coding。
@@ -57,7 +75,8 @@ public actor HistoryStore: HistoryRepository {
             // v5只允许已知的原子升级路径；更高或未知版本在任何写入前拒绝，by AI.Coding。
             let version = try db.scalarInt("PRAGMA user_version")
             guard version == 5 || version == Schema.version else { try db.close(); throw StoreError.incompatibleSchema }
-            guard try db.scalarText("PRAGMA quick_check") == "ok", try db.rows("PRAGMA foreign_key_check").isEmpty else { throw StoreError.corruptPayload }
+            let validatedStamp = DatabaseStamp(strategy.databaseURL)
+            try Self.validateDatabase(db)
             let hasImageText = try db.scalarInt("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='image_text'") == 1
             let hasFileCopies = try db.scalarInt("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='file_copies'") == 1
             try db.close()
@@ -73,6 +92,10 @@ public actor HistoryStore: HistoryRepository {
             else {
                 do { try strategy.commit(quota: .max, allowOverQuota: true) { try $0.exec(Schema.imageTextSQL) }; imageTextReady = true }
                 catch { imageTextReady = false }
+            }
+            // 迁移和补表后的库由首次恢复重新验证，by AI.Coding。
+            if version == Schema.version, hasFileCopies, hasImageText {
+                openingValidation = validatedStamp
             }
         } else { try strategy.initialize { try Schema.create($0, settings: initialSettings) }; imageTextReady = true }
         self.strategy = strategy; databaseURL = strategy.databaseURL
@@ -468,6 +491,7 @@ public actor HistoryStore: HistoryRepository {
     }
     /// 历史管理表格一页一次读取分类归属，不逐条读取元数据，by AI.Coding。
     public func categoryMemberships(_ ids: [ClipID]) throws -> [ClipID: Set<String>] {
+        try requireAvailable()
         guard !ids.isEmpty else { return [:] }
         return try strategy.read { db in
             let rows = try db.rows("SELECT clipID, categoryID FROM clip_categories WHERE clipID IN(" + ids.map { _ in "?" }.joined(separator: ",") + ")", ids.map(SQLValue.text))
@@ -879,6 +903,7 @@ public actor HistoryStore: HistoryRepository {
     }
     /// 旧库曾回收的全文索引以最多200条候选批次补齐；失败不淘汰任何历史。
     public func rebuildSearchIndex(limit: Int = 200) throws -> Int {
+        try requireAvailable()
         let missing = try strategy.read { db in
             try db.rows("SELECT DISTINCT r.clipID FROM representations r LEFT JOIN text_content t ON t.clipID=r.clipID AND t.itemIndex=r.itemIndex WHERE t.clipID IS NULL AND r.type IN('public.utf8-plain-text','public.url','public.rtf','public.html','public.file-url') LIMIT ?", [.integer(Int64(min(200, max(1, limit))))]).map { $0.text("clipID") }
         }
@@ -1146,26 +1171,43 @@ public actor HistoryStore: HistoryRepository {
     private func publish(_ event: HistoryEvent) { for listener in listeners.values { listener.yield(event) } }
     /// 启动恢复完成之前协调层不会开始采集；只做快速检查，完整检查交给后台维护，by AI.Coding。
     public func recover() throws -> RecoveryReport {
-        let validate = needsRecoveryValidation || unavailable
-        needsRecoveryValidation = true
+        let validatedStamp = openingValidation
+        openingValidation = nil
         invalidateUsageCaches()
-        let pending = try strategy.recover()
-        let db = try SQLiteConnection(strategy.databaseURL)
-        guard try db.scalarInt("PRAGMA user_version") == Schema.version else { throw StoreError.corruptPayload }
-        if validate {
-            guard try db.scalarText("PRAGMA quick_check") == "ok", try db.rows("PRAGMA foreign_key_check").isEmpty else { throw StoreError.corruptPayload }
+        do {
+            let journalExists = FileManager.default.fileExists(atPath: strategy.databaseURL.path + "-journal")
+            let pending = try strategy.recover()
+            let db = try SQLiteConnection(strategy.databaseURL)
+            guard try db.scalarInt("PRAGMA user_version") == Schema.version else { throw StoreError.corruptPayload }
+            // 只复用同一份未变化的数据库校验；恢复日志后重查，by AI.Coding。
+            if unavailable || journalExists || validatedStamp == nil || validatedStamp != DatabaseStamp(strategy.databaseURL) {
+                try Self.validateDatabase(db)
+            }
+            let revision = try self.revision(db)
+            try db.close()
+            unavailable = false
+            return .init(revision: revision, pendingBytes: pending)
+        } catch StoreError.corruptPayload {
+            markCorrupt()
+            throw StoreError.corruptPayload
         }
-        let revision = try self.revision(db)
-        try db.close()
-        unavailable = false
-        return .init(revision: revision, pendingBytes: pending)
+    }
+
+    private static func validateDatabase(_ db: SQLiteConnection) throws {
+        guard try db.scalarText("PRAGMA quick_check") == "ok", try db.rows("PRAGMA foreign_key_check").isEmpty else {
+            throw StoreError.corruptPayload
+        }
+    }
+
+    private func markCorrupt() {
+        if !unavailable { unavailable = true; publish(.unavailable(.corruptPayload)) }
     }
     /// 完整页级校验在actor内执行：期间写入排队等待而非因锁超时失败；读取错误抛出，
     /// 只有确认损坏才返回false并进入不可用流程，由维护任务低频调用，by AI.Coding。
     public func integrityCheck() throws -> Bool {
         try requireAvailable()
         let ok = try strategy.read { try $0.scalarText("PRAGMA integrity_check") } == "ok"
-        if !ok { unavailable = true; publish(.unavailable(.corruptPayload)) }
+        if !ok { markCorrupt() }
         return ok
     }
     private var thumbnailCache: [ClipID: Data] = [:]
@@ -1335,6 +1377,7 @@ public actor HistoryStore: HistoryRepository {
         }
     }
     public func moveItem(id: ClipID, categoryID: String, delta: Int) throws {
+        try requireAvailable()
         var ids = try strategy.read { try $0.rows("SELECT clipID FROM clip_categories WHERE categoryID=? ORDER BY position,clipID", [.text(categoryID)]).map { $0.text("clipID") } }
         guard let index = ids.firstIndex(of: id) else { throw StoreError.notFound }
         ids.swapAt(index, min(ids.count - 1, max(0, index + delta)))
@@ -1345,7 +1388,8 @@ public actor HistoryStore: HistoryRepository {
     }
     /// 来源建议来自本地元数据，不加载载荷、不记录搜索正文。
     public func sources() throws -> [SourceAttribution] {
-        try strategy.read { db in try db.rows("SELECT sourceBundleID,MIN(sourceName) AS sourceName,MIN(sourceBasis) AS sourceBasis FROM clips GROUP BY COALESCE(sourceBundleID,'') ORDER BY sourceName").map { .init(bundleID: $0.text("sourceBundleID").isEmpty ? nil : $0.text("sourceBundleID"), name: $0.text("sourceName"), basis: $0.text("sourceBasis")) } }
+        try requireAvailable()
+        return try strategy.read { db in try db.rows("SELECT sourceBundleID,MIN(sourceName) AS sourceName,MIN(sourceBasis) AS sourceBasis FROM clips GROUP BY COALESCE(sourceBundleID,'') ORDER BY sourceName").map { .init(bundleID: $0.text("sourceBundleID").isEmpty ? nil : $0.text("sourceBundleID"), name: $0.text("sourceName"), basis: $0.text("sourceBasis")) } }
     }
     /// 预览和提交使用同一个只读估算；去重并排除不存在ID，不读取BLOB正文，by AI.Coding。
     private func deletionEstimate(_ db: SQLiteConnection, ids: [ClipID]) throws -> (ids: [ClipID], protectedCount: Int, bytes: Int64?) {

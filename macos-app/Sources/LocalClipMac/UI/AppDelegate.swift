@@ -52,6 +52,7 @@ import LocalClipCore
     #if DEBUG
     var surfaceWindowsForTesting: (NSWindow?, NSWindow?, NSWindow?) { (panel, settingsWindow, managerWindow) }
     var surfaceManagerForTesting: HistoryManagerModel? { manager }
+    var configureManagerForTesting: ((HistoryManagerModel) -> Void)?
     var surfaceChoiceForTesting: ((String) async -> SurfaceEdits.Choice)?
     /// 测试控制已确认关闭后的释放时序，窗口保持隐藏，by AI.Coding。
     var beforeCloseReleaseForTesting: (() async -> Void)?
@@ -154,7 +155,7 @@ import LocalClipCore
             sources.onDeactivate = { [weak capture] in capture?.applicationDidDeactivate($0) }
             let paste = PasteCoordinator(board: board, applications: applications, store: store, capture: capture)
             let model = HistoryViewModel(store: store, capture: capture, paste: paste, derived: DerivedContentService(store: store))
-            self.model = model; lastExternal = applications.target()
+            lastExternal = applications.target()
             // 在首次查询前提供屏幕尺寸；SwiftUI随后用实际视口修正，不先读固定50条，by AI.Coding。
             model.configureHistoryViewport(width: NSScreen.main?.frame.width ?? 1400, cardWidth: HistoryView.cardSide(height: initialSettings.panelHeight))
             model.panelVisibilityChanged(false)
@@ -189,6 +190,10 @@ import LocalClipCore
                 do {
                     // 手动暂停只作用于上一轮运行，定时暂停和隐私规则由采集器保留，by AI.Coding。
                     try await model.start(resumeCapture: true)
+                    guard !Task.isCancelled else { model.capture.stop(); return }
+                    self.model = model
+                    observeLifecycle(); installKeyboard()
+                    startMaintenance(for: model)
                     // 上次进程崩溃遗留的已登记Finder复制暂存；后台执行，不阻塞回执与采集。
                     Task.detached(priority: .utility) { CopyStagingJournal.recover(copyJournal) }
                     // 先确认真实存储恢复，再给安装器回执；权限引导可能等待用户，不能阻塞回执，by AI.Coding。
@@ -226,30 +231,41 @@ import LocalClipCore
                         let rect = NSScreen.main?.frame ?? NSRect(x: 0, y: 0, width: 1400, height: 380)
                         prepareHistoryPanel(frame: rect, height: Self.clampedPanelHeight(model.settings.panelHeight, screenHeight: rect.height))
                     }
-                } catch { model.message = "启动恢复失败，未开启采集"; model.status = "存储异常"; updateMenu() }
-            }
-            observeLifecycle(); installKeyboard()
-            maintenance = Task { [weak model] in
-                while !Task.isCancelled {
-                    try? await Task.sleep(for: .seconds(60))
-                    guard let model, !Task.isCancelled else { break }
-                    await model.maintenance()
-                    if !Self.isolatedRun {
-                        // 更新残留补偿在每轮维护重试；会话活跃时跳过，不阻塞采集与界面。
-                        await UpdateChecker.shared.maintain()
-                        UpdateChecker.shared.checkIfDue(enabled: model.settings.autoCheckUpdates)
-                    }
+                } catch {
+                    guard !Task.isCancelled else { return }
+                    model.capture.stop()
+                    sourceObserver?.stop(); sourceObserver = nil
+                    handleStorageStartupFailure(error)
                 }
             }
         } catch {
-            switch promptToRetryStorage(error) {
-            case .retry:
-                // 结束本次模态调用后再进入启动流程，连续重试不叠加调用栈，by AI.Coding。
-                Task { [weak self] in self?.startServices() }
-            case .quit: quitApplication(nil)
-            case .stopShowing: break
-            case .revealDirectory, .showAgain: assertionFailure("Unexpected storage prompt outcome")
+            handleStorageStartupFailure(error)
+        }
+    }
+
+    private func startMaintenance(for model: HistoryViewModel) {
+        maintenance = Task { [weak model] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(60))
+                guard let model, !Task.isCancelled else { break }
+                await model.maintenance()
+                if !Self.isolatedRun {
+                    // 更新残留补偿在每轮维护重试；会话活跃时跳过，不阻塞采集与界面。
+                    await UpdateChecker.shared.maintain()
+                    UpdateChecker.shared.checkIfDue(enabled: model.settings.autoCheckUpdates)
+                }
             }
+        }
+    }
+
+    private func handleStorageStartupFailure(_ error: any Error) {
+        switch promptToRetryStorage(error) {
+        case .retry:
+            // 结束本次模态调用后再进入启动流程，连续重试不叠加调用栈，by AI.Coding。
+            Task { [weak self] in self?.startServices() }
+        case .quit: quitApplication(nil)
+        case .stopShowing: break
+        case .revealDirectory, .showAgain: assertionFailure("Unexpected storage prompt outcome")
         }
     }
 
@@ -1024,7 +1040,7 @@ import LocalClipCore
         window.makeKeyAndOrderFront(nil)
         window.orderFrontRegardless()
     }
-    /// 新窗口在透明状态下完成布局，旧窗口仍保留画面，内容就绪后才开始交接。
+    /// 新窗口先完成布局。历史管理随即显示加载状态，首页结果返回后再填表，by AI.Coding。
     private func prepareSurface(_ destination: AppSurface?, reveal ids: [ClipID], request: UUID, historyToggleBegan: ContinuousClock.Instant?) async {
         guard let model else { return }
         let target: NSWindow?
@@ -1042,15 +1058,10 @@ import LocalClipCore
             if presentsSurfaces { target.orderFrontRegardless() }
             target.contentView?.displayIfNeeded()
         }
-        if destination == .manager {
-            while manager?.loading == true {
-                do { try await Task.sleep(for: .milliseconds(16)) } catch { return }
-            }
-        }
         // 隐藏期间的首屏准备未完成时至多等80ms，首帧即最新列表；超时由打开后的首屏刷新兜底，by AI.Coding。
         if destination == .cards, panel?.isVisible != true { await model.awaitHiddenFirstScreen(timeout: .milliseconds(80)) }
         // 未预热的界面仍需给首次布局留出稳定帧，by AI.Coding。
-        if destination != nil, destination != .cards || panel == nil {
+        if destination == .settings || (destination == .cards && panel == nil) {
             do { try await Task.sleep(for: .milliseconds(32)) } catch { return }
         }
         guard !Task.isCancelled, request == surfaceRequestID else { return }
@@ -1117,6 +1128,9 @@ import LocalClipCore
     /// 管理窗口复用非激活面板能力，保持外部应用菜单和焦点身份。
     private func makeHistoryManager(_ model: HistoryViewModel) -> HistoryManagerWindow {
         let manager = HistoryManagerModel(history: model)
+        #if DEBUG
+        configureManagerForTesting?(manager)
+        #endif
         if let managerBrowsing { manager.restoreBrowsing(managerBrowsing) }
         manager.locate = { [weak self] id in self?.showHistory(); self?.model?.jumpToHistory(id: id) }
         let host = NSHostingController(rootView: AnyView(HistoryManagerView(model: manager, history: model)))

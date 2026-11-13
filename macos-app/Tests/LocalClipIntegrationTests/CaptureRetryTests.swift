@@ -93,6 +93,7 @@ private final class StoreFault: StorageFaultInjector, @unchecked Sendable {
         #expect(try await items(h.store, "A4-LOST").isEmpty)
     }
 
+    #if DEBUG
     /// 等待重试期间暂停：快照作废不再落库；添加排除来源：重试前用最新策略复核后拒绝。
     /// 重试由屏障放行，不依赖退避计时与测试步骤之间的时间窗口。
     @Test func pauseOrExclusionCancelsPendingRetry() async throws {
@@ -168,6 +169,7 @@ private final class StoreFault: StorageFaultInjector, @unchecked Sendable {
         #expect(retried.copyCount == 1 && merged.lastCopiedAt > retried.lastCopiedAt && merged.firstCopiedAt == retried.firstCopiedAt)
         #expect(try await h.store.detail(id: merged.id, at: SystemClock().now()).summary.source.name == "NewSource" && h.fault.failures == 1)
     }
+    #endif
 
     /// COMMIT之后才失败：存储进入不可用态，采集如实报告结果未确认，不自动重放；重开后只有一条且只计一次。
     @Test func postCommitFailureIsNotReplayed() async throws {
@@ -185,6 +187,7 @@ private final class StoreFault: StorageFaultInjector, @unchecked Sendable {
         #expect(saved.count == 1 && saved.first?.copyCount == 1)
     }
 
+    #if DEBUG
     /// 等待补存期间用户删除历史：丢弃待补存快照，不把刚删除的内容写回；状态不残留“稍后重试”。
     @Test func deleteDuringRetryDiscardsSnapshot() async throws {
         let h = try await harness(); defer { h.capture.stop(); try? FileManager.default.removeItem(at: h.root) }
@@ -201,4 +204,5 @@ private final class StoreFault: StorageFaultInjector, @unchecked Sendable {
         try await Task.sleep(for: .milliseconds(100))
         #expect(try await items(h.store, "A4-DELETED").isEmpty && h.fault.failures == 1)
     }
+    #endif
 }

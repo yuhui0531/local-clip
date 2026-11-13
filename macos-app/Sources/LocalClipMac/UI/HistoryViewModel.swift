@@ -426,6 +426,11 @@ import LocalClipCore
                     if self.settingsVisible { await self.refreshUsage() }
                     continue
                 }
+                if case .unavailable(.corruptPayload) = event {
+                    self.capture.requestPause()
+                    self.message = "数据库完整性检查失败，已暂停采集，请备份后重启"
+                    continue
+                }
                 if case .unavailable = event { self.message = "提交后存储不可用，请重启。已提交操作不会重放。" }
                 // 删除可能来自历史管理窗口；面板的⌘Z入口跟随存储里的真实撤销状态，by AI.Coding。
                 self.assignIfChanged(\.canUndoDeletion, await self.store.undoAvailable())

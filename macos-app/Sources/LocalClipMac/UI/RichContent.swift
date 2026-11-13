@@ -94,11 +94,14 @@ enum FilePreviewContent: Equatable, Sendable {
     static let textLimit = 2 * 1024 * 1024
 
     /// 必须在后台调用；只读原件开头，不改变引用。
-    static func classify(_ url: URL) -> Self {
+    static func classify(_ url: URL, hasSavedCopy: Bool = false, allowsSaveAs: Bool = false) -> Self {
         guard url.isFileURL else { return .failure("不是本地文件引用，无法预览") }
         var directory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: url.path, isDirectory: &directory) else {
-            return .failure("原文件不存在：已被移动、重命名或删除。如历史中有文件副本，可从记录复制或另存。")
+            let recovery = hasSavedCopy
+                ? "历史已保存副本，\(allowsSaveAs ? "可从记录复制或另存" : "可从记录复制或拖到访达")。"
+                : "这项没有历史副本，请找到原文件后重新复制。"
+            return .failure("原文件不存在：已被移动、重命名或删除。\(recovery)")
         }
         if directory.boolValue { return .quickLook }
         // 其他应用的数据目录、受保护文件夹会被系统拒绝读取；提示原因而不是显示空白或只显示文件信息。
@@ -123,10 +126,12 @@ enum FilePreviewContent: Equatable, Sendable {
 
 // 空格与“预览”菜单共用的类Quick Look窗口：作为历史面板的子窗口，打开时不抢key，面板不会因失焦被收起，by AI.Coding。
 @MainActor final class QuickPreview: NSObject, NSWindowDelegate, ClipPreviewPresenting {
-    enum Item { case file(URL), image(NSImage, bytes: Int) }
+    enum Item { case file(URL, hasSavedCopy: Bool), image(NSImage, bytes: Int) }
     /// 两处入口共享文件/纯图片规则、40MP限制及多图顺序；后台只返回可发送的图片字节。
     static func loadItems(_ detail: ClipDetail) async -> [Item] {
-        if let urls = detail.payload.fileURLs { return urls.map(Item.file) }
+        if let urls = detail.payload.fileURLs {
+            return urls.enumerated().map { .file($0.element, hasSavedCopy: detail.savedFileCopyIndexes.contains($0.offset)) }
+        }
         guard detail.summary.kind == .image else { return [] }
         let bytes = await Task.detached(priority: .userInitiated) {
             detail.payload.items.compactMap { RichContent.fullImage(.init([$0])) }
@@ -223,15 +228,17 @@ enum FilePreviewContent: Equatable, Sendable {
             caption.stringValue = prefix + "图片"; info.stringValue = [pixels, HistoryViewModel.bytes(Int64(bytes)), "双击切换适应窗口/实际大小，触控板捏合缩放"].filter { !$0.isEmpty }.joined(separator: " · ")
             let view = imageView ?? ImageScrollView(); imageView = view
             setBody(view); view.image = image
-        case .file(let url):
+        case .file(let url, let hasSavedCopy):
             caption.stringValue = prefix + url.lastPathComponent
             info.stringValue = url.deletingLastPathComponent().path
             setBody(message("正在读取…"))
             let current = index
+            let allowsSaveAs = items.count == 1
             loading = Task { [weak self] in
                 // 文件状态与大小在后台读取，慢卷不阻塞主线程。
                 let (content, size) = await Task.detached(priority: .userInitiated) {
-                    (FilePreviewContent.classify(url), (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize).map { HistoryViewModel.bytes(Int64($0)) })
+                    (FilePreviewContent.classify(url, hasSavedCopy: hasSavedCopy, allowsSaveAs: allowsSaveAs),
+                     (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize).map { HistoryViewModel.bytes(Int64($0)) })
                 }.value
                 guard let self, !Task.isCancelled, self.index == current else { return }
                 if let size { self.info.stringValue = size + " · " + self.info.stringValue }

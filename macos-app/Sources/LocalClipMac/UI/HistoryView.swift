@@ -1545,8 +1545,9 @@ struct ClipRecordInfo: View {
         let detail: ClipDetail
         var body: some View {
             let copies = detail.savedFileCopyIndexes.count
+            let recovery = detail.payload.items.count == 1 ? "「原格式复制」、另存或拖到访达" : "「原格式复制」或拖到访达"
             let fileNote = copies == 0 ? "历史保存的是文件引用。原件不可用时，请找到原文件后重新复制。"
-                : "历史已保存 \(copies) 个文件副本。原件不可用时，可用「原格式复制」、另存或拖到访达取回已保存的文件。"
+                : "历史已保存 \(copies) 个文件副本。原件不可用时，可用\(recovery)取回已保存的文件。"
             let finderNote = "访达中双击会复制副本到当前文件夹，同名冲突会停止，不覆盖已有文件。"
             let notes = (detail.summary.kind == .file ? [fileNote, finderNote] : [])
                 + (detail.payload.items.contains(where: { !Set($0.declaredTypes).subtracting(SupportedType.all).isEmpty }) ? ["仅保留支持格式，附加私有格式未保存"] : [])
