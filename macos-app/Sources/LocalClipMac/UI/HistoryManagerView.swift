@@ -277,6 +277,8 @@ private struct ManagerTable: View {
             // 行可拖到侧栏分类；载荷只是本窗口令牌，目标在拖动开始时按选择解析，by AI.Coding。
             ForEach(model.rows) { row in TableRow(row).draggable(ManagerDragToken(value: model.dragToken(for: row.id))) }
         }
+        // SwiftUI 选择更新与单元格滚动重建必须共用同一行高，否则会在默认 24pt 和标记设置的 56pt 之间切换。
+        .environment(\.defaultMinListRowHeight, HistoryManagerRowLayout.rowHeight)
         .onChange(of: order) { _, value in model.sort = value.first?.order == .forward ? .recentAsc : .recentDesc }
         .onChange(of: model.sort) { _, sort in
             if sort == .recentAsc || sort == .recentDesc { order = [KeyPathComparator(\ClipSummary.lastCopiedAt, order: sort == .recentAsc ? .forward : .reverse)] }

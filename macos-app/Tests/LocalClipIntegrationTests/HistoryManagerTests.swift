@@ -858,17 +858,22 @@ import LocalClipCore
         host.sceneBridgingOptions = [.toolbars, .title]; host.sizingOptions = []
         let window = HistoryManagerWindow(content: host)
         defer { window.close(); UserDefaults.standard.removeObject(forKey: "NSWindow Frame \(HistoryManagerWindow.autosaveName)") }
-        model.selection = [id]
-        try await until { model.detail?.detail.summary.id == id }
         func frame() -> NSRect? {
             window.contentView?.layoutSubtreeIfNeeded()
             var queue = [window.contentView].compactMap { $0 }
             while !queue.isEmpty { let view = queue.removeFirst(); if view is NSSplitView { return view.convert(view.bounds, to: nil) }; queue += view.subviews }
             return nil
         }
+        model.selection = [id]
+        try await until { model.detail?.detail.summary.id == id }
+        let content = try #require(window.contentView)
         // 详情出现后还会再布局几轮，持续核对一段时间而不是只看一次。
         for _ in 0..<20 {
-            #expect(frame() == NSRect(origin: .zero, size: HistoryManagerWindow.defaultSize))
+            let layout = try #require(frame())
+            // 原生分隔线可向窗口左右各延伸 1pt；此回归检查内容撑高和整页上移，以及窗口内容尺寸。
+            #expect(layout.minY == content.bounds.minY)
+            #expect(layout.height == content.bounds.height)
+            #expect(content.bounds.size == HistoryManagerWindow.defaultSize)
             try await Task.sleep(for: .milliseconds(20))
         }
         #expect(!window.isVisible)

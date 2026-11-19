@@ -3,6 +3,7 @@ import Foundation
 import Testing
 @testable import LocalClipCore
 struct TextLinkKindTests {
+    /// 无协议网址沿用系统检测器补全的 HTTP 或 HTTPS，完整主机名必须保留。
     @Test func plainTextURLIsLink() {
         #expect(fixture("https://github.com/yuhui0531/local-clip/releases/tag/v0.3.22").payload.kind == .url)
         #expect(fixture("  http://example.com/路径?q=1\n").payload.kind == .url)
@@ -11,7 +12,9 @@ struct TextLinkKindTests {
         #expect(fixture("https://a.com\nhttps://b.com").payload.kind == .text)
         #expect(fixture("mailto:a@b.com").payload.kind == .text)
         #expect(fixture("https://").payload.kind == .text)
-        #expect(ClipboardPayload.webLink("www.example.com")?.absoluteString == "http://www.example.com")
+        let bareLink = ClipboardPayload.webLink("www.example.com")
+        #expect(bareLink?.host == "www.example.com")
+        #expect(["http", "https"].contains(bareLink?.scheme ?? ""))
         #expect(fixture("github.com/yuhui0531/local-clip").payload.kind == .url)
         #expect(fixture("example.co.uk/a?q=中文").payload.kind == .url)
         for text in ["README.md", "main.swift", "v0.3.22", "1.2.3.4", "a@b.com", "foo.bar", "index.html"] {

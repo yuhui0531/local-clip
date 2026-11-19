@@ -32,8 +32,9 @@ private final class Calls: @unchecked Sendable {
         let model = HistoryViewModel(store: store, capture: capture, paste: PasteCoordinator(board: board, applications: FakeApplications(), store: store, capture: capture), derived: DerivedContentService(store: store))
         return .init(root: root, store: store, raw: raw, model: model)
     }
-    private func until(_ predicate: () async throws -> Bool, line: Int = #line) async throws {
-        let deadline = ContinuousClock.now + .seconds(10)
+    /// 默认约束内存状态等待；真实 Vision 首次加载语言模型使用单独的有界期限。
+    private func until(timeout: Duration = .seconds(10), _ predicate: () async throws -> Bool, line: Int = #line) async throws {
+        let deadline = ContinuousClock.now + timeout
         while try await !predicate(), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
         #expect(try await predicate(), "line \(line)")
     }
@@ -218,7 +219,8 @@ private final class Calls: @unchecked Sendable {
         let shot = try await ingest(h.store, [.init([.init(SupportedType.png, try Self.rendered("LOCALCLIP INVOICE 7319"))])])
         try await h.model.start(); h.model.capture.stop()
         h.model.indexExistingImages()
-        try await until { !h.model.imageTextIndexing && h.model.imageTextStatus?.hasPrefix("已有图片文字索引完成") == true }
+        // 新进程中 Vision 冷加载可超过 10 秒，等待完成后仍核对按文字找回原始图片。
+        try await until(timeout: .seconds(30)) { !h.model.imageTextIndexing && h.model.imageTextStatus?.hasPrefix("已有图片文字索引完成") == true }
         #expect(try await ids(h.store, "invoice 7319") == [shot])
         #expect(try await h.store.search(.init("invoice", kind: .image)).items.map(\.id) == [shot])
     }

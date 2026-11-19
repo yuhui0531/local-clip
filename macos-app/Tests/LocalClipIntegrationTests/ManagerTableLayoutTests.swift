@@ -5,7 +5,8 @@ import Testing
 @testable import LocalClipCore
 @testable import LocalClipMac
 
-@MainActor struct ManagerTableLayoutTests {
+// 原生滚轮在 AppKit 内共享事件状态，隐藏窗口之间也必须串行验证。
+@Suite(.serialized) @MainActor struct ManagerTableLayoutTests {
     /// 条件等待必须有结果断言，不能将超时当作测试通过。
     private func until(_ condition: () -> Bool) async throws {
         let deadline = ContinuousClock.now + .seconds(15)
@@ -13,9 +14,9 @@ import Testing
         #expect(condition())
     }
 
-    /// 冷加载、离屏单元格重建、窄窗口和翻页都不能再次改变同一页的总高度。
+    /// 冷加载后，滚动、缩窄窗口、切换选中记录和翻页都不能改变同一页的总高度。
     @Test(arguments: [true, false])
-    func scrollRangeRemainsStableAcrossMaterializationAndPaging(images: Bool) async throws {
+    func scrollRangeRemainsStableAcrossMaterializationSelectionAndPaging(images: Bool) async throws {
         _ = NSApplication.shared
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -58,6 +59,45 @@ import Testing
         try await until { table.view(atColumn: 1, row: 0, makeIfNecessary: false) != nil }
         host.layoutSubtreeIfNeeded()
         let firstPageHeight = table.frame.height
+        try #require(table.rect(ofRow: 0).height == HistoryManagerRowLayout.rowHeight)
+        // KVO 记录同步改写，避免两次异步采样之间短暂变高或变矮又恢复时漏报。
+        let heights = RowHeightSamples()
+        let observation = table.observe(\.rowHeight, options: [.new]) { _, change in
+            let height = change.newValue ?? 0
+            MainActor.assumeIsolated { heights.values.append(height) }
+        }
+        defer { observation.invalidate() }
+        // 首次进入后直接点击再滚动，保留离屏行尚未创建的状态，不能先实体化全表掩盖冷布局问题。
+        for index in [0, 1, 2] {
+            // 程序化选择后发送原生选择通知，经 SwiftUI Binding 同步模型，避免直接改模型掩盖绑定问题。
+            table.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
+            table.delegate?.tableViewSelectionDidChange?(Notification(name: NSTableView.selectionDidChangeNotification, object: table))
+            try await until { model.selection == [ids[index]] }
+            try await until { model.detail?.detail.summary.id == ids[index] }
+            // 让本次选择的原生定位先完成，后续滚轮才有独立的输入边界；期间仍逐帧核对行高。
+            for _ in 0..<20 {
+                host.layoutSubtreeIfNeeded()
+                try #require(table.rowHeight == 56)
+                try #require(abs(table.frame.height - firstPageHeight) < 0.5)
+                try await Task.sleep(for: .milliseconds(5))
+            }
+            for delta in [-3, -3, 3, 3] {
+                let offset = scroll.contentView.bounds.minY
+                let event = try #require(CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 1, wheel1: Int32(delta), wheel2: 0, wheel3: 0))
+                let wheel = try #require(NSEvent(cgEvent: event))
+                table.scrollWheel(with: wheel)
+                for _ in 0..<20 {
+                    host.layoutSubtreeIfNeeded()
+                    try #require(table.rowHeight == 56)
+                    try #require(table.rect(ofRow: index).height == 56)
+                    try #require(abs(table.frame.height - firstPageHeight) < 0.5)
+                    try await Task.sleep(for: .milliseconds(5))
+                }
+                // 证明事件确实驱动了原生滚动，不能把没有执行到的滚轮路径计为通过。
+                try #require(abs(scroll.contentView.bounds.minY - offset) > 0.5)
+            }
+            try await until { model.detail?.detail.summary.id == ids[index] }
+        }
         for width in [1500.0, Double(HistoryManagerWindow.minimumWidth)] {
             window.setContentSize(.init(width: width, height: 900))
             for row in [37, 49, 0, 25] {
@@ -80,10 +120,24 @@ import Testing
                 }
             }
         }
-        // 保留选择及详情行为；翻到第二页再返回后仍采用同一几何，不依赖已经遍历过的行。
-        model.selection = [ids[0]]
-        try await until { model.detail != nil }
-        #expect(model.selectedRow?.id == ids[0])
+        // 切换记录后连续采样，捕捉详情更新期间短暂的行高回退。
+        table.scrollRowToVisible(0); host.layoutSubtreeIfNeeded()
+        let topOffset = scroll.contentView.bounds.minY
+        for index in [0, 1, 2, 1, 0] {
+            table.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
+            // 隐藏窗口中的程序化选择可由 AppKit 合并，显式同步模型以覆盖同一更新路径。
+            if model.selection != [ids[index]] { model.tableSelected([ids[index]], checkboxClick: false) }
+            let deadline = ContinuousClock.now + .milliseconds(180)
+            repeat {
+                host.layoutSubtreeIfNeeded()
+                try #require(table.rect(ofRow: index).height == 56)
+                try #require(abs(table.frame.height - firstPageHeight) < 0.5)
+                try #require(abs(scroll.contentView.bounds.minY - topOffset) < 0.5)
+                try await Task.sleep(for: .milliseconds(5))
+            } while ContinuousClock.now < deadline
+            try await until { model.detail?.detail.summary.id == ids[index] }
+        }
+        // 翻到第二页再返回后仍采用同一几何，不依赖已经遍历过的行。
         model.go(toPage: 1)
         try await until { model.rows.count == 18 && !model.loading }
         host.layoutSubtreeIfNeeded()
@@ -99,6 +153,7 @@ import Testing
         #expect(model.selection.isEmpty)
         #expect(!window.isVisible)
         #expect(scroll.hasVerticalScroller)
+        #expect(heights.values.allSatisfy { $0 == HistoryManagerRowLayout.rowHeight })
     }
 
     /// 无表格祖先时不修改旁边表格；重挂接后只作用于新的宿主。
@@ -114,4 +169,9 @@ import Testing
         #expect(unrelated.usesAutomaticRowHeights && unrelated.rowHeight == 30)
         #expect(marker.hitTest(.zero) == nil)
     }
+}
+
+/// 仅由主线程的原生表格 KVO 写入，同步保留本次布局的所有行高改写，by AI.Coding。
+@MainActor private final class RowHeightSamples {
+    var values: [CGFloat] = []
 }
